@@ -90,21 +90,21 @@ def jump_lead(closing, width, height, mario_size, speed, direction):
 class ThreatWatch:
     """Whether a coming enemy needs a move now (module notes)."""
 
-    def due(self, trackers, kinematics, scene, memory=None) -> bool:
+    def due(self, trackers, kinematics, scene, objects=()) -> bool:
         """``trackers``: the copy's CollisionTrackers; ``kinematics``: its
         (sprites, mario, identities, context) this frame; ``scene``: what
-        vision shows (only a standing Mario is checked); ``memory``: the
-        enemies remembered out of sight (smb_kinematics.remembered), checked
-        as the seen ones."""
+        vision shows (only a standing Mario is checked); ``objects``: the
+        list of tracked things as read this frame (rows, keys, slot keys):
+        every enemy on it is checked, seen or out of sight."""
         box = scene.mario.box
         grounded = box is not None and scene.mario.on_something and scene.mario.support != "air"
-        if not grounded or trackers is None or not kinematics:
+        if not grounded or trackers is None or not kinematics or not objects:
             return False
         from .smb_kinematics import TRACKED
-        from .target_tracker import tracked_rows
+        from .target_tracker import tracker_rows
 
-        sprites, mario, identities, context = kinematics
-        state, followed = tracked_rows(sprites, identities, context, memory)
+        mario = kinematics[1]
+        state, followed = tracker_rows(objects[0]), objects[1]
         x, vx = TRACKED.index("x"), TRACKED.index("vx")
         width, height = TRACKED.index("width"), TRACKED.index("height")
         for slot in range(len(state)):

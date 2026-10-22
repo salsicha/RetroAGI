@@ -14,15 +14,21 @@ from retroagi.core.action_tokens import VERBS, pointer_index
 from retroagi.core.collision_labels import action_ends, collision_labels
 from retroagi.core.layered_policy import POINTER_START, LayeredSMBPolicy
 from retroagi.core.smb_kinematics import (
-    CONTEXT,
-    MEMORY_SLOTS,
     SPRITE_SLOTS,
     SPRITE_STATE,
     TRACKED,
     enemy_context,
     kinematics,
-    remembered,
     slot_identities,
+)
+from retroagi.core.smb_observer import pack_c
+from retroagi.core.smb_tracked_objects import (
+    CAPACITY,
+    COLUMN as OBJECT,
+    FIELDS,
+    TrackedObjects,
+    record_objects,
+    sightings,
 )
 from retroagi.core.smb_scene_labels import scene_from_labels
 from retroagi.core.smb_spatial_feedback import SpatialFeedback
@@ -41,7 +47,7 @@ from retroagi.core.target_tracker import (
     collision_loss,
     frame_features,
     record_features,
-    tracked_rows,
+    tracker_rows,
 )
 from retroagi.stages.block_smb import layered_train as lt
 from retroagi.stages.block_smb.env import MarioScenarioEnv
@@ -58,9 +64,9 @@ def test_the_features_the_agent_tracked_with_are_the_recordings():
     seen = []
     original = CollisionTrackers.observe
 
-    def observe(self, features, identities):
-        seen.append((features.copy(), np.asarray(identities).copy()))
-        return original(self, features, identities)
+    def observe(self, features, keys):
+        seen.append((features.copy(), np.asarray(keys).copy()))
+        return original(self, features, keys)
 
     CollisionTrackers.observe = observe
     try:
@@ -94,12 +100,13 @@ def test_the_features_the_agent_tracked_with_are_the_recordings():
         )[0]
     finally:
         CollisionTrackers.observe = original
-    offline = record_features(record)
+    offline, objects = record_features(record)
     assert len(seen) == len(offline)
     decisions = set(int(f) for f in record.decision_frames)
     observation = slice(0, OBSERVATION_WIDTH)
-    for t, (features, identities) in enumerate(seen):
-        assert (identities[:6] == record.slot_identity[t, :6]).all()
+    for t, (features, keys) in enumerate(seen):
+        # The list made at play is the one made again from the recording.
+        assert (keys == objects["keys"][t]).all()
         # The GRU's inputs agree every frame; the action's from the frame
         # after it began (at play it is set after the frame's step).
         assert np.allclose(features[:, observation], offline[t][:, observation], atol=1e-3)
@@ -149,15 +156,17 @@ def walker_sequence(speed, start=110, frames=260):
         for _ in range(4):
             env.step(0)
         spatial, recorder, features = SpatialFeedback(), TruthRecorder(), []
+        objects = TrackedObjects()
         for t in range(frames):
             scene = scene_from_labels(env.scene_labels())
             spatial.observe(scene)
             sprites, mario = kinematics(scene, spatial)
-            state, identities = tracked_rows(
-                sprites, slot_identities(scene, spatial), enemy_context(scene), remembered(scene, spatial)
-            )
+            position = (spatial.displacement, scene.mario.box[3])
+            identities = slot_identities(scene, spatial)
+            objects.update(*sightings(sprites, identities, enemy_context(scene), pack_c(scene), position))
+            rows, keys, _ = objects.read(position)
             features.append(
-                frame_features(state, identities, mario, (0.0, 204.0), t, ActionState())[0]
+                frame_features(tracker_rows(rows), keys, mario, (0.0, 204.0), t, ActionState())[0]
             )
             recorder.add(env.true_frame())
             spatial.executed(0, scene)
@@ -225,8 +234,11 @@ def test_an_enemy_aimed_actions_destination_is_the_enemy_seen_not_the_command():
     short = action_state(wait, -1, [2, 0, 0, 0, 3, 0], sprites, identities, (0, 0), 3)
     long = action_state(wait, -1, [2, 0, 0, 0, 90, 1], sprites, identities, (0, 0), 3)
     assert short == long and short.destination == (0.0, 0.0)
-    state, followed = tracked_rows(sprites, identities, np.zeros((6, len(CONTEXT))))
-    features = frame_features(state, followed, np.zeros(3), (10.0, 0.0), 5, one)
+    rows = np.zeros((CAPACITY, len(FIELDS)), np.float32)
+    rows[1, : len(SPRITE_STATE)] = sprites[1]
+    keys = np.zeros(CAPACITY, np.int32)
+    keys[1] = 7
+    features = frame_features(tracker_rows(rows), keys, np.zeros(3), (10.0, 0.0), 5, one)
     assert features.shape == (ROWS, FEATURES) and features[1, -1] == 1.0 and not features[0].any()
 
 
@@ -247,43 +259,22 @@ def test_runtime_estimates_and_forgetting():
     assert trackers.estimate(5) is None
 
 
-def test_a_remembered_enemy_is_followed_after_the_seen_ones():
-    sprites = np.zeros((SPRITE_SLOTS, len(SPRITE_STATE)), np.float32)
-    sprites[0] = (1.0, 30.0, -6.0, -0.5, 0.0, 1.0)
-    identities = np.zeros(SPRITE_SLOTS, np.int32)
-    identities[0] = 3
-    context = np.zeros((6, len(CONTEXT)), np.float32)
-    memory = np.zeros((MEMORY_SLOTS, len(TRACKED)), np.float32)
-    memory[0, :6] = (1.0, 50.0, 0.0, 0.0, 0.0, 0.5)
-    memory[0, TRACKED.index("unseen")] = 0.25
-    memory[0, TRACKED.index("plant")] = 1.0
-    remembered_ids = np.array([9, 0, 0, 0], np.int32)
-    state, followed = tracked_rows(sprites, identities, context, (memory, remembered_ids))
-    assert state.shape == (ROWS, len(TRACKED)) and list(followed[[0, 6]]) == [3, 9]
-    assert state[0, TRACKED.index("unseen")] == 0.0 and state[6, TRACKED.index("unseen")] == 0.25
-    features = frame_features(state, followed, np.zeros(3), (0.0, 0.0), 0, ActionState())
+def test_the_trackers_follow_the_enemies_on_the_list_seen_or_not_but_not_its_platforms():
+    rows = np.zeros((CAPACITY, len(FIELDS)), np.float32)
+    keys = np.zeros(CAPACITY, np.int32)
+    for row, key, kind, unseen in ((0, 3, "walker", 0.0), (4, 9, "plant", 0.6), (5, 11, None, 0.0)):
+        rows[row, OBJECT["present"]] = 1.0
+        rows[row, OBJECT["x"]] = 30.0 * (row + 1)
+        rows[row, OBJECT["unseen"]] = unseen
+        rows[row, OBJECT[kind] if kind else OBJECT["platform"]] = 1.0
+        keys[row] = key
+    state = tracker_rows(rows)
+    assert state[4, TRACKED.index("unseen")] == np.float32(0.6) and not state[5].any()
+    features = frame_features(state, keys, np.zeros(3), (0.0, 0.0), 0, ActionState())
     trackers = CollisionTrackers(CollisionTracker(16))
-    trackers.observe(features, followed)
+    trackers.observe(features, keys)
     assert trackers.estimate(3) is not None and trackers.estimate(9) is not None
-
-
-def test_an_episode_recorded_before_memory_gives_its_old_inputs():
-    # Recorded without remembered enemies: no remembered rows, "unseen" 0.
-    frames = 3
-    record = type("Old", (), {})()
-    record.sprite_kinematics = np.zeros((frames, SPRITE_SLOTS, len(SPRITE_STATE)), np.float16)
-    record.sprite_kinematics[:, 0, 0] = 1.0
-    record.mario_kinematics = np.zeros((frames, 3), np.float16)
-    record.enemy_context = np.ones((frames, 6, 8), np.float16)
-    record.slot_identity = np.zeros((frames, SPRITE_SLOTS), np.int32)
-    record.slot_identity[:, 0] = 4
-    record.mario_position = np.zeros((frames, 2), np.float32)
-    record.decision_frames = np.array([0], np.int32)
-    record.action_verb = None
-    features = record_features(record)
-    assert features.shape == (frames, ROWS, FEATURES)
-    assert not features[:, 6:].any() and not features[:, :, TRACKED.index("unseen")].any()
-    assert (features[:, 0, len(SPRITE_STATE) + 1 : TRACKED.index("type_0")] == 1.0).all()
+    assert trackers.estimate(11) is None  # a moving platform
 
 
 def test_a_tracker_trained_before_memory_loads_and_answers_as_it_did(tmp_path):

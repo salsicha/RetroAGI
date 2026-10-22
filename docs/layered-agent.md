@@ -22,8 +22,8 @@ Decisions behind this design, with their reasons and status, are listed in
 | Vision | Screen pixels | Mario, objects, surfaces, gaps, support/contact; each enemy's kind and, where its game's labels tell them (Full SMB), its object type |
 | Tactic | Strategy, current scene, the executor's kinematics, held tactic/age, the executor's report on the last action, tactic memory | Persistent categorical tactic, termination probability, option values |
 | Skill | Tactic, strategy context, current scene, the executor's kinematics, last 16 actions, measured execution feedback | An action: a verb and a pointer to one object it sees |
-| World model (LSTM; not used in Block SMB training) | The chosen action, the tactic and strategy it was chosen under, the scene at its start, the executor's kinematics, the last feedback, its own state from earlier actions | The action's outcome: where Mario's feet and its object end, how many frames it takes (for a wait, how long), the chance it succeeds |
-| Collision trackers (not used in Block SMB training) | Every frame: the executor's kinematics of each enemy (seen, or remembered out of sight) and of Mario, what vision shows (or last showed) of the enemy, how long it has been out of sight, the action in progress | When and where that enemy and Mario will touch, and whether as a stomp or a hit |
+| World model (LSTM; not used in Block SMB training) | The chosen action, the tactic and strategy it was chosen under, the scene at its start (its enemies and moving platforms from the list of tracked things, seen or out of sight, with their velocities), Mario's kinematics, the last feedback, its own state from earlier actions | The action's outcome: where Mario's feet and its object end, how many frames it takes (for a wait, how long), the chance it succeeds |
+| Collision trackers (not used in Block SMB training) | Every frame: the executor's kinematics of each enemy on the list of tracked things (seen, or out of sight where it vanished) and of Mario, what vision shows (or last showed) of the enemy, how long it has been out of sight, the action in progress | When and where that enemy and Mario will touch, and whether as a stomp or a hit |
 | Executor | The action's end as its destination (in Block SMB training: the teacher's ground-truth version of the action), per-frame vision | One of six emulator button combinations |
 
 Vision names each enemy's kind as a viewer would (walker, plant, other,
@@ -96,9 +96,15 @@ The controller chooses the buttons and durations; the skill chooses the target.
 The skill and tactic layers read no prediction (user, 2026-10-15). The world
 model (`core/world_model.py`, the policy's `memory`) is an LSTM run once at
 the start of each action, after the skill has chosen it: it reads the scene
-encoder's tokens with the executor's kinematics added to each sprite's and
-Mario's, the last execution feedback, and the chosen action (its verb and its
-object's token); its state carries from action to action. It predicts where
+encoder's tokens but for the enemies' and moving platforms', one token for
+each row of the list of tracked things instead (where each is now or where
+it vanished, its velocity, how long it has been out of sight, its kind, type
+and size, and the row it keeps, so it is the same token from action to
+action), Mario's kinematics added to his token, the last execution feedback,
+and the chosen action (its verb and its object's token: the list's row for
+an enemy or a moving platform); its state carries from action to action. It
+reads no tracker's prediction (user, 2026-10-21: the trackers predict
+collisions, the world model the action's outcome). It predicts where
 Mario's feet and the object end, how many frames the action takes (for a
 wait, how long) and the chance it succeeds. It is trained apart
 (`stages/block_smb/world_model_train.py`) on recorded outcomes: each executed
@@ -114,12 +120,24 @@ The executor keeps a first-order state estimate of every sprite it tracks
 (an enemy or a moving platform: where it is and how fast it moves, the mean
 of its last 16 sightings, constant velocity) and of Mario (his measured
 speed, his feet's movement, whether he stands). Vision reports boxes only;
-a sprite missed for up to 8 frames keeps its identity and velocity. Past
-that it is remembered where it was last expected for up to 192 frames out of
-sight, and found again with its identity near there or near where it was
-last seen (a plant gone into its pipe, an enemy past the screen's edge;
-user, 2026-10-21); vision showing it defeated there ends its memory. Both
-prediction networks and the decision layers read these same estimates, per
+a sprite missed for up to 8 frames keeps its identity and velocity.
+
+The system keeps a list of up to 20 tracked things (every enemy and moving
+platform vision has reported; `core/smb_tracked_objects.py`; user,
+2026-10-21). One out of sight stays on it where it vanished, in the world,
+with the velocity it was last estimated to have and how long it has been
+unseen, with no time limit: a plant down in its pipe, an enemy past the
+screen's edge. A sighting of the same kind within 8 pixels of where an entry
+vanished is that entry found again; vision showing an enemy defeated there
+ends it; a full list drops the entry seen longest ago (never one seen now).
+Each entry keeps its row while it is on the list. The list is made from the
+numbers each frame records (rounded as the recordings keep them), so the
+list at play and the one made again from a recording are the same, and the
+datasets recorded before it read it too. The collision trackers follow
+every enemy on it, and the world model reads it in place of vision's enemy
+and platform tokens; the decision layers do not.
+
+Both prediction networks and the decision layers read these same estimates, per
 scene slot (`core/smb_kinematics.py`): the trackers every frame, the world
 model at each action's start (user, 2026-10-16), the skill and tactic layers
 at each decision (each sprite's velocity added to its scene token, Mario's
@@ -137,15 +155,15 @@ scene slot shows, why each action ended, and each executed command and the
 action it carried out; the networks' labels are made from these afterwards.
 
 The collision trackers (`core/target_tracker.py`) run every frame, one GRU
-state per tracked enemy: those in the scene's enemy slots and up to four the
-executor remembers out of sight (`smb_kinematics.remembered`), so the GRU
-goes on stepping while a plant is down in its pipe and can learn when it
+state per enemy on the list of tracked things, seen or out of sight, so the
+GRU goes on stepping while a plant is down in its pipe and can learn when it
 comes back. Each predicts whether that enemy and Mario will touch
 within 96 frames, when (in two-frame bins), where (from Mario's feet), and
 as a stomp or a hit. They read the executor's kinematics of the enemy and of
 Mario, what vision shows of the enemy (kind, size, the surface it walks on,
-its object type where vision tells it; for a remembered one its kind, size
-and type when last seen), how long it has been out of sight, and the action
+its object type where vision tells it; for one out of sight its kind, size
+and type when last seen, where it vanished), how long it has been out of
+sight, and the action
 in progress (its verb, where it sends Mario from where he is
 now, how long it has run; an action aimed at an enemy sends him to the
 enemy's point when it began, never to the teacher's command, which was aimed

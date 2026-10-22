@@ -25,7 +25,7 @@ from retroagi.core.smb_scene_labels import (
     scene_from_labels,
     scene_targets,
 )
-from retroagi.core.target_tracker import FEATURES, OBSERVATION_WIDTH, CollisionTracker, record_features
+from retroagi.core.target_tracker import FEATURES, OBSERVATION_WIDTH, CollisionTracker
 
 
 def _labels(enemy_types):
@@ -172,21 +172,21 @@ def test_the_trackers_read_the_type_and_an_earlier_tracker_loads(tmp_path):
 
 
 def test_an_episode_recorded_before_types_has_none_told():
-    frames = 2
-    record = type("Old", (), {})()
-    record.sprite_kinematics = np.zeros((frames, SPRITE_SLOTS, len(SPRITE_STATE)), np.float16)
-    record.sprite_kinematics[:, 0, 0] = 1.0
-    record.mario_kinematics = np.zeros((frames, 3), np.float16)
-    record.enemy_context = np.ones((frames, 6, 8), np.float16)  # eight numbers an enemy then
-    record.slot_identity = np.zeros((frames, SPRITE_SLOTS), np.int32)
-    record.slot_identity[:, 0] = 2
-    record.mario_position = np.zeros((frames, 2), np.float32)
-    record.decision_frames = np.array([0], np.int32)
-    record.action_verb = None
-    features = record_features(record)
-    types = slice(TRACKED.index("type_0"), len(TRACKED))
-    assert not features[:, 0, types].any()
-    assert (features[:, 0, TRACKED.index("walker") : TRACKED.index("type_0")] == 1.0).all()
+    from retroagi.core.smb_tracked_objects import sightings
+
+    # Recorded then: eight numbers of context an enemy, 0 in the types' room.
+    sprites = np.zeros((SPRITE_SLOTS, len(SPRITE_STATE)), np.float32)
+    sprites[0] = (1.0, 60.0, -4.0, -0.5, 0.0, 1.0)
+    identities = np.zeros(SPRITE_SLOTS, np.int32)
+    identities[0] = 2
+    context = np.zeros((6, 8), np.float32)
+    context[0, CONTEXT.index("walker")] = 1.0
+    seen, _ = sightings(sprites, identities, context, pack_c(_scene(-1)), (0.0, 116.0))
+    (walker,) = seen
+    assert walker.context.shape == (len(CONTEXT),) and walker.kind == "walker"
+    assert not walker.context[CONTEXT.index("type_0") :].any()
+    told, _ = sightings(sprites, identities, context, pack_c(_scene(4)), (0.0, 116.0))
+    assert told[0].context[CONTEXT.index("type_4")] == 1.0
     assert len(CONTEXT) == 8 + OBJECT_TYPE_SLOTS
 
 

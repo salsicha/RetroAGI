@@ -26,6 +26,40 @@ commit). How the parts work is described in the
   the training set"); the recorded failures are fixed in the teacher. A
   failed gate is fixed in the teacher or the policy, never bypassed.
 
+## 2026-10-21 — A list of tracked things; the world model reads it (user decision; built)
+
+User: "the lstm and trackers are different, the lstm predicts the best
+outcome for mario, trackers predict collision ... but the lstm should get
+information about hidden and off-screen enemies. ... the system will
+maintain a list of 20 enemies and targets, instead of reading the enemy
+tokens from the ViT, the LSTM will get the enemy information from the
+trackers, as well as their velocity. the system will keep the tracker for
+disappeared enemies at the place they vanished ... when the list fills up
+the oldest one will be popped off"; then "the lstm just needs things like
+the identity, position, velocity, ... from the trackers, not the gru
+prediction". Asked: the one seen longest ago is dropped; moving platforms
+are on the list too.
+
+Measured first: a Full SMB piranha plant stays down 64 frames, but as long
+as Mario is within about 35 pixels it does not come up at all (down 6,202
+frames once); a time limit on memory was the wrong rule.
+
+- `core/smb_tracked_objects.py`: up to 20 enemies and moving platforms; one
+  out of sight stays where it vanished, with its last velocity and how long
+  it has been unseen, without a time limit; the same kind seen within 8
+  pixels of there is it found again; seen defeated there ends it; a full
+  list drops the entry seen longest ago; each entry keeps its row.
+- The world model reads one token per row (its numbers and a learned token
+  for the row) in place of vision's enemy and platform tokens; an action at
+  an enemy or a platform points at its row. It reads no tracker prediction.
+  Checkpoints from before load with it to learn again
+  (`world_model_reads_the_tracked_list`).
+- The collision trackers follow every enemy on the list.
+- The executor's own memory of 2026-10-21 (192 frames) is gone again: the
+  list keeps what went out of sight.
+- The list is made from the numbers each frame records, so the recorded
+  skill, tactic and collision datasets read it as they are.
+
 ## 2026-10-21 — Every learned part gets what a human sees (user decision; built)
 
 User: "do the layers with learned parameters have all the information they
@@ -42,14 +76,12 @@ out of sight; some parts were not given these.
   read. Earlier the "no speed" rule kept them from the decision layers.
 - **The tactic layer reads the executor's report** on the last action (the
   execution feedback the skill already read).
-- **The executor remembers what went out of sight**: any tracked object,
-  past the 8 frames of a short miss, is kept where it was last expected for
-  up to 192 frames and found again, with its identity, near there or where
-  it was last seen; vision showing it defeated there ends the memory. The
-  collision trackers follow up to four remembered enemies beside the seen
-  ones, reading how long each has been out of sight, so the GRU goes on
-  stepping while a plant is down in its pipe. The plant collision lessons
-  gain plants seen going down before the action (`gone`).
+- **The executor remembers what went out of sight** (replaced the same day
+  by the list of tracked things, above): any tracked object, past the 8
+  frames of a short miss, was kept where it was last expected for up to 192
+  frames; the collision trackers followed up to four remembered enemies.
+  The plant collision lessons gain plants seen going down before the action
+  (`gone`).
 - **Vision tells each enemy's object type** where its game's labels tell
   it: one of 16 numbers (Full SMB's labels number the game's own enemy
   codes, `full_smb/pixel_labels.ENEMY_TYPE_NUMBERS`; a Goomba and a Koopa

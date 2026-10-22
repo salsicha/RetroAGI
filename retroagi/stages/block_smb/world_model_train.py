@@ -26,7 +26,7 @@ import torch
 
 from retroagi.core.action_outcomes import COLUMN as EXECUTED, executed_outcomes
 from retroagi.core.action_tokens import MODE_VERBS, VERBS
-from retroagi.core.layered_policy import POINTER_START
+from retroagi.core.layered_policy import POINTER_START, SCENE_TOKEN_COUNT
 from retroagi.core.tokens import SKILL_MODES
 from retroagi.core.world_model import (
     ACTION_RECORD,
@@ -34,6 +34,7 @@ from retroagi.core.world_model import (
     CONTEXT_WIDTH,
     MARIO_TOKEN,
     OUTCOME_FIELDS,
+    object_pointers,
     outcome_loss,
     scene_digest,
 )
@@ -87,10 +88,16 @@ class Kept:
 
 
 def kept(record) -> Kept:
-    """A collected episode's KEPT fields, and its scene rows at its decisions."""
+    """A collected episode's KEPT fields, and at its decisions its scene rows
+    and the list of tracked things (smb_tracked_objects.record_objects, made
+    again from the whole recording)."""
+    from retroagi.core.smb_tracked_objects import record_objects
+
     values = {name: getattr(record, name) for name in KEPT}
     frames = np.asarray(record.decision_frames, np.int64)
     values["rows"] = tuple(getattr(record, name)[frames] for name in ("src_a", "src_b", "src_c"))
+    listed = record_objects(record)
+    values["objects"] = {name: listed[name][frames] for name in ("rows", "keys", "slot_keys")}
     return Kept(values)
 
 
@@ -142,10 +149,25 @@ def episode_data(record) -> dict:
     context = record.action_context
     if context is None or len(context) != len(executed):
         context = np.zeros((len(executed), CONTEXT_WIDTH), np.float32)
+    listed = getattr(record, "objects", None)
+    if listed is None:
+        raise ValueError("episodes kept without the list of tracked things (kept): keep them again")
+    # An action at an enemy or a moving platform points at its row on the
+    # list (world_model.object_pointers).
+    for k in range(len(executed)):
+        executed[k : k + 1, COLUMN["pointer"]] = object_pointers(
+            executed[k : k + 1, COLUMN["pointer"]], listed["slot_keys"][k : k + 1],
+            listed["keys"][k : k + 1], SCENE_TOKEN_COUNT,
+        )
+        n = tried.shape[1]
+        tried[k, :, COLUMN["pointer"]] = object_pointers(
+            tried[k, :, COLUMN["pointer"]], np.repeat(listed["slot_keys"][k : k + 1], n, 0),
+            np.repeat(listed["keys"][k : k + 1], n, 0), SCENE_TOKEN_COUNT,
+        )
     return {
         "rows": record.rows,
         "context": np.asarray(context, np.float32),
-        "sprites": record.sprite_kinematics[frames].astype(np.float32),
+        "objects": np.asarray(listed["rows"], np.float32),
         "mario": record.mario_kinematics[frames].astype(np.float32),
         "feedback": np.asarray(record.execution_feedback, np.float32),
         "executed": executed,
@@ -172,11 +194,11 @@ def _forward(policy, episodes, device, tried_weight=1.0, collect=None):
                 torch.as_tensor(c, dtype=torch.float32, device=device),
             )
         )
-    sprites = torch.as_tensor(np.concatenate([e["sprites"] for e in episodes]), device=device)
+    objects = torch.as_tensor(np.concatenate([e["objects"] for e in episodes]), device=device)
     mario = torch.as_tensor(np.concatenate([e["mario"] for e in episodes]), device=device)
     feedback = torch.as_tensor(np.concatenate([e["feedback"] for e in episodes]), device=device)
     context = torch.as_tensor(np.concatenate([e["context"] for e in episodes]), device=device)
-    tokens = model.with_motion(tokens, sprites, mario)
+    tokens, present = model.with_objects(tokens, present, objects, mario)
     hidden, cell = model.initial(len(episodes), device)
     losses, weights = [], []
     for k in range(max(counts)):

@@ -13,7 +13,8 @@ import torch
 
 from retroagi.core.action_tokens import VERBS, ActionToken
 from retroagi.core.layered_policy import LayeredSMBPolicy
-from retroagi.core.smb_kinematics import MARIO_STATE, SPRITE_SLOTS, SPRITE_STATE
+from retroagi.core.smb_kinematics import MARIO_STATE, SPRITE_SLOTS
+from retroagi.core.smb_tracked_objects import CAPACITY, COLUMN as OBJECT, FIELDS
 from retroagi.core.smb_observer import observation_layout
 from retroagi.core.tokens import EXECUTION_WIDTH, token_layout
 from retroagi.core.world_model import (
@@ -40,20 +41,20 @@ def scene(policy, count=2):
             torch.rand(count, SEQ_LEN_C) * 0.1,
         )
     )
-    sprites = torch.zeros(count, SPRITE_SLOTS, len(SPRITE_STATE))
+    objects = torch.zeros(count, CAPACITY, len(FIELDS))
     mario = torch.zeros(count, len(MARIO_STATE))
     feedback = torch.zeros(count, EXECUTION_WIDTH)
-    return tokens, present, sprites, mario, feedback
+    return tokens, present, objects, mario, feedback
 
 
 @torch.no_grad()
 def test_an_untrained_world_model_is_unsure():
     policy = LayeredSMBPolicy().eval()
-    tokens, present, sprites, mario, feedback = scene(policy)
+    tokens, present, objects, mario, feedback = scene(policy)
     verbs = torch.tensor([VERBS.index("wait"), VERBS.index("run")])
     pointers = torch.tensor([MARIO_TOKEN, MARIO_TOKEN])
     out, state = policy.memory.predict(
-        tokens, present, sprites, mario, feedback, verbs, pointers, policy.memory.initial(2, "cpu")
+        tokens, present, objects, mario, feedback, verbs, pointers, policy.memory.initial(2, "cpu")
     )
     assert torch.allclose(out["mean"][:, :4], torch.zeros(2, 4))
     assert torch.allclose(out["mean"][:, 4], torch.full((2,), 32.0))
@@ -65,8 +66,8 @@ def test_an_untrained_world_model_is_unsure():
 def test_trying_another_action_does_not_advance_the_state():
     policy = LayeredSMBPolicy().eval()
     model = policy.memory
-    tokens, present, sprites, mario, feedback = scene(policy, 1)
-    tokens = model.with_motion(tokens, sprites, mario)
+    tokens, present, objects, mario, feedback = scene(policy, 1)
+    tokens, present = model.with_objects(tokens, present, objects, mario)
     before = tuple(torch.randn(1, model.width) for _ in range(2))
     wait, run = torch.tensor([VERBS.index("wait")]), torch.tensor([VERBS.index("run")])
     pointer = torch.tensor([MARIO_TOKEN])
@@ -186,17 +187,17 @@ def test_the_tactic_and_strategy_read_starts_with_no_influence():
         parameter.normal_(0.0, 0.1)
     model.context.weight.zero_()
     model.context.bias.zero_()
-    tokens, present, sprites, mario, feedback = scene(policy, 2)
+    tokens, present, objects, mario, feedback = scene(policy, 2)
     verbs = torch.tensor([VERBS.index("wait"), VERBS.index("run")])
     pointers = torch.tensor([MARIO_TOKEN, MARIO_TOKEN])
     state = model.initial(2, "cpu")
-    plain, _ = model.predict(tokens, present, sprites, mario, feedback, verbs, pointers, state)
+    plain, _ = model.predict(tokens, present, objects, mario, feedback, verbs, pointers, state)
     context = torch.rand(2, CONTEXT_WIDTH)
-    read, _ = model.predict(tokens, present, sprites, mario, feedback, verbs, pointers, state, context=context)
+    read, _ = model.predict(tokens, present, objects, mario, feedback, verbs, pointers, state, context=context)
     assert torch.equal(plain["mean"], read["mean"])
     # Once it has learned, the tactic and the strategy change the outcome.
     model.context.weight.normal_()
-    changed, _ = model.predict(tokens, present, sprites, mario, feedback, verbs, pointers, state, context=context)
+    changed, _ = model.predict(tokens, present, objects, mario, feedback, verbs, pointers, state, context=context)
     assert not torch.equal(plain["mean"], changed["mean"])
 
 
@@ -225,3 +226,65 @@ def test_a_world_model_saved_before_it_read_the_tactic_loads_unchanged(tmp_path)
     assert checkpoint["trained_layers"] == ["skill"]
     assert torch.equal(loaded.memory.cell.weight_ih, policy.memory.cell.weight_ih)
     assert not loaded.memory.context.weight.any()
+
+
+@torch.no_grad()
+def test_the_world_model_reads_the_list_in_place_of_visions_enemy_tokens():
+    from retroagi.core.world_model import SPRITE_TOKENS, object_pointers
+
+    torch.manual_seed(0)
+    policy = LayeredSMBPolicy().eval()
+    model = policy.memory
+    for parameter in model.parameters():
+        parameter.normal_(0.0, 0.1)
+    tokens, present, objects, mario, feedback = scene(policy, 1)
+    present[:, SPRITE_TOKENS] = True
+    # A walker out of sight, kept where it vanished: 40 pixels ahead.
+    objects[0, 3, OBJECT["present"]] = 1.0
+    objects[0, 3, OBJECT["x"]] = 40.0
+    objects[0, 3, OBJECT["unseen"]] = 0.5
+    objects[0, 3, OBJECT["walker"]] = 1.0
+    read, listed = model.with_objects(tokens, present, objects, mario)
+    count = tokens.shape[1]
+    assert read.shape[1] == count + CAPACITY
+    assert not listed[0, SPRITE_TOKENS].any()  # vision's enemy and platform tokens: not read
+    assert listed[0, count:].tolist() == [row == 3 for row in range(CAPACITY)]
+    # An action at the enemy in sprite slot 1 points at its row on the list.
+    slot_keys = np.zeros((1, SPRITE_SLOTS), np.int32)
+    slot_keys[0, 1] = 7
+    keys = np.zeros((1, CAPACITY), np.int32)
+    keys[0, 3] = 7
+    assert object_pointers([SPRITE_TOKENS[1]], slot_keys, keys, count)[0] == count + 3
+    assert object_pointers([SPRITE_TOKENS[0]], slot_keys, keys, count)[0] == SPRITE_TOKENS[0]
+    # What the list says changes the outcome.
+    verbs, pointers = torch.tensor([VERBS.index("wait")]), torch.tensor([MARIO_TOKEN])
+    state = model.initial(1, "cpu")
+    near, _ = model.predict(tokens, present, objects, mario, feedback, verbs, pointers, state)
+    objects[0, 3, OBJECT["x"]] = 120.0
+    far, _ = model.predict(tokens, present, objects, mario, feedback, verbs, pointers, state)
+    assert not torch.equal(near["mean"], far["mean"])
+
+
+def test_a_world_model_saved_before_the_list_learns_again(tmp_path):
+    torch.manual_seed(0)
+    policy = LayeredSMBPolicy()
+    state = {k: v for k, v in policy.state_dict().items() if not k.startswith(("memory.objects.", "memory.object_row"))}
+    state["memory.sprite_motion.weight"] = torch.zeros(policy.memory.verb.weight.shape[1], 3)
+    state["memory.sprite_motion.bias"] = torch.zeros(policy.memory.verb.weight.shape[1])
+    path = tmp_path / "before.pt"
+    torch.save(
+        {
+            "settings": asdict(policy.settings),
+            "state_dict": state,
+            "observation_layout": observation_layout(),
+            "token_layout": token_layout(),
+            "trained_layers": ["skill"],
+            "memory_version": 5,
+            "world_model": {"reads": scene_digest(policy), "history": []},
+        },
+        path,
+    )
+    loaded, checkpoint = lt.load_layered_checkpoint(path)
+    assert "world_model_reads_the_tracked_list" in checkpoint["load_migrations"]
+    assert checkpoint["world_model"] is None and checkpoint["trained_layers"] == ["skill"]
+    assert torch.equal(loaded.memory.cell.weight_ih, policy.memory.cell.weight_ih)

@@ -199,6 +199,47 @@ def packed_lists(scene: SceneObservation) -> dict[str, list]:
     return lists
 
 
+def row_objects(row) -> dict:
+    """What a C row (pack_c) says of Mario, the enemies and the moving
+    platforms, in screen pixels: {"mario": his box or None, "enemies": [(slot,
+    box, kind, type)], "moving_platforms": [(slot, box)]} (type -1: not told).
+    Recorded rows are read back with it (float16 rows within a pixel)."""
+    row = np.asarray(row, np.float32)
+    width, height = SCREEN_SHAPE[1], SCREEN_SHAPE[0]
+    start = C_SPANS["c_mario"][0]
+    mario = None
+    if row[start] > 0.5:
+        x0, y0, x1, y1 = row[start + 1 : start + 5]
+        mario = (x0 * width, y0 * height, x1 * width, y1 * height)
+    # Boxes are relative to Mario's centre (_reference): the screen's centre
+    # without him.
+    if mario is None:
+        mx, my = width / 2, height / 2
+    else:
+        mx, my = (mario[0] + mario[2]) / 2, (mario[1] + mario[3]) / 2
+
+    def box_of(values):
+        x0, y0, x1, y1 = values
+        return (x0 * width + mx, y0 * height + my, x1 * width + mx, y1 * height + my)
+
+    out = {"mario": mario, "enemies": [], "moving_platforms": []}
+    begin, _ = C_SPANS["c_enemies"]
+    types, _ = C_SPANS["c_enemy_types"]
+    slot_width = _SLOT_WIDTH["enemies"]
+    for slot in range(SCENE_SLOTS["enemies"]):
+        values = row[begin + slot * slot_width : begin + (slot + 1) * slot_width]
+        if values[0] > 0.5:
+            kind = ENEMY_KINDS[int(np.argmax(values[5 : 5 + len(ENEMY_KINDS)]))]
+            out["enemies"].append((slot, box_of(values[1:5]), kind, int(round(row[types + slot])) - 1))
+    begin, _ = C_SPANS["c_moving_platforms"]
+    slot_width = _SLOT_WIDTH["moving_platforms"]
+    for slot in range(SCENE_SLOTS["moving_platforms"]):
+        values = row[begin + slot * slot_width : begin + (slot + 1) * slot_width]
+        if values[0] > 0.5:
+            out["moving_platforms"].append((slot, box_of(values[1:5])))
+    return out
+
+
 def pack_c(scene: SceneObservation) -> np.ndarray:
     """The C row for one scene (C_SPANS)."""
     row = np.zeros(SEQ_LEN_C, np.float32)

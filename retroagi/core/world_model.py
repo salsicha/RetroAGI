@@ -9,15 +9,20 @@ before the action without advancing it.
 
 What it reads at an action's start:
 
-- the scene encoder's tokens (trained with the skill; frozen here);
-- the executor's first-order kinematics (core/smb_kinematics, the same the
-  collision trackers read): each tracked sprite's velocity added to its
-  token, Mario's to his (one picture cannot show motion);
+- the scene encoder's tokens (trained with the skill; frozen here), but for
+  the enemies' and moving platforms': those come from the list of tracked
+  things (core/smb_tracked_objects; user, 2026-10-21) instead, one token a
+  row: where each is now or where it vanished, its velocity, how long it
+  has been out of sight, its kind, type and size (with_objects), and the
+  row it keeps, so it is the same token from action to action; out of
+  sight and off the screen too;
+- Mario's kinematics (core/smb_kinematics), added to his token (one picture
+  cannot show motion);
 - the last execution feedback (how the previous action went);
 - the tactic and the strategy switch the action was chosen under (user,
   2026-10-18: the same action is carried out differently under each);
 - the chosen action: its verb and the token of where it ends (Mario's for a
-  wait);
+  wait; the list's row for an enemy or a moving platform: object_pointers);
 - its own state, carried from action to action.
 
 What it predicts (OUTCOME_FIELDS, pixels from Mario's feet at the start and
@@ -39,6 +44,7 @@ import torch.nn.functional as F
 from .action_tokens import VERBS, pointer_index
 from .smb_kinematics import MARIO_STATE, SPRITE_SLOTS
 from .smb_observer import SCENE_SLOTS
+from .smb_tracked_objects import CAPACITY, COLUMN as OBJECT_COLUMN, FIELDS as OBJECT_FIELDS
 from .tokens import EXECUTION_WIDTH, STRATEGY_WIDTH, TACTIC_WIDTH
 
 OUTCOME_FIELDS = ("dx", "dy", "object_dx", "object_dy", "frames")
@@ -100,6 +106,27 @@ def add_motion(tokens, sprites, mario, sprite_layer, mario_layer):
     return tokens
 
 
+# A list row's numbers as the world model reads them: places in this unit.
+OBJECT_POSITION_SCALE = 128.0
+
+
+def object_pointers(pointers, slot_keys, keys, token_count: int):
+    """Each action's pointer (scene token indices, [N]) with one at an
+    enemy's or a moving platform's scene token replaced by its row on the
+    list of tracked things (``token_count`` + row; with_objects): the sprite
+    slots' keys ``slot_keys`` [N, SPRITE_SLOTS] and the list's ``keys`` [N,
+    CAPACITY] say which row. One whose thing is not on the list keeps its
+    scene token."""
+    pointers = np.asarray(pointers, np.int64).copy()
+    for n, pointer in enumerate(pointers):
+        if pointer in SPRITE_TOKENS:
+            key = int(slot_keys[n][SPRITE_TOKENS.index(int(pointer))])
+            rows = np.flatnonzero(np.asarray(keys[n]) == key) if key else ()
+            if len(rows):
+                pointers[n] = token_count + int(rows[0])
+    return pointers
+
+
 def action_record(action, outcome: dict, chosen: bool) -> np.ndarray:
     """[len(ACTION_RECORD)] numbers for an action the teacher tried and its
     outcome (teacher_actions.action_outcome)."""
@@ -149,13 +176,16 @@ class WorldModel(nn.Module):
         super().__init__()
         self.width = memory_width
         self.verb = nn.Embedding(len(VERBS), width)
-        self.sprite_motion = nn.Linear(SPRITE_MOTION.stop - SPRITE_MOTION.start, width)
         self.mario_motion = nn.Linear(len(MARIO_STATE), width)
         self.feedback = nn.Linear(EXECUTION_WIDTH, width)
         self.context = nn.Linear(CONTEXT_WIDTH, width)
-        for layer in (self.sprite_motion, self.mario_motion, self.feedback, self.context):
+        for layer in (self.mario_motion, self.feedback, self.context):
             nn.init.zeros_(layer.weight)
             nn.init.zeros_(layer.bias)
+        # The list of tracked things: each row's numbers, and the row itself
+        # (the same thing keeps its row while it is on the list).
+        self.objects = nn.Linear(len(OBJECT_FIELDS), width)
+        self.object_row = nn.Parameter(torch.zeros(CAPACITY, width))
         self.cell = nn.LSTMCell(width, memory_width)
         self.state = nn.Linear(memory_width, width)
         self.query_norm = nn.LayerNorm(width)
@@ -178,10 +208,23 @@ class WorldModel(nn.Module):
         zeros = torch.zeros(batch, self.width, device=device)
         return zeros, zeros.clone()
 
-    def with_motion(self, tokens, sprites, mario):
-        """``tokens`` [B, T, width] with each sprite slot's kinematics
-        ([B, SPRITE_SLOTS, 6]) added to its token and Mario's ([B, 3]) to his."""
-        return add_motion(tokens, sprites, mario, self.sprite_motion, self.mario_motion)
+    def with_objects(self, tokens, present, objects, mario):
+        """The tokens the world model reads: the scene's ``tokens`` [B, T,
+        width] (``present`` [B, T]) but for vision's enemy and moving
+        platform tokens, then one token per row of the list of tracked
+        things (``objects`` [B, CAPACITY, len(OBJECT_FIELDS)]:
+        TrackedObjects.read); Mario's kinematics ([B, 3]) added to his token.
+        Returns (tokens [B, T + CAPACITY, width], present)."""
+        tokens = tokens.clone()
+        tokens[:, MARIO_TOKEN] = tokens[:, MARIO_TOKEN] + self.mario_motion(mario)
+        present = present.clone()
+        present[:, SPRITE_TOKENS] = False
+        numbers = objects.clone()
+        numbers[..., OBJECT_COLUMN["x"]] /= OBJECT_POSITION_SCALE
+        numbers[..., OBJECT_COLUMN["y"]] /= OBJECT_POSITION_SCALE
+        listed = numbers[..., OBJECT_COLUMN["present"]] > 0.5
+        rows = (self.objects(numbers) + self.object_row) * listed[..., None]
+        return torch.cat((tokens, rows), 1), torch.cat((present, listed), 1)
 
     def _query(self, tokens, verbs, pointers, rows, context):
         query = self.verb(verbs) + tokens[rows, pointers]
@@ -218,10 +261,11 @@ class WorldModel(nn.Module):
         sigma = raw[:, OUTCOME_WIDTH : 2 * OUTCOME_WIDTH].clamp(-6, 2).exp() * self.scale
         return {"mean": mean, "sigma": sigma, "success": raw[:, -1]}
 
-    def predict(self, tokens, present, sprites, mario, feedback, verbs, pointers, state, context=None):
+    def predict(self, tokens, present, objects, mario, feedback, verbs, pointers, state, context=None):
         """At play: the outcome of each copy's chosen action and its state
-        after the step (one step per action)."""
-        tokens = self.with_motion(tokens, sprites, mario)
+        after the step (one step per action); ``pointers`` index the tokens
+        with_objects makes (object_pointers)."""
+        tokens, present = self.with_objects(tokens, present, objects, mario)
         state = self.advance(tokens, feedback, verbs, pointers, state, context=context)
         return self.readout(tokens, present, state[0], verbs, pointers, context=context), state
 

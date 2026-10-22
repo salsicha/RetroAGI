@@ -148,6 +148,10 @@ class PositionWaves(nn.Module):
         return torch.cat((numbers, angles.sin().flatten(-2), angles.cos().flatten(-2)), dim=-1)
 
 
+# Tokens per scene (SceneEncoder): summary, Mario, every list slot, every band.
+SCENE_TOKEN_COUNT = 2 + sum(SCENE_SLOTS.values()) + SEQ_LEN_A + SEQ_LEN_B
+
+
 class SceneEncoder(nn.Module):
     """One PolicyInput (batched rows) -> object tokens, a padding mask and a summary."""
 
@@ -186,7 +190,7 @@ class SceneEncoder(nn.Module):
         )
         self.norm = nn.LayerNorm(width)
         # Tokens per scene: summary, Mario, every list slot, every band.
-        self.token_count = 2 + sum(SCENE_SLOTS.values()) + SEQ_LEN_A + SEQ_LEN_B
+        self.token_count = SCENE_TOKEN_COUNT
 
     def _objects(self, src_c):
         """Summary, Mario and every list slot of a C row, as tokens and a mask."""

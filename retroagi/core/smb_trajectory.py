@@ -34,25 +34,9 @@ def translated(box, dx=0, dy=0):
 # 16 sightings 3). A reversal starts the mean again.
 ESTIMATE_SAMPLES = 16
 # A track not seen in a frame (vision missed it, or it crossed another) is
-# moved on by its velocity for this many frames, and found again near there
+# kept this many frames, moved by its velocity, and found again near there
 # with its identity and velocity.
 LOST_FRAMES = 8
-# Past that it is remembered where it was last expected (the camera's scroll
-# still applied) for up to this many frames out of sight, and found again,
-# with its identity, near there or near where it was last seen: what went
-# out of sight is still there (a plant in its pipe, an enemy off the
-# screen's edge; user, 2026-10-21). The collision trackers read the
-# remembered ones (smb_kinematics.remembered).
-MEMORY_FRAMES = 192
-
-
-def _same_place(box, other) -> bool:
-    """Whether two boxes stand in one place: middles and bottoms within 8
-    pixels (a sprite drawn defeated is flatter, on the same ground)."""
-    return (
-        abs((box[0] + box[2]) / 2 - (other[0] + other[2]) / 2) <= 8
-        and abs(box[3] - other[3]) <= 8
-    )
 
 
 @dataclass
@@ -63,20 +47,6 @@ class Track:
     identity: int = 0
     # Frames since it was last seen (0: seen this frame).
     missed: int = 0
-    # Its box when last seen (moved with the camera's scroll since).
-    seen_box: Optional[tuple] = None
-    # Its object type as vision last told it (smb_scene_labels.EnemyView.type;
-    # -1 not told, and for moving platforms).
-    type: int = -1
-
-    def coast(self, scroll):
-        """One frame out of sight: moved on by its velocity while it has been
-        missed up to LOST_FRAMES (as a short miss always was), then held
-        where it was last expected; both boxes move with the camera's
-        scroll."""
-        self.seen_box = translated(self.seen_box or self.box, -scroll, 0)
-        vx, vy = (self.velocity or (0.0, 0.0)) if self.missed <= LOST_FRAMES else (0.0, 0.0)
-        self.box = translated(self.box, vx - scroll, vy)
 
     @property
     def velocity(self):
@@ -97,7 +67,7 @@ class VisualTracks:
     # (the target tracker's collision point; user, 2026-10-14/15). None when
     # the agent plays without the teacher.
     exact: Optional[Callable] = None
-    # Tracks not seen this frame, for up to MEMORY_FRAMES (Track.missed).
+    # Tracks not seen this frame, for up to LOST_FRAMES (Track.missed).
     lost: list = field(default_factory=list)
 
     def observe(self, scene, scroll):
@@ -108,7 +78,8 @@ class VisualTracks:
         lost = []
         if scroll is not None:
             for old in self.lost:
-                old.coast(scroll)
+                vx, vy = old.velocity or (0.0, 0.0)
+                old.box = translated(old.box, vx - scroll, vy)
                 lost.append(old)
         found = set()
         updated, used = [], set()
@@ -122,7 +93,7 @@ class VisualTracks:
                     if abs(dx) <= 8 and abs(dy) <= 8:
                         matches.append((abs(dx) + abs(dy), i, dx, dy))
             matches.sort()
-            track = Track(box, kind, identity=self.next_identity, seen_box=box)
+            track = Track(box, kind, identity=self.next_identity)
             self.next_identity += 1
             if matches and (len(matches) == 1 or matches[1][0] - matches[0][0] > 1):
                 _, i, dx, dy = matches[0]
@@ -150,7 +121,7 @@ class VisualTracks:
                 # Preserve this visual identity across motion and reversals.
                 # Flights may hold a reference to this particular walker.
                 track = old
-                track.box = track.seen_box = box
+                track.box = box
                 track.samples = ([] if reversed_course else old.samples) + [(dx, dy)]
                 track.samples = track.samples[-ESTIMATE_SAMPLES:]
             elif not matches:
@@ -162,59 +133,37 @@ class VisualTracks:
             # Seen last frame but not now: kept where they should be next.
             missing = [t for i, t in enumerate(self.tracks) if i not in used]
             for old in missing:
-                old.coast(scroll)
-            # Vision showing one defeated where it should be ends its memory.
-            defeated = [e.box for e in scene.enemies if e.kind == "defeated"]
+                vx, vy = old.velocity or (0.0, 0.0)
+                old.box = translated(old.box, vx - scroll, vy)
             kept = []
             for old in missing + [t for t in lost if t.identity not in found]:
                 old.missed += 1
-                if old.missed <= MEMORY_FRAMES and not any(
-                    _same_place(old.box, box) for box in defeated
-                ):
+                if old.missed <= LOST_FRAMES:
                     kept.append(old)
             self.lost = kept
-        # Each sighting made one track, in order: each keeps its object type.
-        types = [e.type for e in scene.enemies if e.kind != "defeated"]
-        for track, told in zip(updated, types + [-1] * len(scene.moving_platforms)):
-            track.type = told
         self.tracks = updated
 
     def _found_again(self, box, kind, lost, found):
         """The lost track this unmatched sighting continues (one whose
-        expected box, or the box it was last seen with, is within 8 pixels,
-        unambiguously), with its identity; or None. After a short gap its
-        velocity goes on, the movement over the gap added as one sample;
-        after a longer one (past LOST_FRAMES) it starts again."""
-
-        def apart(old):
-            return min(
-                abs(box[0] - b[0]) + abs(box[1] - b[1])
-                for b in (old.box, old.seen_box or old.box)
-                if abs(box[0] - b[0]) <= 8 and abs(box[1] - b[1]) <= 8
-            )
-
+        predicted box is within 8 pixels, unambiguously), with its identity
+        and velocity, the movement over the gap added as one sample; or
+        None."""
         near = sorted(
-            (apart(old), j)
+            (abs(box[0] - old.box[0]) + abs(box[1] - old.box[1]), j)
             for j, old in enumerate(lost)
             if old.kind == kind
             and old.identity not in found
-            and any(
-                abs(box[0] - b[0]) <= 8 and abs(box[1] - b[1]) <= 8
-                for b in (old.box, old.seen_box or old.box)
-            )
+            and abs(box[0] - old.box[0]) <= 8
+            and abs(box[1] - old.box[1]) <= 8
         )
         if not near or (len(near) > 1 and near[1][0] - near[0][0] <= 1):
             return None
         old = lost[near[0][1]]
+        vx, vy = old.velocity or (0.0, 0.0)
         gap = old.missed + 1
-        if gap <= LOST_FRAMES + 1:
-            vx, vy = old.velocity or (0.0, 0.0)
-            sample = (vx + (box[0] - old.box[0]) / gap, vy + (box[1] - old.box[1]) / gap)
-            old.samples = (old.samples + [sample])[-ESTIMATE_SAMPLES:]
-        else:
-            old.samples = []
-        old.box = old.seen_box = box
-        old.missed = 0
+        sample = (vx + (box[0] - old.box[0]) / gap, vy + (box[1] - old.box[1]) / gap)
+        old.samples = (old.samples + [sample])[-ESTIMATE_SAMPLES:]
+        old.box, old.missed = box, 0
         found.add(old.identity)
         return old
 

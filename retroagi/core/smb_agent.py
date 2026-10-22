@@ -375,9 +375,14 @@ class _Copy:
     # once a frame, as soon as the executor has seen the picture, and read
     # by the trackers, the world model and the recordings alike.
     kinematics: tuple = ()
-    # ... and the enemies the executor remembers out of sight this frame
-    # (smb_kinematics.remembered: rows, identities), for the trackers.
-    memory: tuple = ()
+    # Mario's position this frame (the executor's world displacement, his
+    # feet's row), and the list of tracked things (smb_tracked_objects:
+    # every enemy and moving platform seen, those out of sight kept where
+    # they vanished), updated once a frame from the same numbers; as read
+    # this frame: (rows, keys, each sprite slot's key).
+    position: tuple = (0.0, 0.0)
+    objects: object = None
+    object_rows: tuple = ()
     # Without the teacher: the world model's state (hidden, cell), carried
     # from action to action, and the watch that ends a wait or a ground move
     # when a coming enemy needs a move (smb_threat.ThreatWatch).
@@ -472,42 +477,42 @@ class SMBAgents:
 
     @staticmethod
     def _kinematics(copy: _Copy, scene) -> None:
-        """This frame's kinematics of the copy (_Copy.kinematics, .memory)."""
-        from .smb_kinematics import enemy_context, kinematics, remembered, slot_identities
+        """This frame's kinematics of the copy (_Copy.kinematics), Mario's
+        position, and the list of tracked things updated from them."""
+        from .smb_kinematics import enemy_context, kinematics, slot_identities
+        from .smb_tracked_objects import TrackedObjects, sightings, slot_keys
 
         sprites, mario = kinematics(scene, copy.spatial)
-        copy.kinematics = (
-            sprites,
-            mario,
-            slot_identities(scene, copy.spatial),
-            enemy_context(scene),
-        )
-        copy.memory = remembered(scene, copy.spatial)
+        identities = slot_identities(scene, copy.spatial)
+        context = enemy_context(scene)
+        copy.kinematics = (sprites, mario, identities, context)
+        feet = scene.mario.box[3] if scene.mario.box is not None else 0.0
+        copy.position = (copy.spatial.displacement, feet)
+        if copy.objects is None:
+            copy.objects = TrackedObjects()
+        seen, defeated = sightings(sprites, identities, context, pack_c(scene), copy.position)
+        copy.objects.update(seen, defeated)
+        rows, keys, _ = copy.objects.read(copy.position)
+        copy.object_rows = (rows, keys, slot_keys(copy.objects, identities))
 
     def _track(self, copy: _Copy, scene) -> None:
-        """Step the copy's collision trackers on this frame: the executor's
-        kinematics, what vision shows of the enemies, and the action in
+        """Step the copy's collision trackers on this frame: every enemy on
+        the list of tracked things, Mario's kinematics, and the action in
         progress."""
-        from .target_tracker import frame_features, tracked_rows
+        from .target_tracker import frame_features, tracker_rows
 
-        sprites, mario, identities, context = copy.kinematics
-        state, followed = tracked_rows(sprites, identities, context, copy.memory)
+        rows, keys, _ = copy.object_rows
         copy.trackers.observe(
             frame_features(
-                state, followed, mario, self._position(copy, scene), copy.frame, copy.action_now
+                tracker_rows(rows), keys, copy.kinematics[1], copy.position, copy.frame,
+                copy.action_now,
             ),
-            followed,
+            keys,
         )
-
-    @staticmethod
-    def _position(copy: _Copy, scene) -> tuple:
-        """Mario's world displacement (the executor's) and his feet's row."""
-        feet = scene.mario.box[3] if scene.mario.box is not None else 0.0
-        return (copy.spatial.displacement, feet)
 
     def _began(self, copy: _Copy, decision: Decision, scene) -> None:
         """A new action began: the trackers read it from now on."""
-        from .target_tracker import action_state, frame_features, tracked_rows
+        from .target_tracker import action_state, frame_features, tracker_rows
         from .tokens import command_row
 
         action = decision.action
@@ -517,15 +522,14 @@ class SMBAgents:
             if action is not None and action.target is not None
             else -1
         )
-        sprites, mario, identities, context = copy.kinematics
-        position = self._position(copy, scene)
+        sprites, mario, _, _ = copy.kinematics
+        rows, keys, by_slot = copy.object_rows
         copy.action_now = action_state(
-            verb, pointer, command_row(decision.skill), sprites, identities, position, copy.frame
+            verb, pointer, command_row(decision.skill), sprites, by_slot, copy.position, copy.frame
         )
-        state, followed = tracked_rows(sprites, identities, context, copy.memory)
         copy.trackers.refresh(
-            frame_features(state, followed, mario, position, copy.frame, copy.action_now),
-            followed,
+            frame_features(tracker_rows(rows), keys, mario, copy.position, copy.frame, copy.action_now),
+            keys,
         )
 
     @torch.no_grad()
@@ -561,23 +565,30 @@ class SMBAgents:
         its copy's state, as the executor's destination (destination_of); a
         stomp aimed at the collision trackers' contact point when they expect
         one."""
-        from .world_model import MARIO_TOKEN
+        from .world_model import MARIO_TOKEN, object_pointers
 
         tokens, present = now
         rows = torch.as_tensor(chosen, device=self.device)
         for i in chosen:
             if not starting[i].kinematics:  # not yet made this frame (act makes it)
                 self._kinematics(starting[i], scenes[i])
-        moving = [starting[i].kinematics for i in chosen]
-        sprites = torch.as_tensor(np.stack([m[0] for m in moving]), device=self.device)
-        mario = torch.as_tensor(np.stack([m[1] for m in moving]), device=self.device)
+        mario = torch.as_tensor(
+            np.stack([starting[i].kinematics[1] for i in chosen]), device=self.device
+        )
+        listed = [starting[i].object_rows for i in chosen]
+        objects = torch.as_tensor(np.stack([o[0] for o in listed]), device=self.device)
         feedback = torch.as_tensor(
             [made[i].execution_feedback for i in chosen], dtype=torch.float32, device=self.device
         )
         actions = [made[i].action for i in chosen]
         verbs = torch.as_tensor([VERBS.index(a.verb) for a in actions], device=self.device)
         pointers = torch.as_tensor(
-            [pointer_index(a.target) if a.target is not None else MARIO_TOKEN for a in actions],
+            object_pointers(
+                [pointer_index(a.target) if a.target is not None else MARIO_TOKEN for a in actions],
+                [o[2] for o in listed],
+                [o[1] for o in listed],
+                tokens.shape[1],
+            ),
             device=self.device,
         )
         model = self.policy.memory
@@ -599,7 +610,7 @@ class SMBAgents:
             ]
         ).to(self.device)
         out, (hidden, cell) = model.predict(
-            tokens[rows], present[rows], sprites, mario, feedback, verbs, pointers, (hidden, cell),
+            tokens[rows], present[rows], objects, mario, feedback, verbs, pointers, (hidden, cell),
             context=context,
         )
         for j, i in enumerate(chosen):
@@ -621,27 +632,25 @@ class SMBAgents:
             or not copy.kinematics
         ):
             return None
-        from .target_tracker import action_state, frame_features, tracked_rows
+        from .target_tracker import action_state, frame_features, tracker_rows
 
-        sprites, mario, identities, context = copy.kinematics
+        sprites, mario, _, _ = copy.kinematics
+        rows, keys, by_slot = copy.object_rows
         pointer = pointer_index(action.target) - POINTER_START
-        slot = action.target[1]
-        identity = int(identities[slot]) if action.target[0] == "enemies" else 0
-        if not identity:
+        key = int(by_slot[action.target[1]])
+        if not key:
             return None
-        position = self._position(copy, scene)
         stomp = action_state(
             VERBS.index(action.verb),
             pointer,
             [SKILL_MODES.index(VERB_MODES[action.verb]), 0, 0, 0, 0, 0],
             sprites,
-            identities,
-            position,
+            by_slot,
+            copy.position,
             copy.frame,
         )
-        state, followed = tracked_rows(sprites, identities, context, copy.memory)
-        features = frame_features(state, followed, mario, position, copy.frame, stomp)
-        estimate = copy.trackers.estimate(identity, features[slot])
+        features = frame_features(tracker_rows(rows), keys, mario, copy.position, copy.frame, stomp)
+        estimate = copy.trackers.estimate(key, features[int(np.flatnonzero(keys == key)[0])])
         if estimate is None or estimate.stomp_within(96) < 0.5:
             return None
         return estimate.place
@@ -839,7 +848,7 @@ class SMBAgents:
                     reason is None
                     and copy.threat_watch is not None
                     and self._waiting_or_walking(copy)
-                    and copy.threat_watch.due(copy.trackers, copy.kinematics, scene, copy.memory)
+                    and copy.threat_watch.due(copy.trackers, copy.kinematics, scene, copy.object_rows)
                 ):
                     # A coming enemy needs a move now (smb_threat).
                     reason = "threat"

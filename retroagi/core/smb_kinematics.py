@@ -18,17 +18,16 @@ order (smb_observer.packed_lists, the order of their scene tokens):
 Mario: vx (his measured world speed, else the executor's model of it), vy
 (his feet's movement since the last frame), grounded.
 
-What the executor remembers out of sight (smb_trajectory.MEMORY_FRAMES: a
-plant in its pipe, an enemy past the screen's edge) the collision trackers
-read too (remembered): up to MEMORY_SLOTS rows of TRACKED, the most recently
-seen first.
+What goes out of sight is kept on the list of tracked things
+(core/smb_tracked_objects), which the collision trackers and the world
+model read.
 """
 
 import numpy as np
 
 from .smb_observer import SCENE_SLOTS, packed_lists
 from .smb_scene_labels import OBJECT_TYPE_SLOTS
-from .smb_trajectory import ESTIMATE_SAMPLES, LOST_FRAMES, MEMORY_FRAMES
+from .smb_trajectory import ESTIMATE_SAMPLES
 
 SPRITE_STATE = ("present", "x", "y", "vx", "vy", "seen")
 MARIO_STATE = ("vx", "vy", "grounded")
@@ -44,10 +43,9 @@ CONTEXT = ("walker", "plant", "other", "width", "height", "supported", "left", "
     f"type_{number}" for number in range(OBJECT_TYPE_SLOTS)
 )
 # Each enemy the collision trackers follow: its kinematics, how long it has
-# been out of sight (frames / MEMORY_FRAMES; 0 seen now) and what vision
-# shows (or last showed) of it.
+# been out of sight (smb_tracked_objects.unseen_value; 0 seen now) and what
+# vision shows (or last showed) of it.
 TRACKED = SPRITE_STATE + ("unseen",) + CONTEXT
-MEMORY_SLOTS = 4
 
 
 def kinematics(scene, spatial) -> tuple[np.ndarray, np.ndarray]:
@@ -138,41 +136,3 @@ def enemy_context(scene) -> np.ndarray:
             row[CONTEXT.index("right")] = ((right[0].x1 if right else x1) - middle) / 64
     return out
 
-
-def remembered(scene, spatial) -> tuple[np.ndarray, np.ndarray]:
-    """([MEMORY_SLOTS, len(TRACKED)], [MEMORY_SLOTS] int32 identities, 0
-    none): the enemies the executor remembers that vision does not show now
-    (VisualTracks.lost, the most recently seen first): where it expects each,
-    from Mario's feet, the velocity that expectation moves by (none once it
-    is held: smb_trajectory.Track.coast), the sightings its velocity rested
-    on, how long it has been out of sight, and its kind and size when last
-    seen, and its object type when told (the surface it walked on is not
-    known out of sight)."""
-    rows = np.zeros((MEMORY_SLOTS, len(TRACKED)), np.float32)
-    identities = np.zeros(MEMORY_SLOTS, np.int32)
-    if scene.mario.box is None:
-        return rows, identities
-    box = scene.mario.box
-    middle, feet = (box[0] + box[2]) / 2, box[3]
-    kinds = CONTEXT[: CONTEXT.index("other") + 1]
-    lost = sorted(
-        (t for t in spatial.tracks.lost if t.kind in kinds), key=lambda t: (t.missed, t.identity)
-    )
-    column = {name: k for k, name in enumerate(TRACKED)}
-    for row, track in zip(rows, lost[:MEMORY_SLOTS]):
-        b = track.box
-        vx, vy = (track.velocity or (0.0, 0.0)) if track.missed <= LOST_FRAMES else (0.0, 0.0)
-        row[column["present"]] = 1.0
-        row[column["x"]] = (b[0] + b[2]) / 2 - middle
-        row[column["y"]] = b[1] - feet
-        row[column["vx"]], row[column["vy"]] = vx, vy
-        row[column["seen"]] = min(len(track.samples), ESTIMATE_SAMPLES) / ESTIMATE_SAMPLES
-        row[column["unseen"]] = min(track.missed, MEMORY_FRAMES) / MEMORY_FRAMES
-        row[column[track.kind]] = 1.0
-        last = track.seen_box or b
-        row[column["width"]] = (last[2] - last[0]) / 16
-        row[column["height"]] = (last[3] - last[1]) / 16
-        if track.type >= 0:
-            row[column[f"type_{track.type}"]] = 1.0
-    identities[: min(len(lost), MEMORY_SLOTS)] = [t.identity for t in lost[:MEMORY_SLOTS]]
-    return rows, identities

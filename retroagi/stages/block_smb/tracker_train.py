@@ -28,7 +28,8 @@ import torch
 
 from retroagi.core.action_tokens import VERBS
 from retroagi.core.collision_labels import KINDS, action_ends, collision_labels, slot_labels
-from retroagi.core.smb_kinematics import CONTEXT, ENEMY_SLOTS, MEMORY_SLOTS, TRACKED
+from retroagi.core.smb_kinematics import CONTEXT, TRACKED
+from retroagi.core.smb_tracked_objects import COLUMN as LIST_COLUMN
 from retroagi.core.target_tracker import (
     BINS,
     CLASSES,
@@ -40,7 +41,6 @@ from retroagi.core.target_tracker import (
     allowed_classes,
     collision_loss,
     record_features,
-    record_memory,
 )
 
 # The horizons (frames) a hit within is measured at.
@@ -60,9 +60,7 @@ KEPT = (
     "mario_kinematics",
     "slot_identity",
     "enemy_context",
-    "memory",
-    "memory_identity",
-    "memory_match",
+    "src_c",
     "mario_position",
     "action_verb",
     "action_pointer",
@@ -97,34 +95,33 @@ def kept(record) -> Kept:
 
 
 def track_sequences(record) -> list:
-    """One sequence per enemy track identity in a recorded episode: for each
-    frame it was followed (seen, or remembered out of sight:
-    target_tracker.tracked_rows), its inputs and labels: {"observations" [L,
-    OBSERVATION_WIDTH], "features" [L, FEATURES], "allowed" [L, CLASSES],
-    "place" [L, 2], "seen" [L] (a contact was seen), "labelled" [L] (its
-    true enemy is known), "frames", "kind", "censor" [L], "verb" [L] (the
-    action in progress; -1 none), "enemy_kind" [L] (CONTEXT index),
-    "unseen" [L] (remembered out of sight)}."""
-    features = record_features(record)
+    """One sequence per entry of the list of tracked things in a recorded
+    episode (smb_tracked_objects.record_objects; its enemies): for each frame
+    it was on the list (seen, or out of sight where it vanished), its inputs
+    and labels: {"observations" [L, OBSERVATION_WIDTH], "features" [L,
+    FEATURES], "allowed" [L, CLASSES], "place" [L, 2], "seen" [L] (a contact
+    was seen), "labelled" [L] (its true enemy is known), "frames", "kind",
+    "censor" [L], "verb" [L] (the action in progress; -1 none), "enemy_kind"
+    [L] (CONTEXT index), "unseen" [L] (out of sight)}."""
+    features, objects = record_features(record)
     frames = len(features)
-    memory, memory_identity = record_memory(record)
-    memory_match = getattr(record, "memory_match", None)
-    if memory_match is None:
-        memory_match = np.full((frames, MEMORY_SLOTS), -1, np.int16)
+    # A moving platform's entry shows a true platform, not an enemy.
+    platform = objects["rows"][:, :, LIST_COLUMN["platform"]] > 0.5
     labels = slot_labels(
         collision_labels(record.truth, action_ends(record.decision_frames, frames)),
-        np.concatenate((record.slot_match[:, :ENEMY_SLOTS], memory_match), 1),
+        np.where(platform, -1, objects["truths"]),
         ROWS,
     )
     verb_now = np.full(frames, -1, np.int64)
     starts = [int(f) for f in record.decision_frames] + [frames]
     for k, (f, e) in enumerate(zip(starts, starts[1:])):
         verb_now[f:e] = int(record.action_verb[k]) if record.action_verb is not None else -1
-    identities = np.concatenate((record.slot_identity[:, :ENEMY_SLOTS], memory_identity), 1)
+    keys = objects["keys"]
     kinds = features[:, :, TRACKED.index("walker") : TRACKED.index("other") + 1]
+    unseen = objects["rows"][:, :, TRACKED.index("unseen")] > 0
     out = []
-    for identity in np.unique(identities[identities > 0]):
-        t, slot = np.nonzero((identities == identity) & (features[:, :, 0] > 0))
+    for key in np.unique(keys[keys > 0]):
+        t, slot = np.nonzero((keys == key) & (features[:, :, 0] > 0))
         if not len(t):
             continue
         frames_, kind, censor = (labels[n][t, slot] for n in ("frames", "kind", "censor"))
@@ -141,7 +138,7 @@ def track_sequences(record) -> list:
                 "censor": censor,
                 "verb": verb_now[t],
                 "enemy_kind": np.argmax(kinds[t, slot], -1),
-                "unseen": slot >= ENEMY_SLOTS,
+                "unseen": unseen[t, slot],
             }
         )
     return out
