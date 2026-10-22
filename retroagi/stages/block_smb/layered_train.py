@@ -220,8 +220,10 @@ class EpisodeTask:
     execution: str = "teacher"
     # The tactic learner: the teacher plays the skill's actions, whoever plays
     # the tactics (teacher_share): the imitation data (the teacher playing
-    # both, so every layout it wins is data; user, 2026-10-18), or the tactic
-    # layer measured alone (its own tactics; 2026-10-22).
+    # both, so every layout it wins is data; user, 2026-10-18). The teacher's
+    # actions follow the layout's own tactics (tactic_schedule), not the
+    # layer's: with the layer's own tactics they are recorded along the
+    # teacher's play (to compare with the teacher's) and steer nothing.
     teacher_skill: bool = False
 
 
@@ -765,8 +767,7 @@ class _Lane:
             "plays_teacher": self.rng.random() < self.task.teacher_share,
         }
         # The teacher plays the skill's actions whoever plays the tactic
-        # (EpisodeTask.teacher_skill): with the tactic layer's own tactics, it
-        # measures the tactic layer alone.
+        # (EpisodeTask.teacher_skill; they follow the layout's own tactics).
         teacher_plays_skill = learner == "tactic" and self.task.teacher_skill
         if (learner == "skill" and (self.task.label or asked["plays_teacher"])) or teacher_plays_skill:
             if self.teacher.family != "enemy_patrol":

@@ -365,9 +365,9 @@ def test_a_teacher_error_ends_only_that_layouts_episode():
     assert not lanes[1].no_teacher_command and not lanes[1].teacher_error
 
 
-def test_the_tactic_layer_alone_plays_its_own_tactics_while_the_teacher_plays_the_actions(monkeypatch):
-    # EpisodeTask.teacher_skill with no teacher share: the tactic layer
-    # measured alone (2026-10-22).
+def test_the_tactic_layer_chooses_its_own_tactics_while_the_teacher_plays_the_actions(monkeypatch):
+    # EpisodeTask.teacher_skill with no teacher share: the layer's tactics are
+    # its own (recorded), the actions the teacher's (2026-10-22).
     from retroagi.core.layered_policy import LayeredSMBPolicy
     from retroagi.core.smb_scene_labels import scene_from_labels
     from retroagi.core.tokens import SkillToken
