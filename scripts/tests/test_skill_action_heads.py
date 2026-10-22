@@ -106,3 +106,35 @@ def test_the_decision_layers_read_motion_from_no_influence():
     policy.tactic.feedback.weight.normal_()
     moved = policy.tactic_outputs(encoded, switch, held, memory, feedback=feedback)["tactic"]
     assert not torch.equal(base, moved)
+
+
+def test_the_skill_learns_the_teachers_actions_in_a_tactic_episode():
+    # LayeredTrainConfig.skill_learns (user, 2026-10-22: "the skills should
+    # continue learning during the tactic training").
+    from retroagi.stages.block_smb import layered_train as lt
+    from retroagi.stages.block_smb.teacher_replay import reference_vision
+
+    task = lt.EpisodeTask(
+        index=0, family="speed_run_advance", split="validation", seed=0, sample_index=0,
+        difficulty="easy", teacher_share=1.0, label=True, teacher_skill=True,
+    )
+    torch.manual_seed(0)
+    policy = LayeredSMBPolicy(PolicySettings())
+    (record,) = lt.play_episodes(reference_vision()[0], policy.eval(), "tactic", [task], "cpu", 1)
+    d = lt.tactic_episode_decisions([record], "cpu")
+    assert d is not None and d["labelled"].all()  # every action the teacher's
+    assert (d["label_verb"] == torch.as_tensor(record.action_verb, dtype=torch.long)).all()
+    for parameter in policy.parameters():
+        parameter.requires_grad_(False)
+    for parameter in policy.skill.parameters():
+        parameter.requires_grad_(True)
+    policy.train()
+    optimizer = torch.optim.Adam(policy.skill.parameters(), lr=3e-3)
+    first, _ = lt.skill_losses(policy, [record], "cpu")
+    for _ in range(40):
+        losses, stats = lt.skill_losses(policy, [record], "cpu")
+        optimizer.zero_grad()
+        sum(losses.values()).backward()
+        optimizer.step()
+    assert float(sum(losses.values())) < 0.5 * float(sum(first.values()))
+    assert stats["verb_accuracy"] == 1.0

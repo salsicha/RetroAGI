@@ -113,7 +113,9 @@ python -m retroagi.stages.block_smb.dataset_train --source artifacts/block_smb/s
   way Mario and an enemy touch in one action, and misses), which train
   nothing else; `dataset_train` then trains the world model and the
   trackers from every saved dataset.
-- **Tactic layer:** trains on 42 families: 14 strategy families, eight composed
+- **Tactic layer:** the skill goes on learning with it (the teacher's
+  actions in its episodes; `--skill-learns`, on by default). Trains on 42
+  families: 14 strategy families, eight composed
   levels, four scene-driven route/response families, three alternate-route
   families, three waiting/proceeding families and 10 families whose tactic
   changes partway through, with layouts drawn at random. The complete grouping is documented

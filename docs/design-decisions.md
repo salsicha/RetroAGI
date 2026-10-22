@@ -26,6 +26,31 @@ commit). How the parts work is described in the
   the training set"); the recorded failures are fixed in the teacher. A
   failed gate is fixed in the teacher or the policy, never bypassed.
 
+## 2026-10-22 — Every plant waits for Mario; the skill goes on learning in tactic training (user decisions; built)
+
+- **Plants**: user: "make every Block SMB plant follow the real game's
+  rule". A plant does not come up while Mario's middle is within 33 pixels
+  of its own (the NES's 0x21), until he is farther. The teacher's pre-checks
+  predict plants so (Mario taken to stay where he is); its trials step the
+  simulator itself. The five tactic families with plants and the four plant
+  collision families are recorded again under it.
+- **The tactic run** (tactic_20261021) was stopped: after its imitation
+  rounds it won 35% of fresh layouts. Played four ways on 42 fresh layouts
+  (one a family, medium): both layers 31%, the teacher's tactics with the
+  skill's own actions 36%, the teacher playing both 100%. The skill fails in
+  the long scenes (it wins 98.6% of its own families' fresh layouts). With
+  the layer's tactics and the teacher's actions all 42 won too, but that
+  measures nothing of the tactic layer: the teacher's actions follow the
+  layout's own tactics.
+- **The skill learns during tactic training**: user: "the skills should
+  continue learning during the tactic training" (this relaxes 2026-10-04's
+  "each layer trains only on its own level's families"). Each round, after
+  the tactic layer's passes, the skill makes its own over the kept
+  episodes, imitating the teacher's actions in them
+  (`LayeredTrainConfig.skill_learns`, `tactic_episode_decisions`): the
+  tactic dataset's episodes record every action the teacher played with
+  what the skill read. Its weights only, not the scene encoder's.
+
 ## 2026-10-21 — Waits recorded aimed at nothing; lessons with hits; a held-out test (user decision; built)
 
 User: "Test hidden enemies properly ... Find out why wait lengths are so

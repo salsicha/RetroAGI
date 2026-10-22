@@ -131,6 +131,11 @@ class LayeredTrainConfig:
     # nothing: the models are trained from it afterwards (user, 2026-10-18:
     # "After the tactics run is done then the models need to be trained").
     generate_only: bool = False
+    # The tactic learner: the skill goes on learning while the tactic layer
+    # trains (user, 2026-10-22: "the skills should continue learning during
+    # the tactic training"), from the teacher's actions in the tactic
+    # episodes, each round after the tactic layer's passes (skill_losses).
+    skill_learns: bool = True
     epochs_per_round: int = 8
     batch_frames: int = 8192
     learning_rate: float = 3e-4
@@ -1380,7 +1385,69 @@ def choice_history(used, episode):
     return used[earlier] * exists.unsqueeze(-1), exists
 
 
-def learner_losses(policy, learner: str, episodes, expectation_weight: float, device, rl=None):
+def tactic_episode_decisions(episodes: Sequence[EpisodeRecord], device):
+    """The skill's decisions in tactic-learner episodes, as _decisions gives
+    a skill learner's: what it was given (the tactic and the strategy switch
+    each action was chosen under), its earlier actions as its history holds
+    them (the executed command: encode_action), the execution feedback, the
+    motion, and as labels the teacher's actions where the teacher played them
+    (EpisodeTask.teacher_skill; not in reward rounds' own play)."""
+    from retroagi.core.action_tokens import executed_pointer
+    from retroagi.core.layered_policy import encode_choice
+    from retroagi.core.tokens import SKILL_MODES, SkillToken
+
+    parts = defaultdict(list)
+    for i, e in enumerate(episodes):
+        count = len(e.decision_frames)
+        if not count or e.action_verb is None or e.commands is None or e.action_context is None:
+            continue
+        verb = np.asarray(e.action_verb, np.int64)
+        pointer = np.array([executed_pointer(int(v), int(p)) for v, p in zip(verb, e.action_pointer)])
+        teacher = np.asarray(e.played_teacher, bool) & (not e.explored) & (verb >= 0)
+        parts["episode"].append(np.full(count, i))
+        parts["frame"].append(e.decision_frames)
+        parts["given"].append(np.asarray(e.action_context, np.float32))
+        parts["execution_feedback"].append(
+            e.execution_feedback if e.execution_feedback is not None else np.zeros((count, EXECUTION_WIDTH), np.float32)
+        )
+        parts["labelled"].append(teacher)
+        parts["label_action_valid"].append(teacher)
+        parts["label_verb"].append(np.where(teacher, verb, 0))
+        parts["label_pointer"].append(np.where(teacher & (pointer >= 0), pointer, 0))
+        parts["weight"].append(np.full(count, e.weight, np.float32))
+        sprites, mario = _decision_motion(e, count)
+        parts["sprites"].append(sprites)
+        parts["mario"].append(mario)
+        parts["used"].append(
+            np.stack(
+                [
+                    encode_choice("skill", (None, SkillToken(SKILL_MODES[int(c[0])], int(c[1]), int(c[2])))).numpy()
+                    if int(c[0]) >= 0
+                    else np.zeros(CHOICE_WIDTH["skill"], np.float32)
+                    for c in e.commands
+                ]
+            )
+        )
+    if not parts:
+        return None
+    floats = ("given", "execution_feedback", "weight", "sprites", "mario", "used")
+    return {
+        name: torch.as_tensor(
+            np.concatenate(values),
+            dtype=torch.float32 if name in floats else (torch.bool if name in ("labelled", "label_action_valid") else torch.long),
+            device=device,
+        )
+        for name, values in parts.items()
+    }
+
+
+def skill_losses(policy, episodes, device):
+    """The skill's imitation losses on a batch of tactic-learner episodes
+    (tactic_episode_decisions; LayeredTrainConfig.skill_learns)."""
+    return learner_losses(policy, "skill", episodes, 0.0, device, decisions=tactic_episode_decisions(episodes, device))
+
+
+def learner_losses(policy, learner: str, episodes, expectation_weight: float, device, rl=None, decisions=None):
     """The learner's losses on a batch of episodes.
 
     - imitation, on every decision the teacher labelled: the teacher's choice;
@@ -1397,7 +1464,9 @@ def learner_losses(policy, learner: str, episodes, expectation_weight: float, de
     if learner == "tactic":
         config = rl or LayeredTrainConfig(learner="tactic", expectation_weight=expectation_weight)
         return tactic_losses(policy, episodes, config, device, by_reward=rl is not None)
-    d = _decisions(
+    # ``decisions``: given (the skill's in tactic-learner episodes:
+    # tactic_episode_decisions), else a skill learner's own.
+    d = decisions if decisions is not None else _decisions(
         episodes,
         device,
         learner,
@@ -1446,8 +1515,8 @@ def learner_losses(policy, learner: str, episodes, expectation_weight: float, de
                 F.cross_entropy(logits, pointer, reduction="none"), weight[aimed]
             )
             stats["pointer_accuracy"] = float((logits.argmax(-1) == pointer).float().mean())
-    x = d["explored"]
-    if rl is not None and x.any():
+    x = d.get("explored")
+    if rl is not None and x is not None and x.any():
         picks = {head: d[f"pick_{head}"][x] for head in CHOICES[learner]}
         # Read with the learner's own picks as chosen, as it chose them.
         own = policy.skill.heads_given(
@@ -2548,6 +2617,16 @@ def train_layer(config: LayeredTrainConfig) -> dict:
     optimizer = torch.optim.AdamW(
         learning, lr=config.learning_rate, weight_decay=config.weight_decay
     )
+    # The skill learning alongside the tactic layer (skill_learns): its own
+    # weights (not the scene encoder's: the world model reads it unchanged).
+    skill_learning = list(policy.skill.parameters()) if config.learner == "tactic" and config.skill_learns else []
+    skill_optimizer = None
+    if skill_learning:
+        for parameter in skill_learning:
+            parameter.requires_grad_(True)
+        skill_optimizer = torch.optim.AdamW(
+            skill_learning, lr=config.learning_rate, weight_decay=config.weight_decay
+        )
     pool = EpisodePool(config, policy.settings)
     sweep = config.learner == "skill" and config.sweep
     combinations: list[EpisodeTask] = []
@@ -2595,6 +2674,8 @@ def train_layer(config: LayeredTrainConfig) -> dict:
             by_reward = round_index >= config.rounds
             if by_reward and round_index == config.rounds:
                 learning = learn_only(list(getattr(policy, config.learner).parameters()))
+                for parameter in skill_learning:
+                    parameter.requires_grad_(True)
                 if predictions is not None:
                     predictions.learn()
                 optimizer = torch.optim.AdamW(
@@ -2699,6 +2780,19 @@ def train_layer(config: LayeredTrainConfig) -> dict:
                         totals[name].append(float(value))
                     for name, value in stats.items():
                         totals[name].append(float(value))
+                if skill_optimizer is not None:
+                    # The skill: the teacher's actions in the episodes kept
+                    # (in reward rounds those the teacher played before).
+                    for batch in _batches(replay, config.batch_frames, rng):
+                        losses, stats = skill_losses(policy, batch, device)
+                        if not losses:
+                            continue
+                        skill_optimizer.zero_grad()
+                        sum(losses.values()).backward()
+                        torch.nn.utils.clip_grad_norm_(skill_learning, 1.0)
+                        skill_optimizer.step()
+                        for name, value in {**losses, **stats}.items():
+                            totals[f"skill_{name}"].append(float(value))
             policy.eval()
             learn_time = time.time() - started
             started = time.time()
