@@ -34,3 +34,6 @@ lessons:
   settings.
 
 Read back with `collision_train.make_dataset` (or `gzip` + `pickle`).
+
+Replaced by `collision_20261021c` (the pipe-wait lessons, late jumps at
+walkers, waits recorded aimed at nothing).

@@ -1,0 +1,120 @@
+{
+  "families": {
+    "collide_wait_walker": 208,
+    "collide_wait_monster": 206,
+    "collide_wait_plant": 324,
+    "collide_wait_walker_drops": 162,
+    "collide_run_walker": 428,
+    "collide_run_monster": 425,
+    "collide_run_plant": 384,
+    "collide_run_off_ledge": 477,
+    "collide_run_under_drop": 216,
+    "collide_jump_walker": 1230,
+    "collide_jump_monster": 432,
+    "collide_jump_up_onto": 1453,
+    "collide_jump_plant": 1296,
+    "collide_jump_down_onto": 486,
+    "collide_jump_short": 287,
+    "collide_pipe_wait": 1584
+  },
+  "failed": {
+    "collide_wait_walker": 8,
+    "collide_wait_monster": 10,
+    "collide_wait_plant": 0,
+    "collide_wait_walker_drops": 0,
+    "collide_run_walker": 4,
+    "collide_run_monster": 7,
+    "collide_run_plant": 0,
+    "collide_run_off_ledge": 9,
+    "collide_run_under_drop": 0,
+    "collide_jump_walker": 30,
+    "collide_jump_monster": 0,
+    "collide_jump_up_onto": 5,
+    "collide_jump_plant": 0,
+    "collide_jump_down_onto": 0,
+    "collide_jump_short": 1,
+    "collide_pipe_wait": 144
+  },
+  "contacts": {
+    "collide_wait_walker": {
+      "stomp": 0,
+      "hit": 132,
+      "miss": 76
+    },
+    "collide_wait_monster": {
+      "stomp": 0,
+      "hit": 126,
+      "miss": 80
+    },
+    "collide_wait_plant": {
+      "stomp": 0,
+      "hit": 324,
+      "miss": 0
+    },
+    "collide_wait_walker_drops": {
+      "stomp": 0,
+      "hit": 60,
+      "miss": 102
+    },
+    "collide_run_walker": {
+      "stomp": 0,
+      "hit": 275,
+      "miss": 153
+    },
+    "collide_run_monster": {
+      "stomp": 0,
+      "hit": 314,
+      "miss": 111
+    },
+    "collide_run_plant": {
+      "stomp": 0,
+      "hit": 384,
+      "miss": 0
+    },
+    "collide_run_off_ledge": {
+      "stomp": 36,
+      "hit": 152,
+      "miss": 289
+    },
+    "collide_run_under_drop": {
+      "stomp": 0,
+      "hit": 130,
+      "miss": 86
+    },
+    "collide_jump_walker": {
+      "stomp": 250,
+      "hit": 100,
+      "miss": 880
+    },
+    "collide_jump_monster": {
+      "stomp": 0,
+      "hit": 90,
+      "miss": 342
+    },
+    "collide_jump_up_onto": {
+      "stomp": 178,
+      "hit": 23,
+      "miss": 1252
+    },
+    "collide_jump_plant": {
+      "stomp": 0,
+      "hit": 432,
+      "miss": 864
+    },
+    "collide_jump_down_onto": {
+      "stomp": 88,
+      "hit": 14,
+      "miss": 384
+    },
+    "collide_jump_short": {
+      "stomp": 104,
+      "hit": 15,
+      "miss": 168
+    },
+    "collide_pipe_wait": {
+      "stomp": 0,
+      "hit": 122,
+      "miss": 1462
+    }
+  }
+}
