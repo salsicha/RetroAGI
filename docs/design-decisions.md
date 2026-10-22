@@ -26,6 +26,32 @@ commit). How the parts work is described in the
   the training set"); the recorded failures are fixed in the teacher. A
   failed gate is fixed in the teacher or the policy, never bypassed.
 
+## 2026-10-21 — Waits recorded aimed at nothing; lessons with hits; a held-out test (user decision; built)
+
+User: "Test hidden enemies properly ... Find out why wait lengths are so
+poorly predicted ... Find out why jumps at walkers got worse".
+
+- **Waits**: a teacher's wait was recorded with pointer slot 0, its pointer
+  label's placeholder, and read as aimed at enemy 0. Every wait in the
+  skill dataset counted as failed unless that enemy died (all 26 in the
+  fresh exam did), so the world model learned no wait length from the
+  skill data, and the trackers read each wait as aimed at an enemy. A wait
+  is recorded aimed at nothing now, and read so whatever was stored
+  (`action_tokens.executed_pointer`): the saved datasets read right. What
+  remains hard is a wait whose length depends on what cannot be seen yet
+  (where a moving platform turns, an enemy's or plant's timing).
+- **Jumps at walkers**: the lessons had 24 hits in 720 (the rest stomps and
+  misses; the teacher's own data has none), and the measure 44 frames. A
+  sweep found late jumps (the walker 12 to 20 pixels away, coming at Mario)
+  hit about 40% of the time; they join the lessons.
+- **Plants that wait for Mario**: a plant can stay down while Mario is near
+  it, as the NES's does (`waits_near`); the pipe-wait lessons watch one go
+  down, wait near it or farther for 1 to 5 seconds, then jump onto its pipe
+  or run across it and off.
+- **Held-out lessons**: every lesson's numbers drawn between the sweep's
+  (`collision_families.held_out_layouts`): the collision run measures the
+  trackers on those now; it drew sweep layouts, all trained on.
+
 ## 2026-10-21 — A list of tracked things; the world model reads it (user decision; built)
 
 User: "the lstm and trackers are different, the lstm predicts the best
