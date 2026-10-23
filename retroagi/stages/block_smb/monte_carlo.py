@@ -665,7 +665,7 @@ def sample_block_smb_monte_carlo_parameter_sweep(
         raise ValueError(f"unknown Block SMB Monte Carlo family {unknown!r}; expected {choices}")
 
     specs = [
-        (split, seed, family, difficulty, repeat, max_rejections, calibrate_deadlines)
+        (split, seed, family, difficulty, repeat, max_rejections, calibrate_deadlines, executor is not None)
         for family in selected_families
         for difficulty in BLOCK_SMB_MC_DIFFICULTY_BINS
         for repeat in range(int(repeats_per_difficulty))
@@ -690,7 +690,15 @@ def sample_block_smb_monte_carlo_parameter_sweep(
 
 
 def _sweep_sample(spec):
-    sample_index, split, seed, family, difficulty, repeat, max_rejections, calibrate = spec
+    sample_index, split, seed, family, difficulty, repeat, max_rejections, calibrate, pooled = spec
+    if pooled:
+        # A pool's workers are the parallelism: one thread each. The checks
+        # replay the teacher through the vision model on the CPU, and eight
+        # workers each on every core took over ten minutes a layout that one
+        # alone takes 20 seconds.
+        import torch
+
+        torch.set_num_threads(1)
     rejected: Counter[str] = Counter()
     candidate = sample_block_smb_monte_carlo_scenario(
         split=split,
