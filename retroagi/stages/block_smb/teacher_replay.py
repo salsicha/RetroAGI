@@ -120,8 +120,8 @@ def replay(
         env.close()
 
 
-@lru_cache(maxsize=1)
-def reference_vision():
+@lru_cache(maxsize=2)
+def reference_vision(device: str = "cpu"):
     """Use the same fixed ViT as the benchmark when measuring a deadline."""
     import hashlib
 
@@ -130,7 +130,7 @@ def reference_vision():
     from .vision import DEFAULT_BLOCK_VIT_CHECKPOINT, load_block_vit_checkpoint
 
     checkpoint = DEFAULT_BLOCK_VIT_CHECKPOINT
-    observer = VisionObserver(load_block_vit_checkpoint(checkpoint, device="cpu").model)
+    observer = VisionObserver(load_block_vit_checkpoint(checkpoint, device=device).model)
     return observer, hashlib.sha256(checkpoint.read_bytes()).hexdigest()
 
 
@@ -150,11 +150,21 @@ def calibrate_budget(scenario, family):
     from .layout_cache import code_fingerprint
     from .strategy_families import SPEED_SLACK
 
+    from retroagi.core.devices import select_device
+
     scenario.setdefault("teacher_route_budget", scenario.get("frame_budget", 320))
-    observer, vision_hash = reference_vision()
+    # On the GPU when there is one: the replay's teacher checks its jumps
+    # through vision, and holding before a timed plant it checks a crossing
+    # every frame. A speed_run_hold_ground layout took 21 minutes on the CPU
+    # and 4 on the GPU, with the same frames and commands.
+    device = select_device("auto").type
+    observer, vision_hash = reference_vision(device)
     key = hashlib.sha256(
         (
-            code_fingerprint() + vision_hash + json.dumps(scenario, sort_keys=True, default=str)
+            code_fingerprint()
+            + vision_hash
+            + device
+            + json.dumps(scenario, sort_keys=True, default=str)
         ).encode()
     ).hexdigest()
     path = Path(tempfile.gettempdir()) / "retroagi_spatial_deadlines" / (key + ".json")

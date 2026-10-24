@@ -143,6 +143,50 @@ def test_the_teacher_wins_with_the_strategys_objective_and_teaches_the_scenes_ta
     env.close()
 
 
+@pytest.mark.timeout(300)
+@pytest.mark.parametrize("seed", [0, 1, 2, 5])
+def test_the_hold_scene_shows_what_mario_waits_for_and_the_teacher_holds_first(seed):
+    # User, 2026-10-23: "Hold should hold for things like plant or moving
+    # bridge platform". The scene had been the advance scene with a timed
+    # hold nothing in the picture asked for.
+    import random
+
+    from retroagi.stages.block_smb.monte_carlo import _finish_layout
+    from retroagi.stages.block_smb.strategy_families import LIFT_AWAY, strategy_scene
+
+    scenario, parameters = strategy_scene(random.Random(seed), "medium", "hold_ground")
+    advance, _ = strategy_scene(random.Random(seed), "medium", "advance")
+    assert scenario["platforms"] != advance["platforms"]
+    _finish_layout("speed_run_hold_ground", scenario, parameters)
+    scenario["tactics"] = scenario.pop("route_tactics")["coins_up=skip"]
+    env = MarioScenarioEnv()
+    try:
+        env.reset(scenario=scenario, seed=0)
+        env.render = lambda: None
+        if parameters["hold_on"] == "plant":
+            plant = env.enemies[0]
+            assert plant["kind"] == "piranha_plant" and plant["timed_crossing"]
+            assert plant["h"] == plant["plant_height"]  # fully up in the first picture
+        else:
+            lift = next(p for p in env.platforms if p["moving"])
+            assert lift["rect"].x >= env.platforms[0]["rect"].right + LIFT_AWAY
+            assert lift["move_dir"] == 1  # moving away
+        teacher = episode_teacher(scenario)
+        teacher.observe_frame(env)
+        assert teacher_tactic(env, teacher).stance == "hold_ground"
+    finally:
+        env.close()
+
+
+def test_the_hold_scene_waits_for_a_plant_or_a_moving_platform():
+    import random
+
+    from retroagi.stages.block_smb.strategy_families import strategy_scene
+
+    kinds = {strategy_scene(random.Random(s), "medium", "hold_ground")[1]["hold_on"] for s in (0, 1, 2, 5)}
+    assert kinds == {"plant", "bridge"}
+
+
 def test_finishing_after_the_deadline_misses_the_objective():
     scenario = _flat(strategy="speed_run", strategy_objective={"deadline": 60})
     info, _, _ = _played(scenario, [1] * 400)  # walking to x=300 takes longer

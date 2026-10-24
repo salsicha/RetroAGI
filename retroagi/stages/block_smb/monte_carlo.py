@@ -536,8 +536,8 @@ def sample_block_smb_monte_carlo_scenario(
     When ``rejection_counter`` is provided, every rejected attempt (including
     attempts preceding an eventual success) is tallied into it by reason.
     A speed-run layout's deadline is measured by replaying the spatial teacher
-    through the vision model on the CPU (teacher_replay.calibrate_budget),
-    minutes per layout; ``calibrate_deadline=False`` keeps the deadline from
+    through the vision model (teacher_replay.calibrate_budget; on the GPU
+    when there is one), minutes per layout; ``calibrate_deadline=False`` keeps the deadline from
     the teacher's button route, for uses that need no deadline (coverage).
     """
 

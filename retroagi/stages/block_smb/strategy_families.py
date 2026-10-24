@@ -17,7 +17,7 @@ A scene's main structure needs its tactic to reach the goal:
 | climb_backward | the goal on a step behind |
 | descend_forward | Mario on a ledge, the goal on the floor ahead |
 | descend_backward | Mario on a ledge, the goal on the floor behind |
-| hold_ground | hold the starting spot for 64 frames, then traverse to the right |
+| hold_ground | something just ahead to wait for, then a floor to the right: a tall piranha plant up out of its pipe, or a moving platform across a pit, moving away |
 
 Forward is right. The backward scenes fit in one screen: the camera never
 scrolls back. Difficulty sets the pit, step and drop sizes (as in
@@ -30,6 +30,8 @@ Coins and enemies are inserted at random:
 - off the way, one or two detours, each one Mario may take or skip: coins on
   a floating platform above the way (climb onto it), coins behind Mario (go
   back for them), or an enemy patrolling behind him (go back and stomp it).
+  The hold-ground scene has only the coins above the way, past what it waits
+  for: going back first would take Mario away from it before he held.
 
 The teacher plays every combination of taking and skipping the detours and
 measures each: frames to the goal, and points (coins collected plus enemies
@@ -75,11 +77,97 @@ PLATFORM_WIDTH = 48
 # Enemies walking the way, by difficulty: (fewest, most).
 WAY_ENEMIES = {"easy": (0, 1), "medium": (1, 1), "hard": (1, 2)}
 DETOURS = ("coins_up", "coins_behind", "enemy_behind")
+# The hold-ground scene's plant stays up this many frames more than the plant
+# teacher looks ahead for a crossing (controller_teacher.PLANT_LEAD) when the
+# episode begins: the teacher holds at least that long before it may start.
+HOLD_FIRST = 16
+# Its moving platform starts at least this far past the shore's end.
+LIFT_AWAY = 100
 
 
 def _coin(x: int, ground: int) -> list:
     """A coin at Mario's height, standing on ``ground``: walking through takes it."""
     return [x, ground - 11, COIN_SIZE, COIN_SIZE]
+
+
+def _hold_main(rng, difficulty: str) -> dict:
+    """The hold-ground scene's main structure (_main's): something just ahead
+    that Mario must wait for before going on, and that he sees (user,
+    2026-10-23: "Hold should hold for things like plant or moving bridge
+    platform"). The scene had been the advance scene with a 64-frame hold the
+    schedule alone asked for: nothing in the picture said to hold, and the
+    tactic layer held at the start of 1 in 9 fresh layouts.
+
+    - a tall piranha plant (compose.plant, timed) up out of its pipe, which
+      Mario cannot jump over, fully up: he waits where the plant teacher
+      waits for it, PLANT_STAGING pixels before the pipe, and it stays up
+      long enough that no crossing can start yet;
+    - or a moving platform across a pit (compose.bridge), far out and moving
+      away: he waits at the pit's edge, within the bridge teacher's waiting
+      distance, for it to come back.
+
+    Then a floor to the right with the goal at its end, the way starting far
+    enough past the plant or the moving platform that a detour's entry is
+    ahead of where he lands."""
+    from .compose import bridge, plant
+    from .controller_teacher import PLANT_LEAD, PLANT_STAGING
+
+    kind = rng.choice(("plant", "bridge"))
+    if kind == "plant":
+        x0 = 104
+        # The pipe stands 72 pixels into compose's plant section.
+        section = plant(rng, difficulty, x0 + MARIO_WIDTH + PLANT_STAGING - 72, timed=True)
+        pipe = section.platforms[1]
+        spec = section.enemies[0]
+        # Fully up in the first picture, and down only PLANT_LEAD + HOLD_FIRST
+        # frames or more later (up longer than compose's plants, when needed).
+        up = PLANT_LEAD + HOLD_FIRST
+        rise = spec["rise_frames"]
+        spec["exposed_frames"] = exposed = max(spec["exposed_frames"], up - rise)
+        spec["phase"] = rng.randint(rise, 2 * rise + exposed - up)
+        section.waits = 2 * rise + exposed + spec["hidden_frames"]
+        lo = pipe[0] + pipe[2] + 48
+        hi = lo + rng.randint(176, 240)
+        world = hi + 24 + 96
+        platforms = [[0, FLOOR, world, 20], pipe]
+        kinds = [None, "pipe"]
+        params = {"hold_on": "plant", "pipe_height": pipe[3], "plant_phase": spec["phase"]}
+    else:
+        section = bridge(rng, difficulty, 0)
+        shore, lift, far = section.platforms
+        low, high, _ = lift["moving"]
+        # LIFT_AWAY pixels or more past the shore's end, moving away: one
+        # picture does not show which way it moves, and from that far a
+        # hold is right either way.
+        end = shore[0] + shore[2]
+        lift["x"], lift["direction"] = rng.randint(end + LIFT_AWAY, high), 1
+        # The bridge teacher waits within 32 pixels of the shore's end.
+        x0 = end - MARIO_WIDTH - 24
+        # Past where the platform reaches over the far shore: jumping off it
+        # there took Mario through coins above a way that began sooner, on
+        # the route skipping them as well.
+        lo = max(far[0], high + lift["w"]) + 48
+        hi = lo + rng.randint(176, 240)
+        world = hi + 24 + 96
+        platforms = [shore, lift, [far[0], FLOOR, world - far[0], 20]]
+        kinds = [None, None, None]
+        params = {"hold_on": "bridge", "lift_speed": lift["moving"][2], "lift_x": lift["x"]}
+    return {
+        "side": 1,
+        "x0": x0,
+        "ground": FLOOR,
+        "way": (lo, hi),
+        "behind": (24, x0 - 24),
+        "world": world,
+        "platforms": platforms,
+        "kinds": kinds,
+        "enemies": list(section.enemies),
+        "segments": section.segments,
+        "flags": section.flags,
+        "waits": section.waits,
+        "goal": [hi + 24 + 32, FLOOR - 20, 16, 20],
+        "params": params,
+    }
 
 
 def _main(rng, difficulty: str, tactic: str) -> dict:
@@ -172,11 +260,11 @@ def strategy_scene(rng, difficulty: str, tactic: str) -> tuple[dict, dict]:
     """
     if tactic not in TACTICS:
         raise ValueError(f"unknown tactic {tactic!r}")
-    main = _main(rng, difficulty, "advance" if tactic == "hold_ground" else tactic)
+    main = _hold_main(rng, difficulty) if tactic == "hold_ground" else _main(rng, difficulty, tactic)
     side, ground = main["side"], main["ground"]
     (lo, hi), (back_lo, back_hi) = main["way"], main["behind"]
     platforms = list(main["platforms"])
-    coins, enemies = [], []
+    coins, enemies = [], list(main.get("enemies", ()))
 
     # On the way: coins, and enemies walking toward Mario.
     way_coins = rng.randint(0, 3)
@@ -193,7 +281,9 @@ def strategy_scene(rng, difficulty: str, tactic: str) -> tuple[dict, dict]:
 
     # Off the way: one or two detours, at most one behind Mario.
     kinds = [k for k in DETOURS if k != "coins_up" or hi - lo >= PLATFORM_WIDTH + 16]
-    if rng.choice((1, 2)) == 2 and "coins_up" in kinds:
+    if tactic == "hold_ground":
+        chosen = ["coins_up"]
+    elif rng.choice((1, 2)) == 2 and "coins_up" in kinds:
         chosen = ["coins_up", rng.choice(("coins_behind", "enemy_behind"))]
     else:
         chosen = [rng.choice(kinds)]
@@ -248,11 +338,14 @@ def strategy_scene(rng, difficulty: str, tactic: str) -> tuple[dict, dict]:
     schedules = {}
     for taken in itertools.product((False, True), repeat=len(detours)):
         key = "|".join(f"{d['name']}={'take' if t else 'skip'}" for d, t in zip(detours, taken))
-        schedules[key] = _schedule(side, detours, dict(zip(chosen, taken)))
-        if tactic == "hold_ground":
-            # A fixed interval is observable through tactic age. Both strategies
-            # must preserve this spot before choosing their onward route.
-            schedules[key].insert(0, segment("hold_area", side, area=1, frames=64))
+        plan = _schedule(side, detours, dict(zip(chosen, taken)))
+        # What the scene waits for comes first (the plant's or bridge's own
+        # segment, its teacher holding until it can be passed), keeping off
+        # what the plan after it avoids.
+        first = copy.deepcopy(main.get("segments", []))
+        for seg in first:
+            seg["avoid"] = list(plan[0]["avoid"])
+        schedules[key] = first + plan
     world = main["world"]
     scenario = {
         "world_width": world,
@@ -269,8 +362,11 @@ def strategy_scene(rng, difficulty: str, tactic: str) -> tuple[dict, dict]:
         "reward_goal_distance_shaping": 2.0,
         "tactics": schedules[next(iter(schedules))],
         "route_tactics": schedules,
-        "frame_budget": int(200 + world + 150 * len(detours)),
+        "frame_budget": int(200 + world + 150 * len(detours) + main.get("waits", 0)),
+        **main.get("flags", {}),
     }
+    if "kinds" in main:
+        scenario["platform_kinds"] = main["kinds"] + [None] * (len(platforms) - len(main["kinds"]))
     params = {
         **main["params"],
         "way_coins": way_coins,

@@ -555,7 +555,9 @@ holding and advancing; `platform_chain` can change from advance to retreat
 for the final landing. Local skill lessons must finish under one supplied tactic.
 
 Strategy sibling families share layouts but reward different routes. The
-hold-ground scene waits at the starting spot for 64 frames before traversing.
+hold-ground scene waits for something it shows, a tall piranha plant up out
+of its pipe just ahead or a moving platform out across a pit, before
+traversing.
 Speed-run qualification requires finishing within the teacher-relative time
 limit; max-points qualification requires the specified points objective.
 
@@ -726,8 +728,8 @@ waypoints that merely match the enemy's travel are rejected as demonstrations;
 the teacher selects an approach that actually closes the distance. This avoids
 spending the episode budget following an enemy without reaching jumping range.
 
-Speed-run deadlines are measured with the spatial teacher and production ViT,
-with the existing ten-percent timing allowance. The original button-route
+Speed-run deadlines are measured with the spatial teacher and production ViT
+(on the GPU when there is one), with the existing ten-percent timing allowance. The original button-route
 search budget stays fixed during that measurement. Route
 requirements, required points, and bypass-versus-stomp success rules remain
 intact. The tall-pipe family now uses 56–64 pixel heights: its former 65–68 pixel

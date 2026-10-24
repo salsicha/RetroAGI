@@ -26,6 +26,41 @@ commit). How the parts work is described in the
   the training set"); the recorded failures are fixed in the teacher. A
   failed gate is fixed in the teacher or the policy, never bypassed.
 
+## 2026-10-23 — The hold-ground scene shows what Mario holds for (user decision; built)
+
+- **The run** (tactic_20261022, the skill learning alongside the tactic
+  layer) won 82% of fresh layouts after its imitation rounds, from 35%
+  (17 of 42 families won on all nine). The weakest: max_points_hold_ground
+  0 of 9 and speed_run_hold_ground 1 of 9, both ending off the route.
+- **Why**: the hold-ground scene was the advance scene (the same layout
+  from the same seed in 200 of 200) with a 64-frame hold the schedule alone
+  asked for. In 13 of the 14 losses on fresh layouts the tactic layer's
+  first choice was not to hold; whenever it held first, it then played as
+  the teacher did. Played with the teacher's tactics, the skill's own
+  actions won 92% of the four weakest families; with both layers' own,
+  39%.
+- **User**: "Hold should hold for things like plant or moving bridge
+  platform". The scene now has something just ahead to wait for, drawn half
+  and half (`strategy_families._hold_main`): a tall piranha plant fully up
+  out of its pipe (compose's timed plant), up longer than the plant
+  teacher looks ahead for a crossing, Mario starting where that teacher
+  waits; or a moving platform across a pit, at least 100 pixels out and
+  moving away (one picture does not show which way it moves; from there a
+  hold is right either way), Mario starting where the bridge teacher
+  waits. The plant's and the bridge's own segments come first in every
+  plan; their teachers already name waiting "hold ground", as in
+  piranha_avoidance, bridge_wait and wait_timing. The only detour is the
+  coins above the way, past what the scene waits for. On sampled layouts
+  the teacher wins every one and holds first.
+- **Speed-run deadlines on the GPU**: a speed run's deadline is measured by
+  replaying the teacher through the vision model. Holding before a timed
+  plant, the teacher checks a crossing every frame, its jumps through
+  vision: 21 minutes for one speed_run_hold_ground layout on the CPU, 4 on
+  the GPU, with the same frames and commands. The measurement now runs on
+  the GPU when there is one (the device is part of its saved result's key).
+- **Pending**: the two families' recorded episodes (tactic_20261022) show
+  the old scene; they are recorded again before the next tactic run.
+
 ## 2026-10-22 — Every plant waits for Mario; the skill goes on learning in tactic training (user decisions; built)
 
 - **Plants**: user: "make every Block SMB plant follow the real game's
