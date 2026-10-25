@@ -26,6 +26,52 @@ commit). How the parts work is described in the
   the training set"); the recorded failures are fixed in the teacher. A
   failed gate is fixed in the teacher or the policy, never bypassed.
 
+## 2026-10-25 — Families from the Full SMB failures (user decision; built)
+
+User: "Try to identify from the full smb failures if there are missing skill
+families or layouts that weren't trained", then "add the missing families.
+Then run the teacher to create the training data. Then train the models.
+Then try full smb training again". The Full SMB learning run
+(learn_20261025) was stopped after 41 rounds with no finish: in Full SMB the
+world model carries out the skill's actions, and it put every jump at a
+raised surface (pipes 30 to 128 pixels up) at Mario's own height.
+
+32 playthroughs of 1-1 by the agent as Block SMB left it, every decision
+logged (artifacts/full_smb/failures_20261025):
+
+- Most failures are execution: jumps onto 1-1's pipes predicted 2 pixels up
+  (stalls before each pipe), a gap jump sent 54 pixels into a 72-pixel
+  reach, runs past a surface's end into a pit, runs whose end below the
+  floor is never reached (no decision until the Goomba walks in). Played in
+  Block SMB with the world model carrying out the skill's actions, the same
+  agent won 61% of 11 skill-level families (88% with the teacher): climbs
+  100%, stomps 17%, waits 17%, gap jumps 33%.
+- Layouts no family had, where the choices went wrong: Mario on a pipe
+  above a walker (1-1's Goombas between its pipes: jumps at it from the
+  pipe top); rows of bricks and question blocks overhead that are not a
+  route (in Block SMB a floating brick row is always a route or a coin
+  detour: under 1-1's, the tactic layer chose climb and retreat in speed
+  runs and the skill jumped at the blocks); walkers walking off a high row
+  and dropping in front of Mario; and climbs onto drawn pipes in the skill's
+  lessons (only steps were).
+
+Built:
+
+- `action_climb_pipe` (a pipe 24 to 62 pixels tall, as narrow as a level's)
+  and `action_stomp_down` (from a pipe or step onto a walker on the floor
+  below, coming or going): skill families.
+- `full_smb_blocks_proxy` (tactic): compose's new sections `blocks` (a
+  question block and a row of bricks and question blocks 40 to 56 pixels
+  above the floor, a walker from beyond them), `pipe_pen` (a walker pacing
+  between two pipes) and `high_row` (a walker walking off a row 128 pixels
+  up), then a pit. The teacher wins every sampled layout, advancing under
+  the blocks.
+- Not built: a stomp under a low block row. The teacher gives no command
+  there (its stomp search certifies no jump under the blocks): a teacher
+  gap, recorded.
+- Not in Block SMB at all, not reached in 1-1 yet: Koopas and shells, Mario
+  growing (mushrooms only pay), the flagpole.
+
 ## 2026-10-23 — The hold-ground scene shows what Mario holds for (user decision; built)
 
 - **The run** (tactic_20261022, the skill learning alongside the tactic

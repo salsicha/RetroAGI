@@ -59,17 +59,18 @@ strategy → tactic (option-critic)
 Training proceeds **skill → tactic**, freezing lower layers. The executor has
 no learned weights. Every family belongs to exactly one stage:
 
-- **Skill: 41 families**, each played under one supplied tactic from start to
-  finish: the 17 isolated maneuvers (walk, jump a gap, climb a step, jump onto
+- **Skill: 43 families**, each played under one supplied tactic from start to
+  finish: the 19 isolated maneuvers (walk, jump a gap, climb a step, jump onto
   a raised platform, walk off a ledge, jump down and stomp, each right and
-  left, plus stomping an enemy on a raised platform both ways and holding a
-  spot on a moving platform), two enemy-bypass families, nine local route
+  left, plus stomping an enemy on a raised platform both ways, holding a
+  spot on a moving platform, climbing onto a pipe and stomping down from one
+  onto a walker below), two enemy-bypass families, nine local route
   maneuvers, and 13 older local families (flat runs, single gaps, a pit
   before an enemy, enemy hops, stomps and patrols, pipe and stomp mounts, pit
   leaps, platform hops, landing on an enemy, holding an area, the direct
   route of the choice scene).
-- **Tactic: 42 families**, for strategy-dependent selection and termination:
-  14 strategy families (seven tactics under each strategy), eight composed
+- **Tactic: 43 families**, for strategy-dependent selection and termination:
+  14 strategy families (seven tactics under each strategy), nine composed
   levels, four scene-driven route/response families, three alternate-route
   families, three waiting/proceeding families, and 10 families whose tactic
   changes partway through. These are excluded from skill training and

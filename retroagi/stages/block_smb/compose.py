@@ -18,7 +18,14 @@ adds its own tactics:
 - monster: a monster comes out of a tunnel too low to jump in: keep behind
   the tunnel's mouth (retreat, hold area) and jump over it (kind "monster").
 
-Simple sections (flat, enemy, gap, pipe, stairs) are advanced through. The
+Simple sections from Full SMB 1-1 (user, 2026-10-25: what its failures showed
+no layout had): blocks (a question block and a row of bricks and question
+blocks overhead, nothing to climb), pipe_pen (a walker pacing the floor
+between two pipes) and high_row (a walker walking off a brick row high
+above the floor, dropping in front of Mario).
+
+Simple sections (flat, enemy, gap, pipe, stairs, blocks, pipe_pen, high_row)
+are advanced through. The
 standalone families start Mario inside a dead end or a tunnel.
 
 Every layout is checked by the teacher (route_actions) in the sampler, which
@@ -35,6 +42,8 @@ from .tactic_schedule import segment
 
 FLOOR = 220
 DIFFICULTY = ("easy", "medium", "hard")
+BLOCK = 16
+ENEMY_HEIGHT = 14
 
 
 @dataclass
@@ -111,6 +120,68 @@ def stairs(rng, difficulty, x) -> Section:
         height = rise * (i + 1)
         width = step if i < count - 1 else step + top
         s.add([x + lead + i * step, FLOOR - height, width, height])
+    return s
+
+
+def blocks(rng, difficulty, x) -> Section:
+    """Blocks overhead, as where 1-1 begins: a question block, then a row of
+    bricks and question blocks, their bottoms 40 to 56 pixels above the floor
+    (1-1's: 48; a jump under them hits them), sometimes a question block
+    higher above the row; a walker coming at Mario from beyond them. Nothing
+    is climbed: they are passed under."""
+    lead, tail = 48, 64
+    row = rng.randint(4, 6)
+    apart = rng.randint(32, 64)
+    width = lead + BLOCK + apart + row * BLOCK + tail
+    s = Section(width)
+    s.add([x, FLOOR, width, 20])
+    top = FLOOR - rng.randint(40, 56) - BLOCK
+    s.add([x + lead, top, BLOCK, BLOCK], "question_block")
+    start = x + lead + BLOCK + apart
+    for i in range(row):
+        s.add([start + BLOCK * i, top, BLOCK, BLOCK], rng.choice(("brick", "question_block")))
+    if rng.random() < 0.5:
+        s.add([start + BLOCK * rng.randint(1, row - 2), top - 64, BLOCK, BLOCK], "question_block")
+    speed = round((0.4, 0.5, 0.6)[_tier(difficulty)] + rng.uniform(0, 0.1), 3)
+    s.enemies.append([start + row * BLOCK + rng.randint(8, tail - 24), FLOOR - ENEMY_HEIGHT, x, x + width, speed, -1])
+    return s
+
+
+def pipe_pen(rng, difficulty, x) -> Section:
+    """Two pipes with a walker pacing the floor between them, turning at each
+    (1-1's Goombas between its pipes): Mario comes over the first pipe above
+    it, and must deal with it before the second."""
+    tier = _tier(difficulty)
+    first = (32, 40, 48)[tier] + rng.randint(-4, 4)
+    second = min(64, first + rng.choice((0, 8, 16)))
+    lead, between, tail = 48, rng.randint(80, 128), 48
+    width = lead + 32 + between + 32 + tail
+    s = Section(width)
+    s.add([x, FLOOR, width, 20])
+    a, b = x + lead, x + lead + 32 + between
+    s.add([a, FLOOR - first, 32, first], "pipe")
+    s.add([b, FLOOR - second, 32, second], "pipe")
+    speed = round((0.4, 0.5, 0.6)[tier] + rng.uniform(0, 0.1), 3)
+    s.enemies.append(
+        [a + 32 + rng.randint(8, between - 24), FLOOR - ENEMY_HEIGHT, a + 32, b - 12, speed, rng.choice((-1, 1))]
+    )
+    return s
+
+
+def high_row(rng, difficulty, x) -> Section:
+    """A row of bricks high above the floor (its top 128 pixels up, as in
+    1-1, beyond a jump) with a walker on it walking toward Mario's side: it
+    walks off the row's end and drops onto the floor in front of him."""
+    lead, tail = 64, 64
+    span = rng.randint(80, 128)
+    width = lead + span + tail
+    s = Section(width)
+    s.add([x, FLOOR, width, 20])
+    top = FLOOR - 128
+    s.add([x + lead, top, span, BLOCK], "brick")
+    speed = round((0.4, 0.5, 0.6)[_tier(difficulty)] + rng.uniform(0, 0.1), 3)
+    # Its bounds reach past the row's ends: it walks off and falls.
+    s.enemies.append([x + lead + rng.randint(16, span - 16), top - ENEMY_HEIGHT, x, x + width, speed, -1])
     return s
 
 
@@ -297,6 +368,9 @@ SECTIONS: dict[str, Callable] = {
     "stairs": stairs,
     "plant": plant,
     "bridge": bridge,
+    "blocks": blocks,
+    "pipe_pen": pipe_pen,
+    "high_row": high_row,
     "upper_route": upper_route,
     "lower_route": lower_route,
     "dead_end": dead_end,

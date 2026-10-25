@@ -51,7 +51,7 @@ class JumpReleaseState:
 
 LOCAL_TRAVERSAL_FAMILIES = frozenset(
     "tall_pipe_jump pit_leap pipe_mount enemy_hop stair_climb single_gap retreat_recovery "
-    "platform_chain mixed_section full_smb_opening_proxy enemy_patrol enemy_gap "
+    "platform_chain mixed_section full_smb_opening_proxy full_smb_blocks_proxy enemy_patrol enemy_gap "
     "chained_obstacles chained_enemy_gauntlet".split()
     + list(TRANSFER_FAILURE_FAMILIES)
     + ["tactics_obstacle_sequence", "tactics_mixed_sequence", "tactics_bridge_then_gap"]

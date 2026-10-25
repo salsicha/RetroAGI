@@ -67,6 +67,7 @@ BLOCK_SMB_MC_FAMILIES = (
     "chained_obstacles",
     "chained_enemy_gauntlet",
     "full_smb_opening_proxy",
+    "full_smb_blocks_proxy",
     "mixed_section",
     "tall_pipe_jump",
     "pipe_mount",

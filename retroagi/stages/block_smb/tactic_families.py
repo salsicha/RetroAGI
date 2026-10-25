@@ -31,6 +31,9 @@ COMPOSED_RECIPES = {
     "tactics_obstacle_sequence": ["enemy", "upper_route", ("plant", {"timed": True}), "pipe"],
     "tactics_bridge_then_gap": ["bridge", "gap", "stairs", "dead_end"],
     "tactics_mixed_sequence": ["enemy", "lower_route", "monster", "gap"],
+    # Full SMB 1-1's opening (user, 2026-10-25): blocks overhead, walkers
+    # between pipes and dropping from a high row, then a pit.
+    "full_smb_blocks_proxy": ["blocks", "pipe_pen", "high_row", "gap"],
 }
 STANDALONE = {
     "upper_route": ["upper_route"],

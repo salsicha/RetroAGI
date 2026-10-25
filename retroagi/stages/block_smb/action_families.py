@@ -16,6 +16,12 @@ platforms/enemies and immediate jumps down to a lower landing.
 | action_descend_back | walk off a ledge behind down to the floor | descend_backward | drop height, distance to the edge |
 | action_stomp | land on an enemy walking toward Mario | advance | its distance, its speed |
 | action_wait | stand still on a moving platform that carries Mario to the goal | hold_ground | how far it travels, its speed |
+| action_climb_pipe | jump up onto a pipe ahead from a standstill | climb_forward | pipe height and width, distance to it |
+| action_stomp_down | jump down from a pipe or a step onto a walker on the floor below | advance | height, the walker's distance, speed and way |
+
+The last two are Full SMB 1-1's (user, 2026-10-25: missing families found
+from the Full SMB failures): its pipes (32, 48 and 64 pixels tall) were not
+climbed, and its Goombas walk between them below Mario on their tops.
 
 The scenes going back to the left fit in one screen: the camera never
 scrolls back, so the whole scene must be in view from the start.
@@ -64,6 +70,8 @@ ACTION_FAMILIES = (
     "action_stomp_up_back",
     "action_jump_down",
     "action_jump_down_back",
+    "action_climb_pipe",
+    "action_stomp_down",
 )
 
 # The main parameter's range at each difficulty.
@@ -73,6 +81,8 @@ STEPS = {"easy": (8, 24), "medium": (25, 40), "hard": (41, 56)}
 DROPS = {"easy": (8, 32), "medium": (33, 56), "hard": (57, 80)}
 STOMP_SPEEDS = {"easy": (0.4, 0.53), "medium": (0.54, 0.66), "hard": (0.67, 0.8)}
 TRAVELS = {"easy": (48, 64), "medium": (65, 88), "hard": (89, 112)}
+# Pipe heights (1-1's are 32, 48 and 64), within a jump from a standstill.
+PIPE_HEIGHTS = {"easy": (24, 32), "medium": (33, 48), "hard": (49, 62)}
 
 
 def _walk(rng, difficulty: str, back: bool) -> tuple[dict, dict, list]:
@@ -215,6 +225,67 @@ def action_descend_back(rng, difficulty: str):
     }
     parameters = {"drop_height": height, "edge_distance": distance, "difficulty_bin": difficulty}
     return scenario, parameters, [3]
+
+
+def action_climb_pipe(rng, difficulty: str):
+    """action_climb onto a pipe: drawn as one, as narrow as a level's."""
+    height = rng.randint(*PIPE_HEIGHTS[difficulty])
+    pipe = rng.randint(96, 136)
+    distance = start_distance(rng, 24)  # from Mario's front to the pipe
+    width = rng.randint(28, 36)
+    scenario = {
+        "world_width": pipe + width + 80,
+        "mario": [pipe - MARIO_WIDTH - distance, STANDING],
+        "platforms": [[0, FLOOR, pipe + width + 80, 20], [pipe, FLOOR - height, width, height]],
+        "platform_kinds": [None, "pipe"],
+        "goal": [pipe, FLOOR - height - 20, width, 20],  # anywhere on its top
+        "goal_requires_support": True,
+        "action_jump_direction": 1,
+    }
+    parameters = {
+        "pipe_height": height,
+        "pipe_x": pipe,
+        "pipe_width": width,
+        "pipe_distance": distance,
+        "difficulty_bin": difficulty,
+    }
+    return scenario, parameters, [2]
+
+
+def action_stomp_down(rng, difficulty: str):
+    """Mario on a pipe (or a step) with a walker on the floor below, coming at
+    the pipe or going away (turning at it, as a Goomba turns at a pipe): one
+    jump down onto it."""
+    height = rng.randint(*PIPE_HEIGHTS[difficulty])
+    pipe = rng.randint(48, 96)
+    width = rng.randint(28, 40)
+    edge = pipe + width
+    distance = start_distance(rng, 8)  # from Mario's front to the pipe's far edge
+    gap = rng.randint(8, 48)  # from the pipe's edge to the walker
+    speed = round(rng.uniform(*STOMP_SPEEDS[difficulty]), 3)
+    way = rng.choice((-1, 1))
+    enemy_x = edge + gap
+    scenario = {
+        "world_width": 256,
+        "mario": [edge - MARIO_WIDTH - distance, FLOOR - height - 20],
+        "platforms": [[0, FLOOR, 256, 20], [pipe, FLOOR - height, width, height]],
+        "platform_kinds": [None, rng.choice(("pipe", None))],
+        "enemies": [[enemy_x, 206, edge, 256, speed, way]],
+        "goal": [enemy_x - 2, 186, 16, 20],
+        "goal_on_stomp": True,
+        "action_jump_direction": 1,
+    }
+    parameters = {
+        "height": height,
+        "pipe_x": pipe,
+        "pipe_width": width,
+        "edge_distance": distance,
+        "enemy_gap": gap,
+        "enemy_speed": speed,
+        "enemy_way": way,
+        "difficulty_bin": difficulty,
+    }
+    return scenario, parameters, [2]
 
 
 def action_stomp(rng, difficulty: str):
@@ -405,6 +476,8 @@ GENERATORS = {
     "action_stomp_up_back": action_stomp_up_back,
     "action_jump_down": action_jump_down,
     "action_jump_down_back": action_jump_down_back,
+    "action_climb_pipe": action_climb_pipe,
+    "action_stomp_down": action_stomp_down,
 }
 
 

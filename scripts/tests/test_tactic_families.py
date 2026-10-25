@@ -486,6 +486,8 @@ def test_primitive_maneuvers_are_skill_families_without_an_action_learner():
         ("action_descend_back", "descend_backward"),
         ("action_stomp", "advance"),
         ("action_wait", "hold_ground"),
+        ("action_climb_pipe", "climb_forward"),
+        ("action_stomp_down", "advance"),
     ],
 )
 def test_a_single_action_family_asks_for_one_tactic_from_start_to_finish(family, tactic):

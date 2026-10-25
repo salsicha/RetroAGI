@@ -428,7 +428,7 @@ Mario starts and the size and place of what he jumps onto (steps, raised
 platforms, pipes, the route platforms' widths, heights and places), so the
 right destination is a different distance in each scene.
 
-Skill includes 17 isolated maneuver families (their historical `action_` names remain):
+Skill includes 19 isolated maneuver families (their historical `action_` names remain):
 
 | Families | Maneuver |
 |---|---|
@@ -441,6 +441,8 @@ Skill includes 17 isolated maneuver families (their historical `action_` names r
 | `action_stomp`, `action_stomp_back` | Jump onto an enemy on level ground right/left |
 | `action_stomp_up`, `action_stomp_up_back` | Jump onto an enemy on a raised platform right/left |
 | `action_wait` | Preserve a spot on a moving platform |
+| `action_climb_pipe` | Jump onto a pipe ahead (Full SMB 1-1's pipes) |
+| `action_stomp_down` | Jump down from a pipe or step onto a walker below |
 
 A climb completes on a supported landing anywhere on the step: a tall step's
 landing can be at its near edge, and walking on from there would be a second
@@ -533,12 +535,12 @@ available. Speed run chooses the fastest complete measured route; max points
 chooses the most points, breaking ties by time. Bypassing is therefore a real
 candidate, without forcing it when a stomp happens to be faster.
 
-Tactic uses **42 families**, defined by `TACTIC_TRAINING_FAMILIES`:
+Tactic uses **43 families**, defined by `TACTIC_TRAINING_FAMILIES`:
 
 | Group | Families |
 |---|---|
 | Strategy (14) | Each of seven tactics under `speed_run_` and `max_points_` |
-| Composed levels (8) | `chained_obstacles`, `chained_enemy_gauntlet`, `full_smb_opening_proxy`, `mixed_section`, `tactics_bridge_sequence`, `tactics_obstacle_sequence`, `tactics_bridge_then_gap`, `tactics_mixed_sequence` |
+| Composed levels (9) | `chained_obstacles`, `chained_enemy_gauntlet`, `full_smb_opening_proxy`, `full_smb_blocks_proxy` (blocks overhead, a walker between pipes, a walker dropping from a high row, a pit), `mixed_section`, `tactics_bridge_sequence`, `tactics_obstacle_sequence`, `tactics_bridge_then_gap`, `tactics_mixed_sequence` |
 | Scene-driven routes/responses (4) | `upper_route`, `lower_route`, `dead_end_retreat`, `monster_retreat` |
 | Alternate routes (2) | `choice_alternate_route`, `low_choice_alternate_route`, under `max_points` with visible points on the required path |
 | Raised route (1) | `low_choice_advance`, under `speed_run`, preserving the upper path through two gaps |
@@ -546,7 +548,7 @@ Tactic uses **42 families**, defined by `TACTIC_TRAINING_FAMILIES`:
 | Additional tactic switches (10) | `choice_retreat`, `stair_climb`, `platform_chain`, `retreat_recovery`, `tall_pipe_jump`, `bridge_wait`, `bridge_mount`, `bridge_dismount`, `stair_gap`, `enemy_on_platform` |
 
 These families teach tactic selection and termination with the skill layer
-frozen. All 42 are excluded from skill training and skill evaluation.
+frozen. All 43 are excluded from skill training and skill evaluation.
 `choice_advance`, `enemy_gap` and `enemy_patrol` moved to the skill stage on
 2026-10-11: once jumps stopped landing beyond the goal or a route platform,
 their demonstrations no longer switched tactics. For
