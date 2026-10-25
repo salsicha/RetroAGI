@@ -340,6 +340,39 @@ def test_a_layout_that_cannot_be_made_is_recorded_and_left_out(monkeypatch):
     pool.pool.shutdown()
 
 
+def test_the_evaluation_records_a_layout_it_cannot_make_and_plays_the_rest(monkeypatch):
+    # tactic_20261022's last evaluation stopped the run on one speed-run
+    # layout whose deadline the teacher could not set through vision.
+    from concurrent.futures import ThreadPoolExecutor
+    from types import SimpleNamespace
+
+    def made(task):
+        if task.family == "speed_run_advance" and task.sample_index % 2:
+            raise RuntimeError("speed_run_advance: spatial reference failed after 60 frames")
+        return {"family": task.family}
+
+    monkeypatch.setattr(lt, "task_scenario", made)
+    pool = lt.EpisodePool.__new__(lt.EpisodePool)
+    pool.pool = ThreadPoolExecutor(2)
+    pool.config = SimpleNamespace(learner="tactic")
+    pool.publish = lambda policy: None
+    pool.play = lambda tasks: [t.family for t in tasks]
+    config = lt.LayeredTrainConfig(
+        learner="tactic", families=("speed_run_advance",), evaluation_layouts_per_difficulty=2
+    )
+    unmade = []
+    played = lt._evaluation_play(pool, None, config, 4, None, unmade)
+    assert played and set(played) == {"speed_run_advance"}
+    assert unmade and all("60 frames" in u["error"] for u in unmade)
+    assert len(played) + len(unmade) == 6
+    line = lt._evaluation_line(
+        "tactic", {"after_round": 15, "success": 1.0, "families": {"speed_run_advance": 1.0},
+                   "unmade": unmade, "seconds": 1.0}
+    )
+    assert f"{len(unmade)} layouts could not be made" in line
+    pool.pool.shutdown()
+
+
 def test_a_teacher_error_ends_only_that_layouts_episode():
     from types import SimpleNamespace
 

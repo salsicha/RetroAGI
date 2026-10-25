@@ -2854,7 +2854,8 @@ def train_layer(config: LayeredTrainConfig) -> dict:
             # wins decide the gate; the world model and the trackers are
             # measured on the same episodes.
             started = time.time()
-            evaluation = _evaluation_play(pool, policy, config, len(evaluations), predictions)
+            unmade: list = []
+            evaluation = _evaluation_play(pool, policy, config, len(evaluations), predictions, unmade)
             per_family = family_success(evaluation)
             mean = float(np.mean(list(per_family.values())))
             collapsed = output_collapse(evaluation, played, config.learner)
@@ -2868,6 +2869,7 @@ def train_layer(config: LayeredTrainConfig) -> dict:
                     for family in per_family
                 },
                 "action_durations": action_duration_summary(evaluation),
+                "unmade": unmade,
                 **(
                     {"against_teacher": choices_against_teacher(evaluation)}
                     if config.learner == "skill"
@@ -3086,10 +3088,13 @@ def _agreement(policy, learner: str, played, config, device) -> dict:
 EVALUATION_FIRST = 100
 
 
-def _evaluation_play(pool, policy, config, number: int, predictions) -> list:
+def _evaluation_play(pool, policy, config, number: int, predictions, unmade=None) -> list:
     """The layer plays freshly generated layouts itself (the teacher carrying
     out the skill's actions), with the simulator's truth recorded when the
-    predictions are measured on them."""
+    predictions are measured on them. A layout that cannot be made (a speed
+    run's deadline the teacher cannot set, through vision) is recorded in
+    ``unmade`` and left out, as in training: the last evaluation of
+    tactic_20261022 stopped the run on one."""
     tasks = [
         dataclasses.replace(
             task,
@@ -3099,7 +3104,7 @@ def _evaluation_play(pool, policy, config, number: int, predictions) -> list:
         for task in _tasks(config, "validation", config.evaluation_layouts_per_difficulty, 0, 0.0, False)
     ]
     pool.publish(policy)
-    return pool.play(pool.with_scenarios(tasks))
+    return pool.play(pool.with_scenarios(tasks, unmade))
 
 
 class Predictions:
@@ -3287,6 +3292,8 @@ def _evaluation_line(learner: str, result: dict) -> str:
             for family, kinds in collapsed.items()
             for kind, v in kinds.items()
         )
+    if result.get("unmade"):
+        extra += f"; {len(result['unmade'])} layouts could not be made"
     passed = ((result.get("predictions") or {}).get("world_model") or {}).get("passed")
     return (
         f"[{learner}] evaluation after round {result['after_round']:02d} on fresh layouts: "
