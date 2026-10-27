@@ -441,7 +441,7 @@ Skill includes 19 isolated maneuver families (their historical `action_` names r
 | `action_stomp`, `action_stomp_back` | Jump onto an enemy on level ground right/left |
 | `action_stomp_up`, `action_stomp_up_back` | Jump onto an enemy on a raised platform right/left |
 | `action_wait` | Preserve a spot on a moving platform |
-| `action_climb_pipe` | Jump onto a pipe ahead (Full SMB 1-1's pipes) |
+| `action_climb_pipe` | Jump onto a pipe ahead, up to 64 pixels, sometimes with a walker coming from behind (Full SMB 1-1's pipes) |
 | `action_stomp_down` | Jump down from a pipe or step onto a walker below |
 
 A climb completes on a supported landing anywhere on the step: a tall step's

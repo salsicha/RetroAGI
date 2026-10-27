@@ -16,7 +16,7 @@ platforms/enemies and immediate jumps down to a lower landing.
 | action_descend_back | walk off a ledge behind down to the floor | descend_backward | drop height, distance to the edge |
 | action_stomp | land on an enemy walking toward Mario | advance | its distance, its speed |
 | action_wait | stand still on a moving platform that carries Mario to the goal | hold_ground | how far it travels, its speed |
-| action_climb_pipe | jump up onto a pipe ahead from a standstill | climb_forward | pipe height and width, distance to it |
+| action_climb_pipe | jump up onto a pipe ahead from a standstill, sometimes a walker coming from behind | climb_forward | pipe height and width, distance to it, the walker's distance and speed |
 | action_stomp_down | jump down from a pipe or a step onto a walker on the floor below | advance | height, the walker's distance, speed and way |
 
 The last two are Full SMB 1-1's (user, 2026-10-25: missing families found
@@ -82,7 +82,7 @@ DROPS = {"easy": (8, 32), "medium": (33, 56), "hard": (57, 80)}
 STOMP_SPEEDS = {"easy": (0.4, 0.53), "medium": (0.54, 0.66), "hard": (0.67, 0.8)}
 TRAVELS = {"easy": (48, 64), "medium": (65, 88), "hard": (89, 112)}
 # Pipe heights (1-1's are 32, 48 and 64), within a jump from a standstill.
-PIPE_HEIGHTS = {"easy": (24, 32), "medium": (33, 48), "hard": (49, 62)}
+PIPE_HEIGHTS = {"easy": (24, 32), "medium": (33, 48), "hard": (49, 64)}
 
 
 def _walk(rng, difficulty: str, back: bool) -> tuple[dict, dict, list]:
@@ -228,7 +228,11 @@ def action_descend_back(rng, difficulty: str):
 
 
 def action_climb_pipe(rng, difficulty: str):
-    """action_climb onto a pipe: drawn as one, as narrow as a level's."""
+    """action_climb onto a pipe: drawn as one, as narrow as a level's; in
+    half the scenes a walker comes at Mario from behind (in Full SMB 1-1,
+    pressed against its 64-pixel pipes with Goombas walking up behind him,
+    the skill ran into the pipe instead of jumping onto it: user,
+    2026-10-26)."""
     height = rng.randint(*PIPE_HEIGHTS[difficulty])
     pipe = rng.randint(96, 136)
     distance = start_distance(rng, 24)  # from Mario's front to the pipe
@@ -249,6 +253,14 @@ def action_climb_pipe(rng, difficulty: str):
         "pipe_distance": distance,
         "difficulty_bin": difficulty,
     }
+    if rng.random() < 0.5:
+        # Coming from behind, far enough that one jump from where Mario
+        # stands is still on time.
+        behind = rng.randint(32, 72)
+        speed = round(rng.uniform(*STOMP_SPEEDS[difficulty]), 3)
+        start = scenario["mario"][0] - behind - 12
+        scenario["enemies"] = [[max(0, start), 206, 0, pipe - 12, speed, 1]]
+        parameters.update(walker_behind=behind, walker_speed=speed)
     return scenario, parameters, [2]
 
 

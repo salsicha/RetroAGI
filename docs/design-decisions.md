@@ -26,6 +26,38 @@ commit). How the parts work is described in the
   the training set"); the recorded failures are fixed in the teacher. A
   failed gate is fixed in the teacher or the policy, never bypassed.
 
+## 2026-10-26 — Full SMB failures, second look (user decision; built)
+
+User: "Don't move to the next level. Look at the failures for families and
+layouts missing from the training data. Add them to the training and do
+more training". Full SMB learning stays on its level unless told
+(`FullLearnConfig.advance_levels`, default false); learn_20261026 was
+stopped after round 5 (round 0: speed runs to x 998 on average, best 1634,
+then down to about 500, as before).
+
+48 playthroughs of 1-1 by the agent trained with the first new families
+(tactic_20261025; artifacts/full_smb/failures_20261026): 2 stalls (were
+most failures), 46 deaths: 13 at the first Goomba, 24 between the pipes, 8
+in the pits.
+
+- Execution, not choices: the pits (the skill jumps at the floor beyond,
+  the world model sends the jump 59 to 61 pixels where 75 are needed), and
+  at the first Goomba runs whose end is never reached and that the trackers
+  do not end, so the next decision comes after the Goomba arrives.
+- Missing layouts: pressed against 1-1's 64-pixel pipes 3 and 4 with
+  Goombas walking up behind, the skill ran into the pipe (each run ending
+  with no progress) instead of jumping onto it. The pipe lessons stopped at
+  62 pixels and had nothing behind Mario; the pen between pipes had one
+  walker and mostly lower pipes.
+
+Built: `action_climb_pipe` goes to 64 pixels and in half its scenes a walker
+comes from behind (the sampler still redraws landings within a pipe's edge,
+so the tallest are rare); compose's `pipe_pen` has 1-1's heights (48 to 64)
+and one or two walkers. The teacher wins all 12 sampled layouts of
+full_smb_blocks_proxy with them. Both families are recorded again and the
+models trained again (artifacts/block_smb/families_20261026/chain.sh),
+then 1-1 is played and logged by the result, nothing learning.
+
 ## 2026-10-25 — Families from the Full SMB failures (user decision; built)
 
 User: "Try to identify from the full smb failures if there are missing skill

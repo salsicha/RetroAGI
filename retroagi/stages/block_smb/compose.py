@@ -148,11 +148,13 @@ def blocks(rng, difficulty, x) -> Section:
 
 
 def pipe_pen(rng, difficulty, x) -> Section:
-    """Two pipes with a walker pacing the floor between them, turning at each
-    (1-1's Goombas between its pipes): Mario comes over the first pipe above
-    it, and must deal with it before the second."""
+    """Two pipes with one or two walkers pacing the floor between them,
+    turning at each, as in 1-1 (one Goomba between its 48- and 64-pixel
+    pipes, two between its two 64-pixel ones): Mario comes over the first
+    pipe above them, and must deal with them and climb the second, often 64
+    pixels tall, with a walker at his back."""
     tier = _tier(difficulty)
-    first = (32, 40, 48)[tier] + rng.randint(-4, 4)
+    first = (32, 48, 56)[tier] + rng.randint(-4, 8)
     second = min(64, first + rng.choice((0, 8, 16)))
     lead, between, tail = 48, rng.randint(80, 128), 48
     width = lead + 32 + between + 32 + tail
@@ -161,10 +163,11 @@ def pipe_pen(rng, difficulty, x) -> Section:
     a, b = x + lead, x + lead + 32 + between
     s.add([a, FLOOR - first, 32, first], "pipe")
     s.add([b, FLOOR - second, 32, second], "pipe")
-    speed = round((0.4, 0.5, 0.6)[tier] + rng.uniform(0, 0.1), 3)
-    s.enemies.append(
-        [a + 32 + rng.randint(8, between - 24), FLOOR - ENEMY_HEIGHT, a + 32, b - 12, speed, rng.choice((-1, 1))]
-    )
+    walkers = rng.choice((1, 2)) if tier else 1
+    for k in range(walkers):
+        speed = round((0.4, 0.5, 0.6)[tier] + rng.uniform(0, 0.1), 3)
+        place = a + 32 + 8 + k * (between - 32) // walkers + rng.randint(0, max(0, (between - 32) // walkers - 12))
+        s.enemies.append([place, FLOOR - ENEMY_HEIGHT, a + 32, b - 12, speed, rng.choice((-1, 1))])
     return s
 
 
