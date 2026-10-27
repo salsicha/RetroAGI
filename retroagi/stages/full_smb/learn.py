@@ -17,9 +17,10 @@ playthroughs.
   recorded in every playthrough (layered_train.Predictions, continuing the
   trackers trained in Block SMB); the vision network from frames labelled
   from game memory (pixel_labels), as it was first trained.
-- Levels: 1-1 first, played in both modes until each mode has finished it,
-  then the next level, its start captured when a playthrough finished the
-  level before (user, 2026-10-17). Nothing is held out.
+- Levels: the level given (1-1), and only it (user, 2026-10-26: "Don't move
+  to the next level"). With ``advance_levels``, once each mode has finished
+  it, play moves to the next level, its start captured when a playthrough
+  finished the level before (user, 2026-10-17). Nothing is held out.
 
 Measured per round and mode: playthroughs, finishes, how far Mario got, the
 frames to each 500-pixel checkpoint (speed run) and the points between them
@@ -57,6 +58,7 @@ class FullLearnConfig:
     vision_checkpoint: str = str(DEFAULT_FULL_VIT_CHECKPOINT)
     output: str = "artifacts/full_smb/learn"
     level: str = "Level1-1"  # where play starts
+    advance_levels: bool = False  # on to the next level once both modes finish this one
     playthroughs_per_mode: int = 8  # each round
     rounds: int = 500
     frames: int = 6000  # a playthrough's limit
@@ -305,7 +307,7 @@ def learn(config: FullLearnConfig) -> dict:
                     round_index * 1000 + MODES.index(mode) * 100 + i,
                     config.frames,
                     config.label_every,
-                    next_level is None,
+                    config.advance_levels and next_level is None,
                 )
                 for mode in MODES
                 for i in range(config.playthroughs_per_mode)
@@ -375,7 +377,11 @@ def learn(config: FullLearnConfig) -> dict:
             with (output / "playthroughs.jsonl").open("a") as log:
                 for p in played:
                     log.write(json.dumps({"round": round_index, **p.summary}) + "\n")
-            if all(counts[m]["first_finish"] is not None for m in MODES) and next_level is not None:
+            if (
+                config.advance_levels
+                and all(counts[m]["first_finish"] is not None for m in MODES)
+                and next_level is not None
+            ):
                 # Both modes have finished this level: on to the next (its
                 # start captured when one of them finished this one).
                 (level, start_state), next_level = next_level, None
@@ -405,9 +411,10 @@ def _round_line(entry: dict) -> str:
 def main(argv: Optional[Sequence[str]] = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     for setting in dataclasses.fields(FullLearnConfig):
-        parser.add_argument(
-            f"--{setting.name.replace('_', '-')}", type=type(setting.default), default=setting.default
-        )
+        kind = type(setting.default)
+        if kind is bool:  # "true" or "false" (bool("false") is True)
+            kind = lambda text: {"true": True, "false": False}[text.lower()]  # noqa: E731
+        parser.add_argument(f"--{setting.name.replace('_', '-')}", type=kind, default=setting.default)
     args = parser.parse_args(argv)
     config = FullLearnConfig(**{f.name: getattr(args, f.name) for f in dataclasses.fields(FullLearnConfig)})
     learn(config)
