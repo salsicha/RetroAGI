@@ -16,7 +16,7 @@ import copy
 import random
 
 from .compose import FLOOR, compose, route_actions
-from .strategy_families import STRATEGY_TACTIC_FAMILIES, strategy_route, strategy_scene
+from .strategy_families import STRATEGY_FAMILIES, strategy_route, strategy_scene
 from .tactic_schedule import segment
 
 # The scene decides the tactic.
@@ -55,7 +55,7 @@ TACTIC_FAMILIES = (
     *LOW_CHOICE_FAMILIES,
     "choice_hold_area",
     *ROUTE_CHOICE_FAMILIES,
-    *STRATEGY_TACTIC_FAMILIES,
+    *STRATEGY_FAMILIES,
 )
 NEW_FAMILIES = (
     *SCENE_TACTIC_FAMILIES,
@@ -63,7 +63,7 @@ NEW_FAMILIES = (
     *LOW_CHOICE_FAMILIES,
     "choice_hold_area",
     *ROUTE_CHOICE_FAMILIES,
-    *STRATEGY_TACTIC_FAMILIES,
+    *STRATEGY_FAMILIES,
 )
 
 # Waiting versus proceeding is a tactic decision.
@@ -92,7 +92,7 @@ TACTIC_TRAINING_FAMILIES = (
     *LOW_CHOICE_FAMILIES,
     *COMPOSED_RECIPES,
     *TIMING_TACTIC_FAMILIES,
-    *STRATEGY_TACTIC_FAMILIES,
+    *STRATEGY_FAMILIES,
     *MULTI_TACTIC_FAMILIES,
 )
 
@@ -375,8 +375,8 @@ def tactic_family_scenario(family: str, rng: random.Random, difficulty: str):
         scenario, params = _low_choice_layout(rng, difficulty)
         scenario["tactics"] = params.pop("schedules")[family]
         scenario["strategy"] = "speed_run"
-    elif family in STRATEGY_TACTIC_FAMILIES:
-        strategy, tactic = STRATEGY_TACTIC_FAMILIES[family]
+    elif family in STRATEGY_FAMILIES:
+        strategy, tactic = STRATEGY_FAMILIES[family]
         scenario, params = strategy_scene(rng, difficulty, tactic)
         scenario["strategy"] = strategy
     else:
@@ -399,7 +399,7 @@ def family_route(family: str, scenario: dict) -> list[int]:
     must show each strategy's route best for its own reward
     (strategy_families.strategy_route).
     """
-    if family in STRATEGY_TACTIC_FAMILIES:
+    if family in STRATEGY_FAMILIES:
         return strategy_route(family, scenario)
     siblings = scenario.pop("sibling_tactics", None)
     if siblings:

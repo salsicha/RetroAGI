@@ -352,9 +352,9 @@ def collect(
 
     from . import layered_train as lt
     from .monte_carlo import BLOCK_SMB_MC_FAMILIES
-    from .strategy_families import STRATEGY_TACTIC_FAMILIES
+    from .strategy_families import STRATEGY_FAMILIES
 
-    every = families or [f for f in BLOCK_SMB_MC_FAMILIES if f not in STRATEGY_TACTIC_FAMILIES]
+    every = families or [f for f in BLOCK_SMB_MC_FAMILIES if f not in STRATEGY_FAMILIES]
     policy, saved = lt.load_layered_checkpoint(Path(source), "cpu")
     settings = lt.saved_settings(saved["config"])
     settings.update(

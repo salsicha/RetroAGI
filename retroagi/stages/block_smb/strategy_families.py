@@ -61,6 +61,14 @@ from .tactic_schedule import segment
 STRATEGY_TACTIC_FAMILIES = {
     f"{strategy}_{tactic}": (strategy, tactic) for strategy in STRATEGIES for tactic in TACTICS
 }
+# Scenes beyond the seven tactics', each under both strategies too (user,
+# 2026-10-27: Full SMB 1-1's first Goomba walks under a question block, and
+# a stomp jump hit the block and fell short): block_goomba, a Goomba
+# walking toward Mario under a block or a short row of blocks. Max points
+# waits until it is clear of the block and stomps it; speed run ignores it
+# and jumps over the block (_block_goomba_scene).
+STRATEGY_SCENE_FAMILIES = {f"{strategy}_block_goomba": (strategy, "block_goomba") for strategy in STRATEGIES}
+STRATEGY_FAMILIES = {**STRATEGY_TACTIC_FAMILIES, **STRATEGY_SCENE_FAMILIES}
 # A speed run wins within this much of its teacher's (the fastest) time.
 SPEED_SLACK = 1.1
 # What each strategy minimises over a layout's route combinations, given
@@ -72,6 +80,8 @@ STRATEGY_ORDER = {
 SCREEN = 256
 MARIO_WIDTH = 10
 ENEMY_HEIGHT = 14
+ENEMY_WIDTH = 12
+BLOCK = 16
 COIN_SIZE = 10
 PLATFORM_WIDTH = 48
 # Enemies walking the way, by difficulty: (fewest, most).
@@ -251,13 +261,91 @@ def _main(rng, difficulty: str, tactic: str) -> dict:
     }
 
 
+def _block_goomba_scene(rng, difficulty: str) -> tuple[dict, dict]:
+    """block_goomba (STRATEGY_SCENE_FAMILIES): a floor; a question block, or a
+    row of two or three blocks, its bottom 44 to 52 pixels above the floor
+    (1-1's: 48) far enough ahead for a run up to it; a Goomba walking toward
+    Mario from beyond it, passing under it; the goal past both.
+
+    Two plans (route_tactics), each strategy keeping its own
+    (scenario["route_required"]: a layout whose required plan is not the
+    strategy's best is redrawn):
+    - goomba=stomp (max points): hold until the Goomba is out from under the
+      block on Mario's side, then stomp it (its points), then on;
+    - goomba=over (speed run): leave it alone (keep_alive) and go over the
+      block: a running jump onto it (a running jump rises 83 pixels, the
+      block's top is at most 68 up), off its far side and on. The teacher's
+      own route over it stands on it: a jump clearing it without touching
+      it was found by no teacher (2026-10-27)."""
+    tier = ("easy", "medium", "hard").index(difficulty)
+    x0 = rng.randint(32, 64)
+    count = rng.choice((1, 1, 2, 3))
+    block = x0 + MARIO_WIDTH + rng.randint(112, 176)
+    bottom = FLOOR - rng.randint(44, 52)
+    # One platform: a question block, or a row of bricks (the teacher's route
+    # over it stands on it, one platform).
+    platforms = [[0, FLOOR, 0, 20], [block, bottom - BLOCK, BLOCK * count, BLOCK]]
+    kinds = [None, "question_block" if count == 1 else "brick"]
+    span_end = block + BLOCK * count
+    speed = round(rng.uniform(*((0.4, 0.5), (0.5, 0.6), (0.6, 0.7))[tier]), 2)
+    goomba = span_end + rng.randint(8, 48)
+    goal_x = span_end + rng.randint(144, 208)
+    world = goal_x + 96
+    platforms[0][2] = world
+    # Out from under the block on Mario's side, with a little room.
+    clear = int((goomba + ENEMY_WIDTH - block) / speed) + 8
+    schedules = {
+        "goomba=stomp": [
+            segment("hold_area", 1, area=8, frames=clear),
+            segment("advance", 1, stomp=0, past_enemy=0),
+            segment("advance", 1),
+        ],
+        # Up onto the block (a running jump: the teacher's run-up to a
+        # platform), off its far side and on, leaving the Goomba alone.
+        "goomba=over": [
+            segment("alternate_route", 1, route=[1], on=1, keep_alive=[0]),
+            segment("advance", 1, keep_alive=[0]),
+        ],
+    }
+    scenario = {
+        "world_width": world,
+        "mario": [x0, FLOOR - 17],
+        "platforms": platforms,
+        "platform_kinds": kinds,
+        "coins": [],
+        "enemies": [[goomba, FLOOR - ENEMY_HEIGHT, 0, world, speed, -1]],
+        "goal": [goal_x, FLOOR - 20, 16, 20],
+        "goal_requires_support": True,
+        "reward_goal_distance_shaping": 2.0,
+        "tactics": schedules["goomba=over"],
+        "route_tactics": schedules,
+        "route_required": {"speed_run": "goomba=over", "max_points": "goomba=stomp"},
+        # The over plan must take Mario above the block (its span and top).
+        "route_over": [block, span_end, bottom - BLOCK],
+        "frame_budget": int(200 + world + clear),
+    }
+    params = {
+        "blocks": count,
+        "block_x": block,
+        "block_bottom_up": FLOOR - bottom,
+        "goomba_x": goomba,
+        "goomba_speed": speed,
+        "clear_frames": clear,
+        "difficulty_bin": difficulty,
+    }
+    return scenario, params
+
+
 def strategy_scene(rng, difficulty: str, tactic: str) -> tuple[dict, dict]:
-    """A layout of a tactic's scene (the same for both strategies).
+    """A layout of a tactic's scene (the same for both strategies), or of
+    another scene (STRATEGY_SCENE_FAMILIES).
 
     Returns (scenario, parameters). The scenario's schedule skips every
     detour; scenario["route_tactics"] holds one schedule for every
     combination of taking and skipping them (keyed "name=take|name=skip").
     """
+    if tactic == "block_goomba":
+        return _block_goomba_scene(rng, difficulty)
     if tactic not in TACTICS:
         raise ValueError(f"unknown tactic {tactic!r}")
     main = _hold_main(rng, difficulty) if tactic == "hold_ground" else _main(rng, difficulty, tactic)
@@ -471,6 +559,31 @@ def _played_routes(scenario: dict) -> dict:
     return played
 
 
+def _goes_over(scenario: dict, tactics: list, route: list, over: list) -> bool:
+    """Whether ``route`` takes Mario above a block (``over``: its left and
+    right edges and its top), his middle over it with his feet above its top."""
+    from .env import MarioScenarioEnv
+
+    left, right, top = over
+    trial = copy.deepcopy({k: v for k, v in scenario.items() if k not in ("route_tactics", "route_over")})
+    trial["tactics"] = tactics
+    trial.pop("strategy_objective", None)
+    env = MarioScenarioEnv()
+    try:
+        env.reset(scenario=trial)
+        env.render = lambda: None
+        for action in route:
+            env.step(action)
+            middle = env.mario["x"] + env.mario["w"] / 2
+            if left <= middle <= right and env.mario["y"] + env.mario["h"] <= top:
+                return True
+            if env._goal_credited:
+                break
+        return False
+    finally:
+        env.close()
+
+
 def strategy_route(family: str, scenario: dict) -> list[int]:
     """The teacher's route for a layout of one of these families ([] when the
     layout is not kept): the combination best for the family's strategy, with
@@ -487,9 +600,18 @@ def strategy_route(family: str, scenario: dict) -> list[int]:
     few, many = played[fastest][1], played[richest][1]
     if many <= few:
         return []  # no detour gained points over the fastest route here
-    strategy = STRATEGY_TACTIC_FAMILIES[family][0]
+    strategy = STRATEGY_FAMILIES[family][0]
     chosen = best(strategy)
     base, motion = chosen.rsplit("|motion=", 1)
+    required = scenario.pop("route_required", {}).get(strategy)
+    if required is not None and base != required:
+        return []  # the strategy's own plan is not its best here
+    over = scenario.pop("route_over", None)
+    if over is not None:
+        # Checked for both siblings, so that both keep the same layouts.
+        jumps = [c for c in played if c.startswith("goomba=over")]
+        if not jumps or not _goes_over(scenario, choices["goomba=over"], played[min(jumps, key=lambda c: played[c][0])][2], over):
+            return []
     scenario["tactics"] = choices[base]
     scenario["prefer_enemy_bypass"] = motion == "bypass"
     scenario["strategy_route"] = chosen

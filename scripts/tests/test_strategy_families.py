@@ -14,6 +14,7 @@ from retroagi.stages.block_smb.monte_carlo import (
 )
 from retroagi.stages.block_smb.strategy_families import (
     STRATEGY_ORDER,
+    STRATEGY_SCENE_FAMILIES,
     STRATEGY_TACTIC_FAMILIES,
 )
 from retroagi.stages.block_smb.tactic_schedule import segment
@@ -76,7 +77,7 @@ def test_there_are_two_strategies_and_fourteen_families_one_per_tactic_and_strat
     families = learner_families("tactic", BLOCK_SMB_MC_FAMILIES)
     compositions = {f for f in BLOCK_SMB_MC_FAMILIES if f.startswith("tactics_")}
     assert len(compositions) == 4
-    assert set(families) == set(STRATEGY_TACTIC_FAMILIES) | compositions | set(
+    assert set(families) == set(STRATEGY_TACTIC_FAMILIES) | set(STRATEGY_SCENE_FAMILIES) | compositions | set(
         MULTI_TACTIC_FAMILIES
     ) | {
         "mixed_section",
@@ -95,7 +96,7 @@ def test_there_are_two_strategies_and_fourteen_families_one_per_tactic_and_strat
         "low_choice_alternate_route",
         "low_choice_advance",
     }
-    assert len(families) == 43
+    assert len(families) == 45
 
 
 @pytest.mark.timeout(600)
@@ -186,6 +187,41 @@ def test_the_hold_scene_waits_for_a_plant_or_a_moving_platform():
 
     kinds = {strategy_scene(random.Random(s), "medium", "hold_ground")[1]["hold_on"] for s in (0, 1, 2, 5)}
     assert kinds == {"plant", "bridge"}
+
+
+@pytest.mark.timeout(600)
+@pytest.mark.parametrize("difficulty", ["easy", "hard"])
+def test_block_goomba_max_points_stomps_it_clear_of_the_block_and_speed_run_goes_over(difficulty):
+    # User, 2026-10-27: "one family (max points) where mario waits for the
+    # goomba to be clear of the block and then stomps it. and another (speed
+    # run) where mario simply ignores the goomba and jumps over the block".
+    made = {
+        family: sample_block_smb_monte_carlo_scenario(
+            split="validation", seed=7, sample_index=0, family=family, difficulty=difficulty,
+            calibrate_deadline=False,
+        )
+        for family in STRATEGY_SCENE_FAMILIES
+    }
+    fast, rich = made["speed_run_block_goomba"], made["max_points_block_goomba"]
+    assert fast.scenario["platforms"] == rich.scenario["platforms"]  # the same layout
+    assert fast.scenario["strategy_route"].startswith("goomba=over")
+    assert rich.scenario["strategy_route"].startswith("goomba=stomp")
+    block_x, top = fast.parameters["block_x"], 220 - fast.parameters["block_bottom_up"] - 16
+    for sample, stomped, over in ((fast, False, True), (rich, True, False)):
+        env = MarioScenarioEnv()
+        env.reset(scenario=sample.scenario, seed=0)
+        env.render = lambda: None
+        went_over = False
+        for action in sample.oracle["actions"]:
+            env.step(action)
+            middle = env.mario["x"] + env.mario["w"] / 2
+            if block_x <= middle <= block_x + 16 * sample.parameters["blocks"] and env.mario["y"] + env.mario["h"] <= top:
+                went_over = True
+            if env._goal_credited:
+                break
+        assert env._goal_credited
+        assert env.enemies[0]["dead"] == stomped and went_over == over
+        env.close()
 
 
 def test_finishing_after_the_deadline_misses_the_objective():

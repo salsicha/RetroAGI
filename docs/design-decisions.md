@@ -26,6 +26,31 @@ commit). How the parts work is described in the
   the training set"); the recorded failures are fixed in the teacher. A
   failed gate is fixed in the teacher or the policy, never bypassed.
 
+## 2026-10-27 — The Goomba under the block, per strategy (user decision; built)
+
+The second round (tactic_20261026: 86.6% of fresh Block SMB layouts) played
+1-1 worse: 20 of 48 deaths at the first Goomba, nine of them one speed-run
+path: the skill's stomp jump hit the question block above, fell short and
+landed before the Goomba (artifacts/full_smb/failures_20261027). The
+teacher cannot teach a stomp under a low block (no jump it certifies).
+User: "add two families. one family (max points) where mario waits for the
+goomba to be clear of the block and then stomps it. and another (speed
+run) where mario simply ignores the goomba and jumps over the block and
+keeps going".
+
+- `max_points_block_goomba` and `speed_run_block_goomba`
+  (`strategy_families.STRATEGY_SCENE_FAMILIES`, the scene block_goomba):
+  siblings on the same layouts: a question block or a row of bricks, its
+  bottom 44 to 52 pixels up, 112 to 176 pixels ahead; a Goomba walking
+  toward Mario from beyond it, under it. Max points holds until the Goomba
+  is out from under the block on Mario's side, then stomps it (its points);
+  speed run leaves it alone and goes over the block: a running jump up onto
+  it, off its far side and on (a running jump rises 83 pixels). A layout is
+  kept only if each strategy's best plan is its own and the speed run's
+  takes Mario above the block. The recording teacher wins 9 of 9 max-points
+  layouts and 6 of 9 speed-run ones (over the block in all 9); a jump
+  clearing the block without standing on it was made by no teacher.
+
 ## 2026-10-26 — Full SMB failures, second look (user decision; built)
 
 User: "Don't move to the next level. Look at the failures for families and
