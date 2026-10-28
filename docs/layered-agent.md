@@ -535,20 +535,20 @@ available. Speed run chooses the fastest complete measured route; max points
 chooses the most points, breaking ties by time. Bypassing is therefore a real
 candidate, without forcing it when a stomp happens to be faster.
 
-Tactic uses **45 families**, defined by `TACTIC_TRAINING_FAMILIES`:
+Tactic uses **47 families**, defined by `TACTIC_TRAINING_FAMILIES`:
 
 | Group | Families |
 |---|---|
 | Strategy (16) | Each of seven tactics under `speed_run_` and `max_points_`, and `block_goomba` (a Goomba walking under a block: max points waits for it to clear the block and stomps it, speed run goes over the block) |
-| Composed levels (9) | `chained_obstacles`, `chained_enemy_gauntlet`, `full_smb_opening_proxy`, `full_smb_blocks_proxy` (blocks overhead, a walker between pipes, a walker dropping from a high row, a pit), `mixed_section`, `tactics_bridge_sequence`, `tactics_obstacle_sequence`, `tactics_bridge_then_gap`, `tactics_mixed_sequence` |
-| Scene-driven routes/responses (4) | `upper_route`, `lower_route`, `dead_end_retreat`, `monster_retreat` |
+| Composed levels (10) | `chained_obstacles`, `chained_enemy_gauntlet`, `full_smb_opening_proxy`, `full_smb_blocks_proxy` (blocks overhead, a walker between pipes, a walker dropping from a high row, a pit), `full_smb_rows_proxy` (a pit, walkers walking off rows 64 and 128 pixels up, a wider pit), `mixed_section`, `tactics_bridge_sequence`, `tactics_obstacle_sequence`, `tactics_bridge_then_gap`, `tactics_mixed_sequence` |
+| Scene-driven routes/responses (5) | `upper_route`, `lower_route`, `dead_end_retreat`, `monster_retreat`, `pen_pipe_climb` (started in a pen between pipes before one 56 to 64 pixels tall, walkers behind) |
 | Alternate routes (2) | `choice_alternate_route`, `low_choice_alternate_route`, under `max_points` with visible points on the required path |
 | Raised route (1) | `low_choice_advance`, under `speed_run`, preserving the upper path through two gaps |
 | Waiting/proceeding (3) | `moving_bridge`, `wait_timing`, `piranha_avoidance` |
 | Additional tactic switches (10) | `choice_retreat`, `stair_climb`, `platform_chain`, `retreat_recovery`, `tall_pipe_jump`, `bridge_wait`, `bridge_mount`, `bridge_dismount`, `stair_gap`, `enemy_on_platform` |
 
 These families teach tactic selection and termination with the skill layer
-frozen. All 45 are excluded from skill training and skill evaluation.
+frozen. All 47 are excluded from skill training and skill evaluation.
 `choice_advance`, `enemy_gap` and `enemy_patrol` moved to the skill stage on
 2026-10-11: once jumps stopped landing beyond the goal or a route platform,
 their demonstrations no longer switched tactics. For

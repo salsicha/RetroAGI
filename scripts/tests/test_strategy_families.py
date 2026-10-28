@@ -85,6 +85,8 @@ def test_there_are_two_strategies_and_fourteen_families_one_per_tactic_and_strat
         "chained_enemy_gauntlet",
         "full_smb_opening_proxy",
         "full_smb_blocks_proxy",
+        "full_smb_rows_proxy",
+        "pen_pipe_climb",
         "upper_route",
         "lower_route",
         "dead_end_retreat",
@@ -96,7 +98,7 @@ def test_there_are_two_strategies_and_fourteen_families_one_per_tactic_and_strat
         "low_choice_alternate_route",
         "low_choice_advance",
     }
-    assert len(families) == 45
+    assert len(families) == 47
 
 
 @pytest.mark.timeout(600)

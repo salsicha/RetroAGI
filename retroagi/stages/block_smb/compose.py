@@ -18,14 +18,15 @@ adds its own tactics:
 - monster: a monster comes out of a tunnel too low to jump in: keep behind
   the tunnel's mouth (retreat, hold area) and jump over it (kind "monster").
 
-Simple sections from Full SMB 1-1 (user, 2026-10-25: what its failures showed
-no layout had): blocks (a question block and a row of bricks and question
-blocks overhead, nothing to climb), pipe_pen (a walker pacing the floor
-between two pipes) and high_row (a walker walking off a brick row high
-above the floor, dropping in front of Mario).
+Simple sections from Full SMB 1-1 (user, 2026-10-25 and 2026-10-28: what its
+failures showed no layout had): blocks (a question block and a row of bricks
+and question blocks overhead, nothing to climb), pipe_pen (walkers pacing the
+floor between two pipes; inside, Mario starts in the pen before a pipe too
+tall to climb without a run-up), high_row and low_row (a walker walking off a
+brick row 128 or 64 pixels above the floor, dropping in front of Mario).
 
-Simple sections (flat, enemy, gap, pipe, stairs, blocks, pipe_pen, high_row)
-are advanced through. The
+Simple sections (flat, enemy, gap, pipe, stairs, blocks, pipe_pen, high_row,
+low_row) are advanced through. The
 standalone families start Mario inside a dead end or a tunnel.
 
 Every layout is checked by the teacher (route_actions) in the sampler, which
@@ -147,16 +148,22 @@ def blocks(rng, difficulty, x) -> Section:
     return s
 
 
-def pipe_pen(rng, difficulty, x) -> Section:
+def pipe_pen(rng, difficulty, x, inside: bool = False) -> Section:
     """Two pipes with one or two walkers pacing the floor between them,
     turning at each, as in 1-1 (one Goomba between its 48- and 64-pixel
     pipes, two between its two 64-pixel ones): Mario comes over the first
     pipe above them, and must deal with them and climb the second, often 64
-    pixels tall, with a walker at his back."""
+    pixels tall, with a walker at his back. ``inside``: Mario starts in the
+    pen, close to the second pipe (56 to 64 pixels tall: too tall to climb
+    well from where he stands, a run-up needed), the walkers behind him (in
+    Full SMB 1-1 the agent ran into that pipe again and again while a Goomba
+    walked into his back: user, 2026-10-28)."""
     tier = _tier(difficulty)
     first = (32, 48, 56)[tier] + rng.randint(-4, 8)
     second = min(64, first + rng.choice((0, 8, 16)))
-    lead, between, tail = 48, rng.randint(80, 128), 48
+    if inside:
+        second = rng.randint(56, 64)
+    lead, between, tail = 48, rng.randint(112, 144) if inside else rng.randint(80, 128), 48
     width = lead + 32 + between + 32 + tail
     s = Section(width)
     s.add([x, FLOOR, width, 20])
@@ -164,10 +171,38 @@ def pipe_pen(rng, difficulty, x) -> Section:
     s.add([a, FLOOR - first, 32, first], "pipe")
     s.add([b, FLOOR - second, 32, second], "pipe")
     walkers = rng.choice((1, 2)) if tier else 1
+    if inside:
+        s.spawn = b - 10 - rng.randint(0, 24)
+        room = s.spawn - 32 - (a + 32 + 8)  # where the walkers start, behind him
+        for k in range(walkers):
+            speed = round((0.4, 0.5, 0.6)[tier] + rng.uniform(0, 0.1), 3)
+            place = a + 32 + 8 + k * room // walkers + rng.randint(0, max(0, room // walkers - 12))
+            s.enemies.append([place, FLOOR - ENEMY_HEIGHT, a + 32, b - 12, speed, rng.choice((1, 1, -1))])
+        return s
     for k in range(walkers):
         speed = round((0.4, 0.5, 0.6)[tier] + rng.uniform(0, 0.1), 3)
         place = a + 32 + 8 + k * (between - 32) // walkers + rng.randint(0, max(0, (between - 32) // walkers - 12))
         s.enemies.append([place, FLOOR - ENEMY_HEIGHT, a + 32, b - 12, speed, rng.choice((-1, 1))])
+    return s
+
+
+def low_row(rng, difficulty, x) -> Section:
+    """A short row of bricks and question blocks over the floor, its top 64
+    pixels up (its bottom 48: a jump under it hits it), as 1-1's past its
+    first pit, with a walker on it walking toward Mario's side: it walks off
+    the row's near end and drops in front of him (the agent jumped up at it
+    standing on the row, and died: user, 2026-10-28)."""
+    lead, tail = 72, 64
+    count = rng.randint(3, 6)
+    width = lead + count * BLOCK + tail
+    s = Section(width)
+    s.add([x, FLOOR, width, 20])
+    top = FLOOR - 64
+    for i in range(count):
+        s.add([x + lead + BLOCK * i, top, BLOCK, BLOCK], rng.choice(("brick", "question_block")))
+    speed = round((0.4, 0.5, 0.6)[_tier(difficulty)] + rng.uniform(0, 0.1), 3)
+    # Its bounds reach past the row's ends: it walks off and falls.
+    s.enemies.append([x + lead + rng.randint(0, count * BLOCK - 12), top - ENEMY_HEIGHT, x, x + width, speed, -1])
     return s
 
 
@@ -374,6 +409,7 @@ SECTIONS: dict[str, Callable] = {
     "blocks": blocks,
     "pipe_pen": pipe_pen,
     "high_row": high_row,
+    "low_row": low_row,
     "upper_route": upper_route,
     "lower_route": lower_route,
     "dead_end": dead_end,

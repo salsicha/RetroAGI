@@ -26,6 +26,37 @@ commit). How the parts work is described in the
   the training set"); the recorded failures are fixed in the teacher. A
   failed gate is fixed in the teacher or the policy, never bypassed.
 
+## 2026-10-28 — Full SMB learning reverted; the pens and the rows (user decision; built)
+
+Full SMB learning on 1-1 from tactic_20261027 (learn_20261028) fell back
+within its first rounds again (average distance 770 to 348 by round 3),
+the third run to do so; it was stopped after 168 rounds without a finish.
+User: "stop, revert the model to before training full smb, and identify the
+failures and create appropriate families and layouts to fill the gap". The
+model in use is tactic_20261027/best.pt with its trackers and the Full SMB
+vision (unchanged by the run); the run's own weights are set aside in
+learn_20261028/discarded.
+
+The 48 logged playthroughs of that model (failures_20261028): 23 deaths in
+the pens between pipes 2-3 and 3-4 and 10 stalls there: pressed against a
+64-pixel pipe, the skill ran into it again and again while a Goomba in the
+pen walked into his back; 5 deaths at 1-1's rows past its first pit,
+jumping up at a Goomba walking on a block row 64 pixels up; 8 at the first
+Goomba (now mostly max-points runs creeping toward it).
+
+Built:
+
+- `pen_pipe_climb` (scene-driven tactic family; compose `pipe_pen` with
+  `inside`): Mario starts in a pen between two pipes, 0 to 24 pixels before
+  one 56 to 64 pixels tall, one or two walkers behind him. The teacher wins
+  all 12 sampled layouts (up onto the pipe, down its far side).
+- `full_smb_rows_proxy` (composed): a pit, compose's new `low_row` (bricks
+  and question blocks 64 pixels up with a walker on it that walks off its
+  near end and drops in front of Mario), `high_row`, a wider pit. The
+  teacher wins all 12, advancing on the floor under the rows.
+
+Not yet looked into: why Full SMB learning makes the agent worse.
+
 ## 2026-10-27 — The Goomba under the block, per strategy (user decision; built)
 
 The second round (tactic_20261026: 86.6% of fresh Block SMB layouts) played

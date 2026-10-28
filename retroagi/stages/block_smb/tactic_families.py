@@ -20,7 +20,7 @@ from .strategy_families import STRATEGY_FAMILIES, strategy_route, strategy_scene
 from .tactic_schedule import segment
 
 # The scene decides the tactic.
-SCENE_TACTIC_FAMILIES = ("upper_route", "lower_route", "dead_end_retreat", "monster_retreat")
+SCENE_TACTIC_FAMILIES = ("upper_route", "lower_route", "dead_end_retreat", "monster_retreat", "pen_pipe_climb")
 # Rebuilt from sections, with tactics that change along the way.
 COMPOSED_RECIPES = {
     "chained_obstacles": ["enemy", "pipe", "upper_route", "enemy"],
@@ -34,12 +34,18 @@ COMPOSED_RECIPES = {
     # Full SMB 1-1's opening (user, 2026-10-25): blocks overhead, walkers
     # between pipes and dropping from a high row, then a pit.
     "full_smb_blocks_proxy": ["blocks", "pipe_pen", "high_row", "gap"],
+    # 1-1 past its fourth pipe (user, 2026-10-28): a pit, a low row with a
+    # Goomba walking off it, the high row with another, a wider pit.
+    "full_smb_rows_proxy": ["gap", "low_row", "high_row", "gap"],
 }
 STANDALONE = {
     "upper_route": ["upper_route"],
     "lower_route": ["lower_route"],
     "dead_end_retreat": [("dead_end", {"inside": True})],
     "monster_retreat": [("monster", {"inside": True})],
+    # Started in a pen between pipes, before one too tall to climb from a
+    # standstill, walkers behind (user, 2026-10-28).
+    "pen_pipe_climb": [("pipe_pen", {"inside": True})],
 }
 # Clones: siblings on the same layouts that differ only in their tactics.
 CHOICE_FAMILIES = ("choice_advance", "choice_hold_area", "choice_retreat")

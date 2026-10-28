@@ -69,10 +69,10 @@ no learned weights. Every family belongs to exactly one stage:
   before an enemy, enemy hops, stomps and patrols, pipe and stomp mounts, pit
   leaps, platform hops, landing on an enemy, holding an area, the direct
   route of the choice scene).
-- **Tactic: 45 families**, for strategy-dependent selection and termination:
+- **Tactic: 47 families**, for strategy-dependent selection and termination:
   16 strategy families (seven tactics and a Goomba under a block, under each
-  strategy), nine composed
-  levels, four scene-driven route/response families, three alternate-route
+  strategy), ten composed
+  levels, five scene-driven route/response families, three alternate-route
   families, three waiting/proceeding families, and 10 families whose tactic
   changes partway through. These are excluded from skill training and
   evaluation.

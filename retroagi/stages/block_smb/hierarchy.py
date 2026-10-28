@@ -15,6 +15,7 @@ FAMILY_PREREQUISITES = {
     "mixed_section": ("chained_obstacles", "chained_enemy_gauntlet"),
     "full_smb_opening_proxy": ("chained_obstacles", "tall_pipe_jump"),
     "full_smb_blocks_proxy": ("full_smb_opening_proxy", "single_gap", "action_stomp_down"),
+    "full_smb_rows_proxy": ("full_smb_blocks_proxy", "single_gap"),
     "tactics_bridge_sequence": ("wait_timing", "bridge_mount", "bridge_dismount"),
     "tactics_obstacle_sequence": ("enemy_hop", "tall_pipe_jump", "enemy_patrol"),
     "tactics_bridge_then_gap": ("tactics_bridge_sequence", "single_gap", "stair_climb"),
