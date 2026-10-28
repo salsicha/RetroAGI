@@ -55,7 +55,20 @@ Built:
   near end and drops in front of Mario), `high_row`, a wider pit. The
   teacher wins all 12, advancing on the floor under the rows.
 
-Not yet looked into: why Full SMB learning makes the agent worse.
+Why Full SMB learning made the agent worse, found so far: in its first
+round the world model's loss on Full SMB play was +6.6 and the trackers'
++3.7 (on Block SMB data -1.98 and -1.53); both fell over the next rounds,
+the world model reshaped by them while play collapsed (the tactic layer's
+choices could not change before round 41; the skill's reward steps were
+small). The game's bounding-box bytes wrap past row 255: a Mario falling
+into a pit read as standing at the top of the screen, an action that ended
+in a pit as a 252-pixel rise, a huge error against the world model's small
+uncertainty. Full SMB truth now unwraps the rows from the game's own row
+and screen page (truth._rows; Mario and every enemy slot). With them, on
+the model before Full SMB learning: actions' end errors 4 to 5 pixels
+median, 41 to 42 at the 90th percentile (Block SMB about 16); success
+predicted 99% where 69% succeed. Not yet tried: Full SMB learning with the
+unwrapped labels.
 
 ## 2026-10-27 — The Goomba under the block, per strategy (user decision; built)
 

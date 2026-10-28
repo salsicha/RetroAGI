@@ -53,6 +53,24 @@ def test_the_games_own_boxes_are_read_in_world_pixels(first_goomba):
     assert frame["level_x"] == mario[0] - 3 and frame["time"] > 0
 
 
+def test_a_box_falling_off_the_screen_keeps_going_down():
+    # Bytes read from 1-1 as Mario fell into its first pit (2026-10-28): the
+    # box's rows wrap past 255 while the game's own row and page go on.
+    from retroagi.stages.full_smb.truth import PLAYER_BOX, PLAYER_Y, PLAYER_Y_PAGE
+
+    def mario_rows(page, y, top, bottom):
+        ram = np.zeros(2048, np.uint8)
+        ram[PLAYER_BOX : PLAYER_BOX + 4] = (115, top, 125, bottom)
+        ram[PLAYER_Y_PAGE], ram[PLAYER_Y] = page, y
+        mario = true_frame(ram)["mario"]
+        return mario[1], mario[3]
+
+    assert mario_rows(1, 176, 196, 208) == (196, 208)  # standing on the floor
+    assert mario_rows(1, 234, 254, 10) == (254, 266)
+    assert mario_rows(1, 246, 10, 22) == (266, 278)
+    assert mario_rows(2, 3, 23, 35) == (279, 291)
+
+
 def test_a_refilled_slot_is_a_new_enemy(first_goomba):
     recorder, ids = first_goomba
     assert ids[104][0] == 0 and ids[300][0] == 1
