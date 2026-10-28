@@ -1,0 +1,16 @@
+{
+  "source": "/home/amoran/repos/RetroAGI/artifacts/block_smb/tactic_20261027/best.pt",
+  "source_sha256": "a40f6b4720a7e4d0e0d7259be99288f41839b76126686656861b4759137f210f",
+  "initial_checkpoint": "/home/amoran/repos/RetroAGI/artifacts/block_smb/rec_tactic_20261028/init.pt",
+  "learner": "tactic",
+  "seed": 2026101201,
+  "families": [
+    "pen_pipe_climb",
+    "full_smb_rows_proxy"
+  ],
+  "extra_layouts": "",
+  "epochs_per_round": 64,
+  "load_migrations": [
+    "skill_ordered_choice_zero_initialized"
+  ]
+}
