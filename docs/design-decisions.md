@@ -38,13 +38,27 @@ climb_forward (the speed run's plan). Proposed and agreed (user: "yes"):
   backward jumps whatever the action; the outcome is the action's and the
   scene's. A saved model loses that reading on load
   (`world_model_reads_no_tactic`).
+  Measured after training (predictions_20261029, 40 passes on every
+  dataset): on the Block SMB episodes both learned from, it is a little
+  less precise than the one reading the tactic (end error median / 90th
+  percentile: runs 7.3 / 25.2 pixels against 6.0 / 16.7, jumps 7.7 / 17.8
+  against 7.1 / 16.3): the tactic tells it where the teacher meant an
+  action to end. On Full SMB 1-1 (six playthroughs by each agent, nothing
+  learning; artifacts/full_smb/world_model_compare_20261028) each is far
+  more precise on the play carried out toward its own predictions (all
+  actions, median: 11.9 against 30.2 on the new agent's play, 20.7 against
+  11.0 on the old one's) and about as precise as the other on its own
+  (11.9 / 53.1 against 11.0 / 50.9). Removing the reading did not make it
+  more precise; whether it helps 1-1 is for the logged playthroughs.
 - **Run-ups in deployed play.** Every run the world model carried out
   braked at its end (`destination_of` set no run-up), so no jump after a
   run took off running: 1-1's first pit was jumped from a standstill and
   fell short. The world model now also says whether a run keeps its speed
   into the jump after it, trained from the teacher's executed runs (about a
   third are run-ups); a saved model gains that output untrained on load
-  (`world_model_predicts_run_ups`), starting at "brakes".
+  (`world_model_predicts_run_ups`), starting at "brakes". After training
+  it is right for 98.7% of the teacher's executed runs (1,028 of 3,253 are
+  run-ups).
 - **`action_run_jump_gap`** (skill): a pit 24 to 64 pixels wide reached from
   48 to 120 pixels back (1-1's first pit is 32 wide, 160 past the last
   pipe); every other pit lesson starts Mario near the edge. First drawn from
