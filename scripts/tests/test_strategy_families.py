@@ -98,7 +98,7 @@ def test_there_are_two_strategies_and_fourteen_families_one_per_tactic_and_strat
         "low_choice_alternate_route",
         "low_choice_advance",
     }
-    assert len(families) == 47
+    assert len(families) == 49
 
 
 @pytest.mark.timeout(600)
@@ -202,7 +202,7 @@ def test_block_goomba_max_points_stomps_it_clear_of_the_block_and_speed_run_goes
             split="validation", seed=7, sample_index=0, family=family, difficulty=difficulty,
             calibrate_deadline=False,
         )
-        for family in STRATEGY_SCENE_FAMILIES
+        for family in ('speed_run_block_goomba', 'max_points_block_goomba')
     }
     fast, rich = made["speed_run_block_goomba"], made["max_points_block_goomba"]
     assert fast.scenario["platforms"] == rich.scenario["platforms"]  # the same layout
@@ -259,7 +259,7 @@ def test_block_goomba_arriving_running_max_points_stops_short_of_the_block():
             ).parameters["arrival"]
             == "running"
         )
-        for family in STRATEGY_SCENE_FAMILIES
+        for family in ('speed_run_block_goomba', 'max_points_block_goomba')
     }
     fast, rich = made["speed_run_block_goomba"], made["max_points_block_goomba"]
     assert fast.scenario["platforms"] == rich.scenario["platforms"]
@@ -283,6 +283,58 @@ def test_block_goomba_arriving_running_max_points_stops_short_of_the_block():
     assert fastest >= 2.0  # it ran in
     assert held and max(held) + 10 < block  # and stopped short of the block
     env.close()
+
+
+@pytest.mark.timeout(900)
+def test_block_goomba_as_in_1_1_has_a_row_past_the_block_with_the_goomba_under_it():
+    # User, 2026-10-29: in 1-1 the first Goomba starts under the brick row
+    # past the first question block.
+    sample = next(
+        s
+        for index in range(12)
+        if (
+            s := sample_block_smb_monte_carlo_scenario(
+                split="validation", seed=21, sample_index=index, family="max_points_block_goomba",
+                difficulty="medium", calibrate_deadline=False,
+            )
+        ).parameters["second_row"]
+    )
+    block, row = sample.scenario["platforms"][1], sample.scenario["platforms"][2]
+    assert row[1] == block[1] and 48 <= row[0] - (block[0] + block[2]) <= 64
+    assert row[2] == 16 * sample.parameters["second_row"]
+    assert row[0] < sample.parameters["goomba_x"] < row[0] + row[2]
+    assert sample.scenario["strategy_route"].startswith("goomba=stomp")
+
+
+@pytest.mark.timeout(1800)
+def test_pen_from_pipe_max_points_stomps_the_walker_and_speed_run_passes_it():
+    # User, 2026-10-29: in 1-1 most speed runs jumped down from a pipe into the
+    # pen beyond it beside its Goomba and were caught.
+    made = {
+        family: sample_block_smb_monte_carlo_scenario(
+            split="validation", seed=21, sample_index=1, family=family, difficulty="easy",
+            calibrate_deadline=False,
+        )
+        for family in ("speed_run_pen_from_pipe", "max_points_pen_from_pipe")
+    }
+    fast, rich = made["speed_run_pen_from_pipe"], made["max_points_pen_from_pipe"]
+    assert fast.scenario["platforms"] == rich.scenario["platforms"]  # the same layout
+    first, second = fast.scenario["platforms"][1], fast.scenario["platforms"][2]
+    assert first[3] <= second[3] <= 64  # the second pipe as tall or taller
+    # Mario starts on the first pipe.
+    assert first[0] <= fast.scenario["mario"][0] <= first[0] + first[2]
+    assert fast.scenario["strategy_route"].startswith("pen=pass")
+    assert rich.scenario["strategy_route"].startswith("pen=stomp")
+    for sample, stomped in ((fast, False), (rich, True)):
+        env = MarioScenarioEnv()
+        env.reset(scenario=sample.scenario, seed=0)
+        env.render = lambda: None
+        for action in sample.oracle["actions"]:
+            env.step(action)
+            if env._goal_credited:
+                break
+        assert env._goal_credited and env.enemies[0]["dead"] == stomped
+        env.close()
 
 
 def test_finishing_after_the_deadline_misses_the_objective():

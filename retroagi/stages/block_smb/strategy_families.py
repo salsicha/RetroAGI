@@ -66,8 +66,13 @@ STRATEGY_TACTIC_FAMILIES = {
 # a stomp jump hit the block and fell short): block_goomba, a Goomba
 # walking toward Mario under a block or a short row of blocks. Max points
 # waits until it is clear of the block and stomps it; speed run ignores it
-# and jumps over the block (_block_goomba_scene).
-STRATEGY_SCENE_FAMILIES = {f"{strategy}_block_goomba": (strategy, "block_goomba") for strategy in STRATEGIES}
+# and jumps over the block (_block_goomba_scene). And (user, 2026-10-29: in
+# 1-1 most speed runs jumped down from a pipe into the pen beyond it beside
+# its Goomba) pen_from_pipe: Mario on a pipe, a walker pacing the pen beyond
+# it, a taller pipe after. Max points stomps it; speed run passes it
+# (_pen_from_pipe_scene).
+SCENES = ("block_goomba", "pen_from_pipe")
+STRATEGY_SCENE_FAMILIES = {f"{strategy}_{scene}": (strategy, scene) for strategy in STRATEGIES for scene in SCENES}
 STRATEGY_FAMILIES = {**STRATEGY_TACTIC_FAMILIES, **STRATEGY_SCENE_FAMILIES}
 # A speed run wins within this much of its teacher's (the fastest) time.
 SPEED_SLACK = 1.1
@@ -82,6 +87,8 @@ MARIO_WIDTH = 10
 ENEMY_HEIGHT = 14
 ENEMY_WIDTH = 12
 BLOCK = 16
+# A pipe's width (1-1's are 32).
+PIPE_WIDTH = 32
 COIN_SIZE = 10
 PLATFORM_WIDTH = 48
 # Enemies walking the way, by difficulty: (fewest, most).
@@ -283,7 +290,11 @@ def _block_goomba_scene(rng, difficulty: str) -> tuple[dict, dict]:
     Half the layouts start Mario close and the Goomba near the block (he
     waits where he starts); the other half start him far from the block with
     the Goomba farther beyond it, so that he arrives running, as in 1-1
-    (params["arrival"]: "standing" or "running").
+    (params["arrival"]: "standing" or "running"). In half, as in 1-1, a row
+    of three to five bricks follows at the same height 48 to 64 pixels past
+    the first, the Goomba starting under it (params["second_row"]: its
+    blocks, 0 without; user, 2026-10-29: in 1-1 the agent crept in under the
+    first block and stomped from beneath it).
 
     Two plans (route_tactics), each strategy keeping its own
     (scenario["route_required"]: a layout whose required plan is not the
@@ -311,7 +322,15 @@ def _block_goomba_scene(rng, difficulty: str) -> tuple[dict, dict]:
     goomba = span_end + rng.randint(*BLOCK_GOOMBA_AHEAD)
     if running:
         goomba += int(speed * (49 + max(0, block - x0 - 67) / 2.5))
-    goal_x = span_end + rng.randint(144, 208)
+    row = rng.randint(3, 5) if rng.random() < 0.5 else 0
+    last = span_end
+    if row:
+        row_x = span_end + rng.randint(48, 64)
+        platforms.append([row_x, bottom - BLOCK, BLOCK * row, BLOCK])
+        kinds.append("brick")
+        last = row_x + BLOCK * row
+        goomba = row_x + rng.randint(8, BLOCK * row - 8)
+    goal_x = last + rng.randint(144, 208)
     world = goal_x + 96
     platforms[0][2] = world
     # Out from under the block on Mario's side, with a little room.
@@ -357,12 +376,73 @@ def _block_goomba_scene(rng, difficulty: str) -> tuple[dict, dict]:
     }
     params = {
         "arrival": "running" if running else "standing",
+        "second_row": row,
         "blocks": count,
         "block_x": block,
         "block_bottom_up": FLOOR - bottom,
         "goomba_x": goomba,
         "goomba_speed": speed,
         "clear_frames": clear,
+        "difficulty_bin": difficulty,
+    }
+    return scenario, params
+
+
+def _pen_from_pipe_scene(rng, difficulty: str) -> tuple[dict, dict]:
+    """pen_from_pipe (STRATEGY_SCENE_FAMILIES): Mario on a pipe 32 to 48
+    pixels tall; beyond it a pen 80 to 144 pixels wide, a walker pacing its
+    floor and turning at each pipe; a second pipe as tall or up to 16 taller
+    (at most 64); the goal on the floor past it. As 1-1 between its 48- and
+    64-pixel pipes, where most speed runs jumped down into the pen beside the
+    Goomba and were caught (user, 2026-10-29).
+
+    Two plans (route_tactics), each strategy keeping its own
+    (scenario["route_required"]):
+    - pen=stomp (max points): stomp the walker (its points), then over the
+      second pipe;
+    - pen=pass (speed run): leave it alone (keep_alive): into the pen behind
+      it or from pipe to pipe, and over the second pipe."""
+    tier = ("easy", "medium", "hard").index(difficulty)
+    first = rng.randint(32, 48)
+    second = min(64, first + rng.choice((0, 8, 16)))
+    a = rng.randint(32, 64)
+    between = rng.randint(80, 144)
+    b = a + PIPE_WIDTH + between
+    goal_x = b + PIPE_WIDTH + rng.randint(64, 128)
+    world = goal_x + 96
+    speed = round(rng.uniform(*((0.4, 0.5), (0.5, 0.6), (0.6, 0.7))[tier]), 2)
+    walker = a + PIPE_WIDTH + 8 + rng.randint(0, between - 32)
+    way = rng.choice((-1, 1))
+    schedules = {
+        "pen=stomp": [segment("advance", 1, stomp=0, past_enemy=0), segment("advance", 1)],
+        "pen=pass": [segment("advance", 1, keep_alive=[0])],
+    }
+    scenario = {
+        "world_width": world,
+        "mario": [a + rng.randint(4, PIPE_WIDTH - MARIO_WIDTH - 4), FLOOR - first - 20],
+        "platforms": [
+            [0, FLOOR, world, 20],
+            [a, FLOOR - first, PIPE_WIDTH, first],
+            [b, FLOOR - second, PIPE_WIDTH, second],
+        ],
+        "platform_kinds": [None, "pipe", "pipe"],
+        "coins": [],
+        "enemies": [[walker, FLOOR - ENEMY_HEIGHT, a + PIPE_WIDTH, b - ENEMY_WIDTH, speed, way]],
+        "goal": [goal_x, FLOOR - 20, 16, 20],
+        "goal_requires_support": True,
+        "reward_goal_distance_shaping": 2.0,
+        "tactics": schedules["pen=pass"],
+        "route_tactics": schedules,
+        "route_required": {"speed_run": "pen=pass", "max_points": "pen=stomp"},
+        "frame_budget": int(600 + world),
+    }
+    params = {
+        "first_pipe": first,
+        "second_pipe": second,
+        "pen_width": between,
+        "walker_x": walker,
+        "walker_speed": speed,
+        "walker_way": way,
         "difficulty_bin": difficulty,
     }
     return scenario, params
@@ -378,6 +458,8 @@ def strategy_scene(rng, difficulty: str, tactic: str) -> tuple[dict, dict]:
     """
     if tactic == "block_goomba":
         return _block_goomba_scene(rng, difficulty)
+    if tactic == "pen_from_pipe":
+        return _pen_from_pipe_scene(rng, difficulty)
     if tactic not in TACTICS:
         raise ValueError(f"unknown tactic {tactic!r}")
     main = _hold_main(rng, difficulty) if tactic == "hold_ground" else _main(rng, difficulty, tactic)

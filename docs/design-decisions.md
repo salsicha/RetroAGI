@@ -26,6 +26,38 @@ commit). How the parts work is described in the
   the training set"); the recorded failures are fixed in the teacher. A
   failed gate is fixed in the teacher or the policy, never bypassed.
 
+## 2026-10-29 — The pen from a pipe; the first Goomba as in 1-1 (user decision; built)
+
+The 47 failures of the 48 logged 1-1 playthroughs with landings from vision
+(failures_20261030_landing; one finished): 16 falls into the first and
+second pits, 15 deaths in the pen between pipes 2 and 3 (12 speed runs:
+from pipe 2 straight down into the pen beside its Goomba, caught while
+going for the 64-pixel pipe 3), 9 at the first Goomba (creeping in under
+the first question block, then stomping from beneath it or waiting under
+it), 5 on the brick rows past the first pit, 2 further on. Proposed and
+agreed (user: "Yes"):
+
+- Execution, tried and not kept: a landing on a still thing bounded to it
+  (Mario's middle 8 pixels inside its ends, then only its real ends: not
+  seams vision splits a floor at, enemies standing on it or the picture's
+  edge), and vision's height only within a jump's reach (83 pixels: the NES
+  motion model's highest, at a full run). The same agent replayed on 1-1:
+  pit falls 16 down to 10 to 14, but average distance 738, 927 and 868
+  against 968 with landings from vision alone, and no finish (48 runs; the
+  noise in an average about 70). Not kept.
+- `pen_from_pipe` (strategy scene, both strategies; `_pen_from_pipe_scene`):
+  Mario on a pipe 32 to 48 pixels tall, a walker pacing the pen beyond it
+  (80 to 144 wide), a second pipe as tall or up to 16 taller (at most 64),
+  the goal past it. Max points stomps the walker; speed run leaves it alive
+  (into the pen behind it or from pipe to pipe). The recording teacher wins
+  all 24 sampled layouts, max points stomping in 11 (the twelfth would miss
+  its points and be left out).
+- `block_goomba` as in 1-1: in half its layouts a row of three to five
+  bricks follows at the same height 48 to 64 pixels past the first block,
+  the Goomba starting under it. The recording teacher wins all 24 sampled
+  layouts: max points stops short, waits and stomps (12 of 12), speed run
+  goes over and leaves the Goomba alone (12 of 12).
+
 ## 2026-10-29 — Landings take their height from vision; the flagpole is the finish (user decision; built)
 
 The chain of 2026-10-28 (families_20261029) left 1-1 (48 logged
