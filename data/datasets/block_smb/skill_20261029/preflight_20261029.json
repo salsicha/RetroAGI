@@ -1,0 +1,25 @@
+{
+  "source": "/home/amoran/repos/RetroAGI/artifacts/block_smb/tactic_20261028/best.pt",
+  "source_sha256": "3d8617691e136610249c7ae397fe57db274c3c346860cfb730b382d58aa6e9e4",
+  "initial_checkpoint": "/home/amoran/repos/RetroAGI/artifacts/block_smb/rec_skill_20261029/init.pt",
+  "learner": "skill",
+  "seed": 2026101201,
+  "families": [
+    "action_run_jump_gap",
+    "action_jump_gap",
+    "action_jump_gap_back",
+    "single_gap",
+    "pit_leap",
+    "enemy_gap",
+    "skill_gap_descent",
+    "action_jump_down",
+    "action_jump_down_back"
+  ],
+  "extra_layouts": "",
+  "epochs_per_round": 64,
+  "load_migrations": [
+    "skill_ordered_choice_zero_initialized",
+    "world_model_reads_no_tactic",
+    "world_model_predicts_run_ups"
+  ]
+}
