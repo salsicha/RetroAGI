@@ -488,6 +488,7 @@ def test_primitive_maneuvers_are_skill_families_without_an_action_learner():
         ("action_wait", "hold_ground"),
         ("action_climb_pipe", "climb_forward"),
         ("action_stomp_down", "advance"),
+        ("action_run_jump_gap", "advance"),
     ],
 )
 def test_a_single_action_family_asks_for_one_tactic_from_start_to_finish(family, tactic):
@@ -523,3 +524,30 @@ def test_going_back_to_the_left_is_never_labelled_advance(family):
     assert left
     for tactic in left:
         assert tactic.stance in BACKWARD_TACTICS
+
+
+def test_a_pit_reached_running_is_jumped_running():
+    # User, 2026-10-28: 1-1's first pit is reached running, and the skill ran
+    # into it; the teacher runs up (keeping its speed) and jumps.
+    import copy
+
+    from retroagi.stages.block_smb.teacher_replay import replay
+
+    sample = sample_block_smb_monte_carlo_scenario(
+        split="train", seed=5, sample_index=1, family="action_run_jump_gap", difficulty="hard"
+    )
+    assert sample.parameters["edge_distance"] >= 120 and sample.parameters["gap_width"] > 48
+    played = replay(copy.deepcopy(sample.scenario), family="action_run_jump_gap")
+    assert played["won"]
+    modes = [(c["skill"]["mode"], bool(c["skill"].get("carry"))) for c in played["commands"]]
+    assert ("run", True) in modes and modes[-1] == ("jump", False)
+    env = MarioScenarioEnv()
+    env.reset(scenario=copy.deepcopy(sample.scenario))
+    env.render = lambda: None
+    for action in played["actions"]:
+        grounded = env.mario["on_ground"]
+        env.step(action)
+        if grounded and not env.mario["on_ground"]:
+            break
+    assert env.mario["vx"] >= 2.0  # it took off running
+    env.close()

@@ -24,8 +24,9 @@ truth and not used while the skills and tactics train (until then each
 
 - **World model:** an LSTM run once at the start of each action, after the
   skill has chosen it, predicting that action's outcome: where Mario and its
-  object end, how many frames it takes (for a wait, how long), and the
-  chance it succeeds. Its prediction is the executor's destination.
+  object end, how many frames it takes (for a wait, how long), the chance
+  it succeeds, and whether a run keeps its speed into the jump after it.
+  Its prediction is the executor's destination.
 - **Target trackers:** run every frame, each predicting when and where its
   enemy and Mario will collide (a stomp or a hit). The executor aims stomps
   at the collision point and ends a wait or walk when a collision calls for
@@ -59,12 +60,12 @@ strategy → tactic (option-critic)
 Training proceeds **skill → tactic**, freezing lower layers. The executor has
 no learned weights. Every family belongs to exactly one stage:
 
-- **Skill: 43 families**, each played under one supplied tactic from start to
-  finish: the 19 isolated maneuvers (walk, jump a gap, climb a step, jump onto
+- **Skill: 44 families**, each played under one supplied tactic from start to
+  finish: the 20 isolated maneuvers (walk, jump a gap, climb a step, jump onto
   a raised platform, walk off a ledge, jump down and stomp, each right and
   left, plus stomping an enemy on a raised platform both ways, holding a
-  spot on a moving platform, climbing onto a pipe and stomping down from one
-  onto a walker below), two enemy-bypass families, nine local route
+  spot on a moving platform, climbing onto a pipe, stomping down from one
+  onto a walker below, and jumping a pit reached running), two enemy-bypass families, nine local route
   maneuvers, and 13 older local families (flat runs, single gaps, a pit
   before an enemy, enemy hops, stomps and patrols, pipe and stomp mounts, pit
   leaps, platform hops, landing on an enemy, holding an area, the direct

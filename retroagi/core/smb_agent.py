@@ -46,7 +46,6 @@ from .tokens import (
     DEFAULT_STRATEGY,
     EXECUTION_WIDTH,
     SKILL_MODES,
-    TACTIC_WIDTH,
     SkillToken,
     StrategyToken,
     TacticToken,
@@ -97,19 +96,22 @@ class Decision:
     predicted: Optional[dict] = None
 
 
-def destination_of(action: ActionToken, outcome, contact=None) -> SkillToken:
+def destination_of(action: ActionToken, outcome, contact=None, run_up: bool = False) -> SkillToken:
     """The executor's destination for an action from its predicted outcome
     (core/world_model OUTCOME_FIELDS: dx, dy, object_dx, object_dy, frames):
     a wait holds for the predicted frames (1 to HOLD_FRAMES); a run or a jump
     goes to the predicted end, one that ends on an enemy (a stomp) to
-    ``contact`` (the collision trackers' meeting point) when given."""
+    ``contact`` (the collision trackers' meeting point) when given; a run
+    keeps its speed to its end when ``run_up`` (the world model's "carry":
+    the teacher's run would have, before a jump)."""
     if action.verb == "wait":
         return SkillToken("hold", 0, 0, frames=int(min(HOLD_FRAMES, max(1, round(outcome[4])))))
     stomp = action.target[0] == "enemies"
     dx, dy = contact if (stomp and contact is not None) else outcome[:2]
     x = int(min(256, max(-256, round(dx))))
     y = int(min(240, max(-240, round(dy))))
-    return SkillToken(VERB_MODES[action.verb], x, y)
+    mode = VERB_MODES[action.verb]
+    return SkillToken(mode, x, y, carry=bool(run_up) and mode == "run")
 
 
 def scene_rows(scenes: Sequence[SceneObservation]) -> list[tuple]:
@@ -595,30 +597,17 @@ class SMBAgents:
         empty = model.initial(1, self.device)
         hidden = torch.stack([(starting[i].world or (empty[0][0], empty[1][0]))[0] for i in chosen])
         cell = torch.stack([(starting[i].world or (empty[0][0], empty[1][0]))[1] for i in chosen])
-        # What each action was chosen under: its tactic and strategy switch.
-        context = torch.stack(
-            [
-                torch.cat(
-                    (
-                        encode_tactic(made[i].tactic)
-                        if made[i].tactic is not None
-                        else torch.zeros(TACTIC_WIDTH),
-                        encode_strategy(made[i].strategy),
-                    )
-                )
-                for i in chosen
-            ]
-        ).to(self.device)
         out, (hidden, cell) = model.predict(
-            tokens[rows], present[rows], objects, mario, feedback, verbs, pointers, (hidden, cell),
-            context=context,
+            tokens[rows], present[rows], objects, mario, feedback, verbs, pointers, (hidden, cell)
         )
         for j, i in enumerate(chosen):
             copy = starting[i]
             copy.world = (hidden[j], cell[j])
             made[i].predicted = {name: value[j] for name, value in out.items()}
             mean = out["mean"][j].tolist()
-            made[i].skill = destination_of(actions[j], mean, self._contact(copy, actions[j], scenes[i]))
+            made[i].skill = destination_of(
+                actions[j], mean, self._contact(copy, actions[j], scenes[i]), run_up=bool(out["carry"][j] > 0)
+            )
 
     def _contact(self, copy: _Copy, action, scene):
         """Where the collision trackers expect ``action``, ending on an enemy

@@ -448,6 +448,8 @@ def compose(rng: random.Random, difficulty: str, parts: list) -> tuple[dict, dic
                 end["on"] += p0
             if "past_enemy" in end:
                 end["past_enemy"] += e0
+            if "enemy_clear_of" in end:
+                end["enemy_clear_of"] = [end["enemy_clear_of"][0] + e0, end["enemy_clear_of"][1]]
             seg["end"] = end
             if "stomp" in seg:
                 seg["stomp"] += e0

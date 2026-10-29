@@ -2529,12 +2529,21 @@ def load_layered_checkpoint(path, device="cpu"):
         )
         checkpoint["world_model"] = None
         checkpoint.setdefault("load_migrations", []).append("world_model_reads_the_tracked_list")
-    if "memory.context.weight" not in state:
-        # The world model reads the tactic and the strategy switch each action
-        # was chosen under (user, 2026-10-18): that reading starts at zero, so
-        # what it learned predicts as it did.
-        state.update({name: value for name, value in fresh.items() if name.startswith("memory.context.")})
-        checkpoint.setdefault("load_migrations", []).append("world_model_reads_tactic_and_strategy")
+    if "memory.context.weight" in state:
+        # The world model no longer reads the tactic and the strategy switch
+        # an action was chosen under (user, 2026-10-28): it had read where a
+        # jump ends from the tactic. Its other weights are a start.
+        for name in [name for name in state if name.startswith("memory.context.")]:
+            state.pop(name)
+        checkpoint.setdefault("load_migrations", []).append("world_model_reads_no_tactic")
+    if "memory.out.weight" in state and state["memory.out.weight"].shape != fresh["memory.out.weight"].shape:
+        # It also says whether a run keeps its speed (a run-up): the new
+        # output starts as an untrained one does; the others are kept.
+        for name in ("memory.out.weight", "memory.out.bias"):
+            grown = fresh[name].clone()
+            grown[: state[name].shape[0]] = state[name]
+            state[name] = grown
+        checkpoint.setdefault("load_migrations", []).append("world_model_predicts_run_ups")
     if destination_skill or "skill.heads.verb.weight" not in state:
         # The skill's action heads (a verb and the object it is aimed at) and
         # its history of actions are new: every skill tensor that is no longer

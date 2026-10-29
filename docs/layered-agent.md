@@ -22,7 +22,7 @@ Decisions behind this design, with their reasons and status, are listed in
 | Vision | Screen pixels | Mario, objects, surfaces, gaps, support/contact; each enemy's kind and, where its game's labels tell them (Full SMB), its object type |
 | Tactic | Strategy, current scene, the executor's kinematics, held tactic/age, the executor's report on the last action, tactic memory | Persistent categorical tactic, termination probability, option values |
 | Skill | Tactic, strategy context, current scene, the executor's kinematics, last 16 actions, measured execution feedback | An action: a verb and a pointer to one object it sees |
-| World model (LSTM; not used in Block SMB training) | The chosen action, the tactic and strategy it was chosen under, the scene at its start (its enemies and moving platforms from the list of tracked things, seen or out of sight, with their velocities), Mario's kinematics, the last feedback, its own state from earlier actions | The action's outcome: where Mario's feet and its object end, how many frames it takes (for a wait, how long), the chance it succeeds |
+| World model (LSTM; not used in Block SMB training) | The chosen action, the scene at its start (its enemies and moving platforms from the list of tracked things, seen or out of sight, with their velocities), Mario's kinematics, the last feedback, its own state from earlier actions | The action's outcome: where Mario's feet and its object end, how many frames it takes (for a wait, how long), the chance it succeeds, and for a run whether it keeps its speed into the jump after it (a run-up) |
 | Collision trackers (not used in Block SMB training) | Every frame: the executor's kinematics of each enemy on the list of tracked things (seen, or out of sight where it vanished) and of Mario, what vision shows (or last showed) of the enemy, how long it has been out of sight, the action in progress | When and where that enemy and Mario will touch, and whether as a stomp or a hit |
 | Executor | The action's end as its destination (in Block SMB training: the teacher's ground-truth version of the action), per-frame vision | One of six emulator button combinations |
 
@@ -179,7 +179,8 @@ before a lesson's first decision let the tracks see enemies move.
 Without the teacher (deployed play, `SMBAgents(world_model=True)`), the
 world model's predicted outcome is the executor's destination
 (`smb_agent.destination_of`): a hold lasts the predicted frames, runs and
-jumps go to the predicted end (a run-up keeps its speed), a stomp goes to the
+jumps go to the predicted end, a run the world model says is a run-up keeps
+its speed (the teacher's are, about a third of its runs), a stomp goes to the
 collision trackers' expected contact point. The executor ends a wait or a
 ground move as `threat` (feedback `collision_due`) when the trackers expect
 a hit within the lead a jump over that enemy needs, plus 5 frames
@@ -428,7 +429,7 @@ Mario starts and the size and place of what he jumps onto (steps, raised
 platforms, pipes, the route platforms' widths, heights and places), so the
 right destination is a different distance in each scene.
 
-Skill includes 19 isolated maneuver families (their historical `action_` names remain):
+Skill includes 20 isolated maneuver families (their historical `action_` names remain):
 
 | Families | Maneuver |
 |---|---|
@@ -443,6 +444,7 @@ Skill includes 19 isolated maneuver families (their historical `action_` names r
 | `action_wait` | Preserve a spot on a moving platform |
 | `action_climb_pipe` | Jump onto a pipe ahead, up to 64 pixels, sometimes with a walker coming from behind (Full SMB 1-1's pipes) |
 | `action_stomp_down` | Jump down from a pipe or step onto a walker below |
+| `action_run_jump_gap` | Run at a pit 32 to 64 pixels wide from 120 to 220 pixels back and jump it running (Full SMB 1-1's first pit) |
 
 A climb completes on a supported landing anywhere on the step: a tall step's
 landing can be at its near edge, and walking on from there would be a second
@@ -539,7 +541,7 @@ Tactic uses **47 families**, defined by `TACTIC_TRAINING_FAMILIES`:
 
 | Group | Families |
 |---|---|
-| Strategy (16) | Each of seven tactics under `speed_run_` and `max_points_`, and `block_goomba` (a Goomba walking under a block: max points waits for it to clear the block and stomps it, speed run goes over the block) |
+| Strategy (16) | Each of seven tactics under `speed_run_` and `max_points_`, and `block_goomba` (a Goomba walking under a block: max points waits for it to clear the block and stomps it, speed run goes over the block; in half its layouts Mario arrives running and max points stops short of the block first) |
 | Composed levels (10) | `chained_obstacles`, `chained_enemy_gauntlet`, `full_smb_opening_proxy`, `full_smb_blocks_proxy` (blocks overhead, a walker between pipes, a walker dropping from a high row, a pit), `full_smb_rows_proxy` (a pit, walkers walking off rows 64 and 128 pixels up, a wider pit), `mixed_section`, `tactics_bridge_sequence`, `tactics_obstacle_sequence`, `tactics_bridge_then_gap`, `tactics_mixed_sequence` |
 | Scene-driven routes/responses (5) | `upper_route`, `lower_route`, `dead_end_retreat`, `monster_retreat`, `pen_pipe_climb` (started in a pen between pipes before one 56 to 64 pixels tall, walkers behind) |
 | Alternate routes (2) | `choice_alternate_route`, `low_choice_alternate_route`, under `max_points` with visible points on the required path |

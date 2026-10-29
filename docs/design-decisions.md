@@ -26,6 +26,42 @@ commit). How the parts work is described in the
   the training set"); the recorded failures are fixed in the teacher. A
   failed gate is fixed in the teacher or the policy, never bypassed.
 
+## 2026-10-28 — Run-ups in deployed play; the Goomba and the pit reached running (user decision; built)
+
+The logged 1-1 playthroughs of tactic_20261028 (failures_20261029; nothing
+learning) left two killers: 1-1's first pit, where jumps fell short, and
+the first Goomba in max-points runs, where the tactic layer chose
+climb_forward (the speed run's plan). Proposed and agreed (user: "yes"):
+
+- **The world model no longer reads the tactic and strategy** an action was
+  chosen under (added 2026-10-18). Under climb_backward it predicted
+  backward jumps whatever the action; the outcome is the action's and the
+  scene's. A saved model loses that reading on load
+  (`world_model_reads_no_tactic`).
+- **Run-ups in deployed play.** Every run the world model carried out
+  braked at its end (`destination_of` set no run-up), so no jump after a
+  run took off running: 1-1's first pit was jumped from a standstill and
+  fell short. The world model now also says whether a run keeps its speed
+  into the jump after it, trained from the teacher's executed runs (about a
+  third are run-ups); a saved model gains that output untrained on load
+  (`world_model_predicts_run_ups`), starting at "brakes".
+- **`action_run_jump_gap`** (skill): a pit 32 to 64 pixels wide reached from
+  120 to 220 pixels back (1-1's first pit is 32 wide, 160 past the last
+  pipe); every other pit lesson starts Mario near the edge. The recording
+  teacher wins all 15 sampled layouts: a run, a run-up and a jump, taking
+  off 10 to 16 pixels before the edge, mostly at full speed.
+- **`block_goomba` arriving running**: in half its layouts Mario starts 208
+  to 320 pixels before the block, the Goomba drawn so that it is 8 to 48
+  pixels beyond the block when he gets there. Max points runs in, lets go a
+  slide's length (64 pixels) early, comes to rest 40 to 72 pixels short of
+  the block and holds until the Goomba is out from under it (a new segment
+  end, `enemy_clear_of`; the standing layouts use it too, in place of a
+  fixed hold length), then stomps it; speed run still goes over. The
+  recording teacher wins all 30 sampled running layouts under each strategy
+  with the Goomba 24 pixels inside the block to 56 beyond it, played with no
+  deadline: a speed run's deadline is calibrated from that same play, its
+  time and a tenth.
+
 ## 2026-10-28 — Full SMB learning reverted; the pens and the rows (user decision; built)
 
 Full SMB learning on 1-1 from tactic_20261027 (learn_20261028) fell back

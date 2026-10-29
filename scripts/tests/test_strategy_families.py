@@ -226,6 +226,65 @@ def test_block_goomba_max_points_stomps_it_clear_of_the_block_and_speed_run_goes
         env.close()
 
 
+def test_a_hold_can_end_when_a_walker_is_out_from_under_a_block():
+    from types import SimpleNamespace
+
+    from retroagi.stages.block_smb.tactic_schedule import _over
+
+    seg = segment("hold_area", 1, area=8, enemy_clear_of=[0, 100])
+    walker = {"x": 95, "w": 10, "dead": False}
+    env = SimpleNamespace(enemies=[walker], mario={"x": 40, "w": 10, "on_ground": True})
+    assert not _over(env, seg)  # its far edge at 105, still under
+    walker["x"] = 90
+    assert _over(env, seg)
+    walker.update(x=150, dead=True)
+    assert _over(env, seg)
+    back = segment("hold_area", -1, area=8, enemy_clear_of=[0, 100])
+    walker.update(x=99, dead=False)
+    assert not _over(env, back) and (walker.update(x=101) or _over(env, back))
+
+
+@pytest.mark.timeout(900)
+def test_block_goomba_arriving_running_max_points_stops_short_of_the_block():
+    # User, 2026-10-28: in 1-1 Mario comes to the first Goomba running.
+    made = {
+        family: next(
+            sample
+            for index in range(8)
+            if (
+                sample := sample_block_smb_monte_carlo_scenario(
+                    split="validation", seed=7, sample_index=index, family=family, difficulty="medium",
+                    calibrate_deadline=False,
+                )
+            ).parameters["arrival"]
+            == "running"
+        )
+        for family in STRATEGY_SCENE_FAMILIES
+    }
+    fast, rich = made["speed_run_block_goomba"], made["max_points_block_goomba"]
+    assert fast.scenario["platforms"] == rich.scenario["platforms"]
+    assert fast.scenario["strategy_route"].startswith("goomba=over")
+    stances = [seg["stance"] for seg in rich.scenario["tactics"]]
+    assert stances == ["advance", "hold_area", "advance", "advance"]
+    block = rich.parameters["block_x"]
+    env = MarioScenarioEnv()
+    env.reset(scenario=rich.scenario, seed=0)
+    env.render = lambda: None
+    held, fastest = [], 0.0
+    for action in rich.oracle["actions"]:
+        env.step(action)
+        if env._tactic_index == 0:
+            fastest = max(fastest, env.mario["vx"])
+        if env._tactic_index == 1:
+            held.append(env.mario["x"])
+        if env._goal_credited:
+            break
+    assert env._goal_credited and env.enemies[0]["dead"]
+    assert fastest >= 2.0  # it ran in
+    assert held and max(held) + 10 < block  # and stopped short of the block
+    env.close()
+
+
 def test_finishing_after_the_deadline_misses_the_objective():
     scenario = _flat(strategy="speed_run", strategy_objective={"deadline": 60})
     info, _, _ = _played(scenario, [1] * 400)  # walking to x=300 takes longer

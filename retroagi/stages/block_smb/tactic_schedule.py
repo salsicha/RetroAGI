@@ -44,6 +44,9 @@ A segment is a dictionary:
   ``{"bridge_crossed": True}`` the moving platform has been crossed,
   ``{"past_enemy": i}`` standing beyond enemy i, the way the segment goes
   (or the enemy is defeated),
+  ``{"enemy_clear_of": [i, x]}`` enemy i wholly on Mario's side of x (the
+  segment's way: behind it), or defeated, e.g. a walker out from under a
+  block,
   ``{"goal": True}`` never (the last segment).
 
 None of this ever reaches a policy: it supplies teacher tokens, route labels
@@ -56,7 +59,7 @@ from typing import Any, Iterable, Optional
 
 SCHEDULE_STANCES = ("advance", "alternate_route", "hold_area", "retreat")
 SEGMENT_KINDS = ("plain", "bridge", "plant", "monster")
-END_KEYS = ("on", "reach_x", "frames", "bridge_crossed", "past_enemy", "goal")
+END_KEYS = ("on", "reach_x", "frames", "bridge_crossed", "past_enemy", "enemy_clear_of", "goal")
 
 
 def segment(
@@ -127,7 +130,7 @@ def check_schedule(schedule: list, platform_count: int, enemy_count: int) -> Non
         for key in ("on",):
             if key in seg["end"] and not 0 <= seg["end"][key] < platform_count:
                 raise ValueError(f"platform {seg['end'][key]} is not in the layout")
-        for enemy in (seg["end"].get("past_enemy"), seg.get("stomp")):
+        for enemy in (seg["end"].get("past_enemy"), (seg["end"].get("enemy_clear_of") or [None])[0], seg.get("stomp")):
             if enemy is not None and not 0 <= enemy < enemy_count:
                 raise ValueError(f"enemy {enemy} is not in the layout")
         if any(not 0 <= i < enemy_count for i in seg.get("keep_alive", ())):
@@ -214,6 +217,11 @@ def _over(env, seg: dict) -> bool:
             else m["x"] + m["w"] <= enemy["x"]
         )
         return bool(m["on_ground"] and beyond)
+    if "enemy_clear_of" in end:
+        index, x = end["enemy_clear_of"]
+        enemy = env.enemies[index]
+        far = enemy["x"] + enemy["w"] if seg["direction"] > 0 else enemy["x"]
+        return bool(enemy["dead"] or (far - x) * seg["direction"] <= 0)
     raise ValueError(f"unknown segment end {end!r}")
 
 

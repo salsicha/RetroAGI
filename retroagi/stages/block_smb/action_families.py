@@ -18,10 +18,14 @@ platforms/enemies and immediate jumps down to a lower landing.
 | action_wait | stand still on a moving platform that carries Mario to the goal | hold_ground | how far it travels, its speed |
 | action_climb_pipe | jump up onto a pipe ahead from a standstill, sometimes a walker coming from behind | climb_forward | pipe height and width, distance to it, the walker's distance and speed |
 | action_stomp_down | jump down from a pipe or a step onto a walker on the floor below | advance | height, the walker's distance, speed and way |
+| action_run_jump_gap | run at a pit from far back and jump it running | advance | pit width, how far back Mario starts, the landing's width |
 
-The last two are Full SMB 1-1's (user, 2026-10-25: missing families found
-from the Full SMB failures): its pipes (32, 48 and 64 pixels tall) were not
-climbed, and its Goombas walk between them below Mario on their tops.
+action_climb_pipe and action_stomp_down are Full SMB 1-1's (user,
+2026-10-25: missing families found from the Full SMB failures): its pipes
+(32, 48 and 64 pixels tall) were not climbed, and its Goombas walk between
+them below Mario on their tops. action_run_jump_gap is too (user,
+2026-10-28): 1-1's first pit is reached running from the last pipe, and the
+skill ran into it; every other pit lesson starts Mario near the edge.
 
 The scenes going back to the left fit in one screen: the camera never
 scrolls back, so the whole scene must be in view from the start.
@@ -29,7 +33,8 @@ scrolls back, so the whole scene must be in view from the start.
 Difficulty splits each family's main parameter into three ranges. The ranges
 stay inside what a jump from a standstill reaches (about 50 pixels forward and
 66 up), so every combination is a scene the action can finish; the sampler
-still checks the teacher's route and leaves out any that it can't.
+still checks the teacher's route and leaves out any that it can't. The
+exception is action_run_jump_gap, whose pits need the run.
 
 Each generator returns (scenario, parameters, authored actions); the teacher's
 route under the layout's tactics replaces the authored actions
@@ -72,6 +77,7 @@ ACTION_FAMILIES = (
     "action_jump_down_back",
     "action_climb_pipe",
     "action_stomp_down",
+    "action_run_jump_gap",
 )
 
 # The main parameter's range at each difficulty.
@@ -83,6 +89,10 @@ STOMP_SPEEDS = {"easy": (0.4, 0.53), "medium": (0.54, 0.66), "hard": (0.67, 0.8)
 TRAVELS = {"easy": (48, 64), "medium": (65, 88), "hard": (89, 112)}
 # Pipe heights (1-1's are 32, 48 and 64), within a jump from a standstill.
 PIPE_HEIGHTS = {"easy": (24, 32), "medium": (33, 48), "hard": (49, 64)}
+# Pits reached running (1-1's are 32 and 48 wide), and how far back Mario
+# starts from the edge (1-1's first pit is 160 pixels past the last pipe).
+RUN_GAPS = {"easy": (32, 40), "medium": (41, 48), "hard": (49, 64)}
+RUN_IN = (120, 220)
 
 
 def _walk(rng, difficulty: str, back: bool) -> tuple[dict, dict, list]:
@@ -470,6 +480,35 @@ def action_jump_down_back(rng, difficulty):
     return _jump_down(rng, difficulty, back=True)
 
 
+def action_run_jump_gap(rng, difficulty: str):
+    """A pit Mario reaches running: he starts far back from its edge on a
+    floor, the far floor goes on; landing anywhere on its first stretch wins.
+    No jump is forced from where he stands: the teacher runs up and jumps
+    (its run-ups keep their speed), as a run through 1-1 would."""
+    width = rng.randint(*RUN_GAPS[difficulty])
+    distance = rng.randint(*RUN_IN)  # from Mario's front to the edge
+    x0 = rng.randint(24, 48)
+    edge = x0 + MARIO_WIDTH + distance
+    far = edge + width
+    room = rng.randint(64, 128)
+    world = far + room + 96
+    scenario = {
+        "world_width": world,
+        "mario": [x0, STANDING],
+        "platforms": [[0, FLOOR, edge, 20], [far, FLOOR, world - far, 20]],
+        "goal": [far, STANDING, room, 20],
+        "goal_requires_support": True,
+    }
+    parameters = {
+        "gap_width": width,
+        "edge_x": edge,
+        "edge_distance": distance,
+        "landing_room": room,
+        "difficulty_bin": difficulty,
+    }
+    return scenario, parameters, [1] * (distance // 2) + [2] * 16 + [1] * 40
+
+
 GENERATORS = {
     "action_walk": action_walk,
     "action_walk_back": action_walk_back,
@@ -490,6 +529,7 @@ GENERATORS = {
     "action_jump_down_back": action_jump_down_back,
     "action_climb_pipe": action_climb_pipe,
     "action_stomp_down": action_stomp_down,
+    "action_run_jump_gap": action_run_jump_gap,
 }
 
 

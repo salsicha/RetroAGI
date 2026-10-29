@@ -89,6 +89,11 @@ def test_the_features_the_agent_tracked_with_are_the_recordings():
             policy.skill.heads["verb"].weight.zero_()
             policy.skill.heads["verb"].bias.fill_(-20)
             policy.skill.heads["verb"].bias[VERBS.index("run")] = 20
+            # Every object scores the same: the run's object is the first in
+            # view, whatever the networks' random start (a run the teacher
+            # could not make held a frame at a time, minutes of play).
+            policy.skill.pointer_query.weight.zero_()
+            policy.skill.pointer_query.bias.zero_()
         record = lt.play_episodes(
             reference_vision()[0],
             policy,

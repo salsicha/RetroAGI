@@ -261,17 +261,36 @@ def _main(rng, difficulty: str, tactic: str) -> dict:
     }
 
 
+# block_goomba's running arrivals (user, 2026-10-28: in 1-1 Mario comes to
+# the first Goomba running): how far before the block Mario comes to rest to
+# let the Goomba out from under it (pixels from his front to the block), and
+# how far he slides once he lets go at a full run (2.5 pixels a frame, about
+# 62 pixels): the hold begins that far before, its area that and a little.
+BLOCK_GOOMBA_STOP = (40, 72)
+RUN_SLIDE = 64
+# Where the Goomba is when Mario, running, reaches the block: this far
+# beyond its far end (pixels). Running from rest, Mario covers about 67
+# pixels in his first 49 frames, then 2.5 a frame.
+BLOCK_GOOMBA_AHEAD = (8, 48)
+
+
 def _block_goomba_scene(rng, difficulty: str) -> tuple[dict, dict]:
     """block_goomba (STRATEGY_SCENE_FAMILIES): a floor; a question block, or a
     row of two or three blocks, its bottom 44 to 52 pixels above the floor
     (1-1's: 48) far enough ahead for a run up to it; a Goomba walking toward
     Mario from beyond it, passing under it; the goal past both.
 
+    Half the layouts start Mario close and the Goomba near the block (he
+    waits where he starts); the other half start him far from the block with
+    the Goomba farther beyond it, so that he arrives running, as in 1-1
+    (params["arrival"]: "standing" or "running").
+
     Two plans (route_tactics), each strategy keeping its own
     (scenario["route_required"]: a layout whose required plan is not the
     strategy's best is redrawn):
-    - goomba=stomp (max points): hold until the Goomba is out from under the
-      block on Mario's side, then stomp it (its points), then on;
+    - goomba=stomp (max points): (running: run up to a stop short of the
+      block, then) hold until the Goomba is out from under the block on
+      Mario's side, then stomp it (its points), then on;
     - goomba=over (speed run): leave it alone (keep_alive) and go over the
       block: a running jump onto it (a running jump rises 83 pixels, the
       block's top is at most 68 up), off its far side and on. The teacher's
@@ -280,7 +299,8 @@ def _block_goomba_scene(rng, difficulty: str) -> tuple[dict, dict]:
     tier = ("easy", "medium", "hard").index(difficulty)
     x0 = rng.randint(32, 64)
     count = rng.choice((1, 1, 2, 3))
-    block = x0 + MARIO_WIDTH + rng.randint(112, 176)
+    running = rng.random() < 0.5
+    block = x0 + MARIO_WIDTH + (rng.randint(208, 320) if running else rng.randint(112, 176))
     bottom = FLOOR - rng.randint(44, 52)
     # One platform: a question block, or a row of bricks (the teacher's route
     # over it stands on it, one platform).
@@ -288,15 +308,26 @@ def _block_goomba_scene(rng, difficulty: str) -> tuple[dict, dict]:
     kinds = [None, "question_block" if count == 1 else "brick"]
     span_end = block + BLOCK * count
     speed = round(rng.uniform(*((0.4, 0.5), (0.5, 0.6), (0.6, 0.7))[tier]), 2)
-    goomba = span_end + rng.randint(8, 48)
+    goomba = span_end + rng.randint(*BLOCK_GOOMBA_AHEAD)
+    if running:
+        goomba += int(speed * (49 + max(0, block - x0 - 67) / 2.5))
     goal_x = span_end + rng.randint(144, 208)
     world = goal_x + 96
     platforms[0][2] = world
     # Out from under the block on Mario's side, with a little room.
-    clear = int((goomba + ENEMY_WIDTH - block) / speed) + 8
+    out = block - 8
+    clear = int((goomba + ENEMY_WIDTH - out) / speed)
+    if running:
+        rest = block - rng.randint(*BLOCK_GOOMBA_STOP) - MARIO_WIDTH
+        wait = [
+            segment("advance", 1, reach_x=rest - RUN_SLIDE),
+            segment("hold_area", 1, area=RUN_SLIDE + 16, enemy_clear_of=[0, out]),
+        ]
+    else:
+        wait = [segment("hold_area", 1, area=8, enemy_clear_of=[0, out])]
     schedules = {
         "goomba=stomp": [
-            segment("hold_area", 1, area=8, frames=clear),
+            *wait,
             segment("advance", 1, stomp=0, past_enemy=0),
             segment("advance", 1),
         ],
@@ -325,6 +356,7 @@ def _block_goomba_scene(rng, difficulty: str) -> tuple[dict, dict]:
         "frame_budget": int(200 + world + clear),
     }
     params = {
+        "arrival": "running" if running else "standing",
         "blocks": count,
         "block_x": block,
         "block_bottom_up": FLOOR - bottom,

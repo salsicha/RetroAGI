@@ -47,7 +47,8 @@ def test_skill_chooses_an_action_and_the_executor_gets_a_relative_pixel_destinat
 
 
 @pytest.mark.timeout(600)
-@pytest.mark.parametrize("family", ACTION_FAMILIES[9:])
+# Not action_run_jump_gap: its pit is reached running, a run first.
+@pytest.mark.parametrize("family", [f for f in ACTION_FAMILIES[9:] if f != "action_run_jump_gap"])
 @pytest.mark.parametrize("difficulty", ["easy", "medium", "hard"])
 def test_new_maneuvers_are_immediate_directional_jumps_with_spatial_landings(family, difficulty):
     sample = sample_block_smb_monte_carlo_scenario(
@@ -266,7 +267,7 @@ def test_skill_curriculum_excludes_tactic_decisions_but_keeps_local_maneuvers():
 
     families = set(learner_families("skill", BLOCK_SMB_MC_FAMILIES))
     assert families == set(BLOCK_SMB_MC_FAMILIES) - set(TACTIC_TRAINING_FAMILIES)
-    assert len(families) == 41
+    assert len(families) == 44
     assert not families & set(learner_families("tactic", BLOCK_SMB_MC_FAMILIES))
     assert not any("stomp" in name and "recovery" in name for name in BLOCK_SMB_MC_FAMILIES)
     assert {

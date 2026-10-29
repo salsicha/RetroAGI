@@ -23,11 +23,12 @@ from typing import Optional, Sequence
 
 import numpy as np
 import torch
+import torch.nn.functional as F
 
 from retroagi.core.action_outcomes import COLUMN as EXECUTED, executed_outcomes
 from retroagi.core.action_tokens import MODE_VERBS, VERBS
 from retroagi.core.layered_policy import POINTER_START, SCENE_TOKEN_COUNT
-from retroagi.core.tokens import SKILL_MODES
+from retroagi.core.tokens import COMMAND_FIELDS, SKILL_MODES
 from retroagi.core.world_model import (
     ACTION_RECORD,
     COLUMN,
@@ -164,8 +165,17 @@ def episode_data(record) -> dict:
             tried[k, :, COLUMN["pointer"]], np.repeat(listed["slot_keys"][k : k + 1], n, 0),
             np.repeat(listed["keys"][k : k + 1], n, 0), SCENE_TOKEN_COUNT,
         )
+    # Whether each executed run kept its speed (the teacher's run-ups,
+    # SkillToken.carry): 1 or 0 for a run, -1 for anything else.
+    modes = np.asarray(record.commands[:, COMMAND_FIELDS.index("mode")], np.int64)
+    run_up = np.where(
+        (modes == SKILL_MODES.index("run")) & (executed[:, COLUMN["verb"]] == VERBS.index("run")),
+        np.asarray(record.commands[:, COMMAND_FIELDS.index("carry")], np.float32),
+        -1.0,
+    ).astype(np.float32)
     return {
         "rows": record.rows,
+        "run_up": run_up,
         "context": np.asarray(context, np.float32),
         "objects": np.asarray(listed["rows"], np.float32),
         "mario": record.mario_kinematics[frames].astype(np.float32),
@@ -197,7 +207,6 @@ def _forward(policy, episodes, device, tried_weight=1.0, collect=None):
     objects = torch.as_tensor(np.concatenate([e["objects"] for e in episodes]), device=device)
     mario = torch.as_tensor(np.concatenate([e["mario"] for e in episodes]), device=device)
     feedback = torch.as_tensor(np.concatenate([e["feedback"] for e in episodes]), device=device)
-    context = torch.as_tensor(np.concatenate([e["context"] for e in episodes]), device=device)
     tokens, present = model.with_objects(tokens, present, objects, mario)
     hidden, cell = model.initial(len(episodes), device)
     losses, weights = [], []
@@ -207,20 +216,26 @@ def _forward(policy, episodes, device, tried_weight=1.0, collect=None):
         state = (hidden[active], cell[active])
         verbs = torch.as_tensor([episodes[i]["steps"][k] for i in active], device=device)
         pointers = torch.as_tensor([episodes[i]["step_pointers"][k] for i in active], device=device)
-        stepped = model.advance(tokens, feedback, verbs, pointers, state, rows=at, context=context[at])
+        stepped = model.advance(tokens, feedback, verbs, pointers, state, rows=at)
         records = torch.as_tensor(np.stack([episodes[i]["executed"][k] for i in active]), device=device)
         named = records[:, COLUMN["verb"]] >= 0
         if named.any():
-            predicted = model.readout(
-                tokens, present, stepped[0], verbs, pointers, rows=at, context=context[at]
-            )
+            predicted = model.readout(tokens, present, stepped[0], verbs, pointers, rows=at)
             predicted = {name: value[named] for name, value in predicted.items()}
             loss, _ = outcome_loss(predicted, records[named])
+            # Whether each executed run ended still running (a run-up).
+            run_up = torch.as_tensor(
+                [episodes[i]["run_up"][k] for i in active], device=device
+            )[named]
+            told = run_up >= 0
+            if told.any():
+                loss = loss + F.binary_cross_entropy_with_logits(predicted["carry"][told], run_up[told])
             losses.append(loss)
             weights.append(float(named.sum()))
             if collect is not None:
                 for j, i in enumerate(np.asarray(active)[named.cpu().numpy()]):
-                    collect.append(("executed", episodes[i]["family"], predicted["mean"][j], records[named][j], torch.sigmoid(predicted["success"][j])))
+                    collect.append(("executed", episodes[i]["family"], predicted["mean"][j], records[named][j], torch.sigmoid(predicted["success"][j]),
+                                    float(run_up[j]), float(torch.sigmoid(predicted["carry"][j]))))
         # The teacher's other tries, from the state before this action.
         tried_rows, tried_at, tried_from = [], [], []
         for j, i in enumerate(active):
@@ -242,18 +257,15 @@ def _forward(policy, episodes, device, tried_weight=1.0, collect=None):
                 pointers,
                 (state[0][source], state[1][source]),
                 rows=rows_at,
-                context=context[rows_at],
             )
-            predicted = model.readout(
-                tokens, present, branch[0], verbs, pointers, rows=rows_at, context=context[rows_at]
-            )
+            predicted = model.readout(tokens, present, branch[0], verbs, pointers, rows=rows_at)
             loss, _ = outcome_loss(predicted, records)
             losses.append(loss * tried_weight)
             weights.append(float(len(records)) * tried_weight)
             if collect is not None:
                 for j in range(len(records)):
                     i = active[tried_from[j]]
-                    collect.append(("tried", episodes[i]["family"], predicted["mean"][j], records[j], torch.sigmoid(predicted["success"][j])))
+                    collect.append(("tried", episodes[i]["family"], predicted["mean"][j], records[j], torch.sigmoid(predicted["success"][j]), -1.0, 0.0))
         hidden, cell = hidden.clone(), cell.clone()
         hidden[active], cell[active] = stepped
     total = sum(l * w for l, w in zip(losses, weights)) / max(1.0, sum(weights))
@@ -271,7 +283,8 @@ def evaluate(policy, episodes, device) -> dict:
     for start in range(0, len(episodes), 16):
         _forward(policy, episodes[start : start + 16], device, collect=collected)
     groups = defaultdict(list)
-    for source, family, mean, record, success in collected:
+    told = [(label, guess) for *_, label, guess in collected if label >= 0]
+    for source, family, mean, record, success, *_ in collected:
         for verb in (VERBS[int(record[COLUMN["verb"]])], "all"):
             for key in ((verb, source), (verb, "all")):
                 groups[key].append((mean.cpu().numpy(), record.cpu().numpy(), float(success)))
@@ -297,6 +310,11 @@ def evaluate(policy, episodes, device) -> dict:
                 if verb == "wait":
                     entry["wait_within_4"] = float(np.mean(error[exact, 4] <= 4))
         report[f"{verb}/{source}"] = entry
+    if told:
+        # Executed runs: whether the world model says each kept its speed.
+        entry = report.setdefault("run/executed", {})
+        entry["run_up_accuracy"] = float(np.mean([(guess > 0.5) == (label > 0.5) for label, guess in told]))
+        entry["run_ups"] = int(sum(label > 0.5 for label, _ in told))
     passed = {
         verb: report.get(f"{verb}/all", {}).get("end_error_median", 1e9) <= BARS["end_error_median"]
         for verb in ("run", "jump")

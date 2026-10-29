@@ -37,6 +37,10 @@ def test_a_predicted_outcome_is_the_executors_destination():
     stomp = ActionToken("jump", ("enemies", 0))
     assert destination_of(stomp, outcome, contact=(44.0, -8.0)) == SkillToken("jump", 44, -8)
     assert destination_of(stomp, outcome) == SkillToken("jump", 37, -10)
+    # A run-up keeps its speed (the world model says the teacher's would);
+    # only a run does.
+    assert destination_of(run, outcome, run_up=True) == SkillToken("run", 37, -10, carry=True)
+    assert destination_of(jump, outcome, run_up=True) == SkillToken("jump", 37, -10)
 
 
 def scene(enemy_x=None, air=False):
