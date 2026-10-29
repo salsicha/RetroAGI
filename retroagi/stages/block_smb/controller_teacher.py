@@ -1520,16 +1520,24 @@ def _with_margin(env, state, target, goal, result, memo=None):
     return chosen[0]
 
 
+# How far ahead (pixels, from Mario's middle) a pit edge is planned for: a
+# run-up and a running jump (_pit_takeoff). It was 96: from farther back the
+# teacher ran to the edge, braked and jumped from rest, and a lesson started
+# farther back always began with the same longest run (user, 2026-10-28: as
+# far as its runs reach).
+PIT_AHEAD = REACH
+
+
 def _pit_ahead(env, direction):
-    """The x of the pit edge the floor Mario stands on ends at, within 96
-    pixels ahead (``direction``: 1 right, -1 left), or None."""
+    """The x of the pit edge the floor Mario stands on ends at, within
+    PIT_AHEAD pixels ahead (``direction``: 1 right, -1 left), or None."""
     m = env.mario
     support = m.get("_platform") if m["on_ground"] else None
     if support is None or support.get("moving"):
         return None
     r = support["rect"]
     x = r.right if direction > 0 else r.left
-    if not 0 <= (x - (m["x"] + m["w"] / 2)) * direction <= 96:
+    if not 0 <= (x - (m["x"] + m["w"] / 2)) * direction <= PIT_AHEAD:
         return None
     return x if (x, r.top) in _pit_lips(env) else None
 
@@ -1676,8 +1684,8 @@ def _pit_takeoff(env, state, target, goal, result, memo):
     its result).
 
     It applies on the ground when the floor Mario stands on ends at a pit
-    within 96 pixels ahead and the target lies beyond it, except in lessons
-    that are one given jump.
+    within PIT_AHEAD pixels ahead and the target lies beyond it, except in
+    lessons that are one given jump.
     """
     if (
         not env.mario["on_ground"]

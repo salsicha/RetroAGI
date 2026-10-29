@@ -45,11 +45,27 @@ climb_forward (the speed run's plan). Proposed and agreed (user: "yes"):
   into the jump after it, trained from the teacher's executed runs (about a
   third are run-ups); a saved model gains that output untrained on load
   (`world_model_predicts_run_ups`), starting at "brakes".
-- **`action_run_jump_gap`** (skill): a pit 32 to 64 pixels wide reached from
-  120 to 220 pixels back (1-1's first pit is 32 wide, 160 past the last
-  pipe); every other pit lesson starts Mario near the edge. The recording
-  teacher wins all 15 sampled layouts: a run, a run-up and a jump, taking
-  off 10 to 16 pixels before the edge, mostly at full speed.
+- **`action_run_jump_gap`** (skill): a pit 24 to 64 pixels wide reached from
+  48 to 120 pixels back (1-1's first pit is 32 wide, 160 past the last
+  pipe); every other pit lesson starts Mario near the edge. First drawn from
+  120 to 220 back, its recording stopped at the gate on teacher labels: the
+  teacher planned a pit only within 96 pixels of Mario, from farther it ran
+  to the edge, braked and jumped from rest, and every far layout began with
+  the same 127-pixel run (53% of the round's runs; at most 40% may be one
+  value). Within 96 pixels its run-ups spanned only about 40 pixels, too
+  few for 8 layouts a round to pass. User, 2026-10-28: the teacher plans
+  pits as far as its runs reach (`controller_teacher.PIT_AHEAD`, 128 pixels;
+  every lesson with a pit; recordings made before keep the old teacher's
+  runs to the edge) and the lesson starts 48 to 120 pixels back. The
+  teacher wins all 90 sampled layouts, 20 of them started over 96 pixels
+  back: one run-up of 31 to 102 pixels, then a jump at 2.1 to 2.5 pixels a
+  frame. Its jumps still fall on a few lengths (its jump table: 35% land 81
+  to 85 pixels out), so the lesson recorded alone would trip the gate in
+  almost every round. User: record it in the same rounds as the eight pit
+  lessons (gap jumps both ways, single gaps, pit leaps, enemy gaps, gap
+  descents, jumps down both ways), whose episodes are replaced by the new
+  teacher's: with them the most common value was at most 19% of a recorded
+  round's runs or jumps.
 - **`block_goomba` arriving running**: in half its layouts Mario starts 208
   to 320 pixels before the block, the Goomba drawn so that it is 8 to 48
   pixels beyond the block when he gets there. Max points runs in, lets go a

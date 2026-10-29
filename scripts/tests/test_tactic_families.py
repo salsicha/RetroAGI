@@ -534,13 +534,14 @@ def test_a_pit_reached_running_is_jumped_running():
     from retroagi.stages.block_smb.teacher_replay import replay
 
     sample = sample_block_smb_monte_carlo_scenario(
-        split="train", seed=5, sample_index=1, family="action_run_jump_gap", difficulty="hard"
+        split="train", seed=5, sample_index=31, family="action_run_jump_gap", difficulty="hard"
     )
-    assert sample.parameters["edge_distance"] >= 120 and sample.parameters["gap_width"] > 48
+    # Farther back than the teacher planned pits from before (96 pixels).
+    assert sample.parameters["edge_distance"] > 100 and sample.parameters["gap_width"] > 48
     played = replay(copy.deepcopy(sample.scenario), family="action_run_jump_gap")
     assert played["won"]
     modes = [(c["skill"]["mode"], bool(c["skill"].get("carry"))) for c in played["commands"]]
-    assert ("run", True) in modes and modes[-1] == ("jump", False)
+    assert modes == [("run", True), ("jump", False)]  # one run-up, then the jump
     env = MarioScenarioEnv()
     env.reset(scenario=copy.deepcopy(sample.scenario))
     env.render = lambda: None

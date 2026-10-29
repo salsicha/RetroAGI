@@ -444,7 +444,7 @@ Skill includes 20 isolated maneuver families (their historical `action_` names r
 | `action_wait` | Preserve a spot on a moving platform |
 | `action_climb_pipe` | Jump onto a pipe ahead, up to 64 pixels, sometimes with a walker coming from behind (Full SMB 1-1's pipes) |
 | `action_stomp_down` | Jump down from a pipe or step onto a walker below |
-| `action_run_jump_gap` | Run at a pit 32 to 64 pixels wide from 120 to 220 pixels back and jump it running (Full SMB 1-1's first pit) |
+| `action_run_jump_gap` | Run at a pit 24 to 64 pixels wide from 48 to 120 pixels back and jump it running (Full SMB 1-1's first pit) |
 
 A climb completes on a supported landing anywhere on the step: a tall step's
 landing can be at its near edge, and walking on from there would be a second

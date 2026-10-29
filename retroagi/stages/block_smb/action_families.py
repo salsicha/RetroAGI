@@ -18,7 +18,7 @@ platforms/enemies and immediate jumps down to a lower landing.
 | action_wait | stand still on a moving platform that carries Mario to the goal | hold_ground | how far it travels, its speed |
 | action_climb_pipe | jump up onto a pipe ahead from a standstill, sometimes a walker coming from behind | climb_forward | pipe height and width, distance to it, the walker's distance and speed |
 | action_stomp_down | jump down from a pipe or a step onto a walker on the floor below | advance | height, the walker's distance, speed and way |
-| action_run_jump_gap | run at a pit from far back and jump it running | advance | pit width, how far back Mario starts, the landing's width |
+| action_run_jump_gap | run up to a pit and jump it running | advance | pit width, how far back Mario starts, the landing's width |
 
 action_climb_pipe and action_stomp_down are Full SMB 1-1's (user,
 2026-10-25: missing families found from the Full SMB failures): its pipes
@@ -90,9 +90,17 @@ TRAVELS = {"easy": (48, 64), "medium": (65, 88), "hard": (89, 112)}
 # Pipe heights (1-1's are 32, 48 and 64), within a jump from a standstill.
 PIPE_HEIGHTS = {"easy": (24, 32), "medium": (33, 48), "hard": (49, 64)}
 # Pits reached running (1-1's are 32 and 48 wide), and how far back Mario
-# starts from the edge (1-1's first pit is 160 pixels past the last pipe).
-RUN_GAPS = {"easy": (32, 40), "medium": (41, 48), "hard": (49, 64)}
-RUN_IN = (120, 220)
+# starts from the edge: up to as far as the teacher plans a run-up and a
+# running jump (controller_teacher.PIT_AHEAD, 128 pixels from his middle),
+# so that the run-up is one run (from farther every layout began with the
+# same 127-pixel run, most of its runs, and the labels collapsed); a full
+# run is 2.5 pixels a frame after about 70. 1-1's first pit is 160 pixels
+# past the last pipe.
+# Each jump's length follows the pit's width: the widths recorded (easy
+# and medium) spread wide enough that no one length is most of a round's
+# jumps (the gate on teacher labels).
+RUN_GAPS = {"easy": (24, 44), "medium": (45, 56), "hard": (57, 64)}
+RUN_IN = (48, 120)
 
 
 def _walk(rng, difficulty: str, back: bool) -> tuple[dict, dict, list]:
