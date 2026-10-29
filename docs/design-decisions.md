@@ -26,6 +26,37 @@ commit). How the parts work is described in the
   the training set"); the recorded failures are fixed in the teacher. A
   failed gate is fixed in the teacher or the policy, never bypassed.
 
+## 2026-10-29 — Landings take their height from vision; the flagpole is the finish (user decision; built)
+
+The chain of 2026-10-28 (families_20261029) left 1-1 (48 logged
+playthroughs, nothing learning; failures_20261030) with pit-1 deaths down
+from 12 to 2 and max points up from 671 to 825 on average, but speed runs
+down from 897 to 380: 18 of 24 died identically at the first question
+block. The skill, under advance, jumped at the block's top (the speed run's
+new route over it); the world model put the landing 54 pixels up where the
+top is 64, the executor aimed into the block, Mario fell back, jumped again
+from under it, bumped it and landed in front of the Goomba.
+
+Proposed and agreed (user: "yes"): a run or jump that points at a still
+thing vision sees (a surface that does not move, a pipe, a block) ends at
+that thing's top as vision draws it, relative to Mario's feet
+(`smb_agent.landing_height`); how far it goes is still the world model's.
+Moving surfaces and platforms keep the world model's height (they move
+before he lands), and so do stomps (the trackers' meeting point).
+
+The same trained agent (tactic_20261029) on 1-1 again
+(failures_20261030_landing): average distance 970 (before 603; the best
+round before, 784), speed runs 880, max points 1061; 24 of 48 past the
+fourth pipe (was 9), 16 past the first pit (was 7). One max-points run took
+the flag: the first finish of 1-1. It was logged as stalled at the castle:
+a finish was counted only when the level number changed, hundreds of
+frames after the flag, and the log gives up after 400 frames without
+progress. A level is now done from the flagpole on: the game's routine
+number 4 (sliding down the pole) or 5 (the level ending) as well as a
+changed level (`play.level_finished`, used by the game's outcome and the
+truth recorder). Replayed, that run ends as a goal at the flag (x 3161,
+frame 2926).
+
 ## 2026-10-28 — Run-ups in deployed play; the Goomba and the pit reached running (user decision; built)
 
 The logged 1-1 playthroughs of tactic_20261028 (failures_20261029; nothing

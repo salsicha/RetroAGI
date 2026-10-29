@@ -43,6 +43,36 @@ def test_a_predicted_outcome_is_the_executors_destination():
     assert destination_of(jump, outcome, run_up=True) == SkillToken("jump", 37, -10)
 
 
+
+def test_a_landing_on_a_still_thing_it_sees_takes_its_height_from_vision():
+    # User, 2026-10-29: the world model put a jump onto 1-1's first question
+    # block 54 pixels up; its top, as vision draws it, is 64 up.
+    from retroagi.core.smb_agent import landing_height
+    from retroagi.core.smb_scene_labels import BlockView
+
+    seen = SceneObservation(
+        mario=MarioView(box=(100, 192, 112, 208), facing_right=True, support="ground", on_something=True),
+        surfaces=(Surface(8, 248, 208, False), Surface(169, 185, 144, False), Surface(190, 230, 120, True)),
+        pipes=((140, 176, 172, 208),),
+        blocks=(BlockView((169, 144, 185, 160), "question_block"),),
+    )
+    outcome = [47.7, -53.7, 0.0, 0.0, 28.0]
+    block = ActionToken("jump", ("surfaces", 1))
+    assert landing_height(seen, block) == -64
+    assert destination_of(block, outcome, landing=landing_height(seen, block)) == SkillToken("jump", 48, -64)
+    assert landing_height(seen, ActionToken("jump", ("pipes", 0))) == -32
+    assert landing_height(seen, ActionToken("jump", ("blocks", 0))) == -64
+    assert landing_height(seen, ActionToken("run", ("surfaces", 0))) == 0
+    # Not where it moves (a moving surface, a moving platform), not an enemy,
+    # not a slot vision does not fill: the world model's height stands.
+    assert landing_height(seen, ActionToken("jump", ("surfaces", 2))) is None
+    assert landing_height(seen, ActionToken("jump", ("moving_platforms", 0))) is None
+    assert landing_height(seen, ActionToken("jump", ("enemies", 0))) is None
+    assert landing_height(seen, ActionToken("jump", ("surfaces", 5))) is None
+    stomp = ActionToken("jump", ("enemies", 0))
+    assert destination_of(stomp, outcome, contact=(44.0, -8.0), landing=-64.0) == SkillToken("jump", 44, -8)
+
+
 def scene(enemy_x=None, air=False):
     enemies = [EnemyView((enemy_x, 202, enemy_x + 10, 208), "walker")] if enemy_x else []
     return SceneObservation(

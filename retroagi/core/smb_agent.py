@@ -39,8 +39,8 @@ from .layered_policy import (
     held_features,
 )
 from .smb_executor import HOLD_FRAMES, HOLD_GROUND, ActionPlan, SMBExecutor
-from .smb_observer import SEQ_LEN_A, SEQ_LEN_B, VisionObserver, column_codes, pack_c
-from .smb_scene_labels import STOMP_ROWS, SceneObservation
+from .smb_observer import SEQ_LEN_A, SEQ_LEN_B, VisionObserver, column_codes, pack_c, packed_lists
+from .smb_scene_labels import STOMP_ROWS, BlockView, SceneObservation, Surface
 from .smb_spatial_feedback import SpatialFeedback
 from .tokens import (
     DEFAULT_STRATEGY,
@@ -96,18 +96,50 @@ class Decision:
     predicted: Optional[dict] = None
 
 
-def destination_of(action: ActionToken, outcome, contact=None, run_up: bool = False) -> SkillToken:
+def landing_height(scene: SceneObservation, action: ActionToken) -> Optional[float]:
+    """How far below Mario's feet (pixels, negative above) the top of the
+    still thing a run or jump points at is, as vision reports it: a surface,
+    a pipe or a block; None for an enemy, a moving platform or a moving
+    surface (their tops move before he lands), or when vision shows no
+    Mario or nothing in that slot (user, 2026-10-29: the world model put a
+    jump onto 1-1's first question block 54 pixels up, its top is 64)."""
+    if action.target is None or scene.mario.box is None:
+        return None
+    name, slot = action.target
+    if name not in ("surfaces", "pipes", "blocks"):
+        return None
+    things = packed_lists(scene).get(name, ())
+    if not 0 <= slot < len(things):
+        return None
+    thing = things[slot]
+    if isinstance(thing, Surface):
+        if thing.moving:
+            return None
+        top = thing.top
+    else:
+        top = (thing.box if isinstance(thing, BlockView) else thing)[1]
+    return float(top - scene.mario.box[3])
+
+
+def destination_of(
+    action: ActionToken, outcome, contact=None, run_up: bool = False, landing: Optional[float] = None
+) -> SkillToken:
     """The executor's destination for an action from its predicted outcome
     (core/world_model OUTCOME_FIELDS: dx, dy, object_dx, object_dy, frames):
     a wait holds for the predicted frames (1 to HOLD_FRAMES); a run or a jump
     goes to the predicted end, one that ends on an enemy (a stomp) to
     ``contact`` (the collision trackers' meeting point) when given; a run
     keeps its speed to its end when ``run_up`` (the world model's "carry":
-    the teacher's run would have, before a jump)."""
+    the teacher's run would have, before a jump). ``landing``: the height of
+    the still thing it points at, as vision sees it (landing_height), in
+    place of the predicted height; how far it goes is still the world
+    model's."""
     if action.verb == "wait":
         return SkillToken("hold", 0, 0, frames=int(min(HOLD_FRAMES, max(1, round(outcome[4])))))
     stomp = action.target[0] == "enemies"
     dx, dy = contact if (stomp and contact is not None) else outcome[:2]
+    if landing is not None and not stomp:
+        dy = landing
     x = int(min(256, max(-256, round(dx))))
     y = int(min(240, max(-240, round(dy))))
     mode = VERB_MODES[action.verb]
@@ -606,7 +638,11 @@ class SMBAgents:
             made[i].predicted = {name: value[j] for name, value in out.items()}
             mean = out["mean"][j].tolist()
             made[i].skill = destination_of(
-                actions[j], mean, self._contact(copy, actions[j], scenes[i]), run_up=bool(out["carry"][j] > 0)
+                actions[j],
+                mean,
+                self._contact(copy, actions[j], scenes[i]),
+                run_up=bool(out["carry"][j] > 0),
+                landing=landing_height(scenes[i], actions[j]),
             )
 
     def _contact(self, copy: _Copy, action, scene):

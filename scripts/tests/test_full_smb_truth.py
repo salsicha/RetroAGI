@@ -71,6 +71,31 @@ def test_a_box_falling_off_the_screen_keeps_going_down():
     assert mario_rows(2, 3, 23, 35) == (279, 291)
 
 
+def test_the_level_is_done_from_the_flagpole_on():
+    # User, 2026-10-29: a 1-1 playthrough that took the flag was logged as
+    # stalled at the castle: the level number changes hundreds of frames on.
+    from retroagi.stages.full_smb.play import (
+        END_OF_LEVEL,
+        FLAGPOLE_SLIDE,
+        LEVEL,
+        PLAYING,
+        WORLD,
+        level_finished,
+    )
+    from retroagi.stages.full_smb.vision_frames import ENGINE_ROUTINE
+
+    ram = np.zeros(2048, np.uint8)
+    ram[ENGINE_ROUTINE] = PLAYING
+    assert not level_finished(ram, (0, 0)) and not true_frame(ram, (0, 0))["finished"]
+    for routine in (FLAGPOLE_SLIDE, END_OF_LEVEL):
+        ram[ENGINE_ROUTINE] = routine
+        assert level_finished(ram, (0, 0)) and true_frame(ram, (0, 0))["finished"]
+    ram[ENGINE_ROUTINE] = PLAYING
+    ram[WORLD], ram[LEVEL] = 0, 1  # 1-2, through a pipe or after the castle
+    assert level_finished(ram, (0, 0))
+    assert not true_frame(ram)["finished"]  # no start given
+
+
 def test_a_refilled_slot_is_a_new_enemy(first_goomba):
     recorder, ids = first_goomba
     assert ids[104][0] == 0 and ids[300][0] == 1

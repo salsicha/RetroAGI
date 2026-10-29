@@ -44,7 +44,7 @@ from .pixel_labels import (
     SCROLL_X,
     SPRITE_LIST,
 )
-from .play import LEVEL, PAGE, WORLD, X_ON_PAGE
+from .play import PAGE, X_ON_PAGE, level_finished
 from .vision_frames import _dying
 
 SLOTS = 6
@@ -96,7 +96,8 @@ def true_frame(ram, start=None) -> dict:
     slot {"active", "kind", "box", "drawn", "defeated", "enemy",
     "platform", "stompable"}], "camera", "level_x", "score", "coins",
     "time", "dying", "finished"}. ``start``: the (world, level) the
-    playthrough began in (``finished`` once it differs)."""
+    playthrough began in (``finished`` from the flagpole on, or once it
+    differs: play.level_finished)."""
     camera = int(ram[SCROLL_PAGE]) * 256 + int(ram[SCROLL_X])
     box = [int(v) for v in ram[PLAYER_BOX : PLAYER_BOX + 4]]
     box[1], box[3] = _rows(box, int(ram[PLAYER_Y_PAGE]), int(ram[PLAYER_Y]))
@@ -122,7 +123,6 @@ def true_frame(ram, start=None) -> dict:
                 "stompable": kind not in UNSTOMPABLE,
             }
         )
-    world_level = (int(ram[WORLD]), int(ram[LEVEL]))
     return {
         "mario": (box[0] + camera, box[1], box[2] + camera, box[3]),
         "slots": slots,
@@ -132,7 +132,7 @@ def true_frame(ram, start=None) -> dict:
         "coins": int(ram[COINS]),
         "time": _digits(ram, TIME, 3),
         "dying": _dying(ram),
-        "finished": start is not None and world_level != tuple(start),
+        "finished": start is not None and level_finished(ram, start),
     }
 
 

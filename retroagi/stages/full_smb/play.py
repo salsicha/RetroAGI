@@ -30,6 +30,19 @@ RUN_ACTIONS = (SMBAction.RIGHT, SMBAction.RIGHT_JUMP)
 # [GameEngineSubroutine] while Mario is played (not entering, dying or
 # between levels).
 PLAYING = 8
+# [GameEngineSubroutine] while Mario slides down the flagpole, and while the
+# level ends after it (his walk into the castle, the timer counted into the
+# score): the level is done. The level number changes only after all that,
+# hundreds of frames on (user, 2026-10-29: a 1-1 playthrough that took the
+# flag was logged as stalled at the castle).
+FLAGPOLE_SLIDE, END_OF_LEVEL = 4, 5
+
+
+def level_finished(ram, start) -> bool:
+    """Whether the level is done: Mario on the flagpole or past it, or in
+    another level than ``start`` (world, level) (a pipe to the next one)."""
+    routine = int(ram[ENGINE_ROUTINE])
+    return routine in (FLAGPOLE_SLIDE, END_OF_LEVEL) or (int(ram[WORLD]), int(ram[LEVEL])) != tuple(start)
 
 
 @dataclass(frozen=True)
@@ -38,7 +51,7 @@ class FullSMBOutcome:
 
     level_x: int  # Mario's distance into the level, in pixels
     dying: bool
-    finished: bool  # the level has changed: the flagpole or a pipe to the next level
+    finished: bool  # the flagpole taken, or the level changed (a pipe to the next one)
 
 
 class FullSMBGame:
@@ -69,7 +82,7 @@ class FullSMBGame:
         return FullSMBOutcome(
             level_x=int(ram[PAGE]) * 256 + int(ram[X_ON_PAGE]),
             dying=_dying(ram),
-            finished=(int(ram[WORLD]), int(ram[LEVEL])) != self.start,
+            finished=level_finished(ram, self.start),
         )
 
     def reset(self) -> np.ndarray:

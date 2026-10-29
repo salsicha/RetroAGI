@@ -180,7 +180,10 @@ Without the teacher (deployed play, `SMBAgents(world_model=True)`), the
 world model's predicted outcome is the executor's destination
 (`smb_agent.destination_of`): a hold lasts the predicted frames, runs and
 jumps go to the predicted end, a run the world model says is a run-up keeps
-its speed (the teacher's are, about a third of its runs), a stomp goes to the
+its speed (the teacher's are, about a third of its runs), a run or jump onto
+a still thing vision sees (a surface, a pipe, a block) ends at that thing's
+top as vision draws it, how far it goes being the world model's
+(`smb_agent.landing_height`), a stomp goes to the
 collision trackers' expected contact point. The executor ends a wait or a
 ground move as `threat` (feedback `collision_due`) when the trackers expect
 a hit within the lead a jump over that enemy needs, plus 5 frames

@@ -26,7 +26,8 @@ truth and not used while the skills and tactics train (until then each
   skill has chosen it, predicting that action's outcome: where Mario and its
   object end, how many frames it takes (for a wait, how long), the chance
   it succeeds, and whether a run keeps its speed into the jump after it.
-  Its prediction is the executor's destination.
+  Its prediction is the executor's destination; a landing on a still thing
+  vision sees takes that thing's height from vision.
 - **Target trackers:** run every frame, each predicting when and where its
   enemy and Mario will collide (a stomp or a hit). The executor aims stomps
   at the collision point and ends a wait or walk when a collision calls for
