@@ -339,9 +339,12 @@ change:
 - **World model and collision trackers** (`layered_train.Predictions`): each
   round's episodes are recorded with the simulator's truth (and, for the
   skill, the teacher's tried actions); both networks make four passes over
-  the kept episodes after the layer's own passes. The world model reads the
-  scene encoder without changing it; the trackers are saved as `tracker.pt`
-  beside the run's checkpoints.
+  the kept episodes after the layer's own passes. The world model learns
+  the episodes joined into runs of at least 64 actions, its state carried
+  from one into the next (`world_model_train.chained`): a lesson is a few
+  actions long, a level dozens. It reads the scene encoder without
+  changing it; the trackers are saved as `tracker.pt` beside the run's
+  checkpoints.
 
 Each round's agreement is the layer's choice after learning from that round
 against the teacher's, over the round's teacher episodes (their recorded

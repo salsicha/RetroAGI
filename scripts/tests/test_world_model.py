@@ -139,9 +139,10 @@ def test_an_older_checkpoint_gets_an_untrained_world_model_and_keeps_its_layers(
     )
 
 
-def test_a_small_world_model_learns_a_recorded_episodes_outcomes():
+@pytest.fixture(scope="module")
+def enemy_hop_episode():
+    """One enemy_hop episode the teacher played, recorded for the world model."""
     from retroagi.stages.block_smb.teacher_replay import reference_vision
-    from retroagi.stages.block_smb.world_model_train import _forward, episode_data, kept
 
     task = lt.EpisodeTask(
         index=0,
@@ -155,8 +156,14 @@ def test_a_small_world_model_learns_a_recorded_episodes_outcomes():
         record_truth=True,
         record_actions=True,
     )
+    return lt.play_episodes(reference_vision()[0], LayeredSMBPolicy().eval(), "skill", [task], "cpu", 1)[0]
+
+
+def test_a_small_world_model_learns_a_recorded_episodes_outcomes(enemy_hop_episode):
+    from retroagi.stages.block_smb.world_model_train import _forward, episode_data, kept
+
     policy = LayeredSMBPolicy().eval()
-    record = lt.play_episodes(reference_vision()[0], policy, "skill", [task], "cpu", 1)[0]
+    record = enemy_hop_episode
     data = episode_data(kept(record))
     assert data["executed"].shape == (len(record.decision_frames), len(ACTION_RECORD))
     assert (data["tried"][:, :, COLUMN["verb"]] >= 0).any()
@@ -172,6 +179,35 @@ def test_a_small_world_model_learns_a_recorded_episodes_outcomes():
         loss.backward()
         optimizer.step()
     assert float(_forward(policy, [data], "cpu")) < 0.5 * first
+
+
+def test_episodes_are_learnt_joined_into_long_runs_of_actions(enemy_hop_episode):
+    # User, 2026-10-30: training episodes are a few actions long; in 1-1 the
+    # world model, its memory carried past anything it had learnt, sent the
+    # run back from the fourth pipe into it.
+    from retroagi.stages.block_smb.world_model_train import (
+        WorldModelConfig,
+        _forward,
+        batches,
+        chained,
+        episode_data,
+        kept,
+    )
+
+    data = episode_data(kept(enemy_hop_episode))
+    narrow = dict(data, tried=data["tried"][:, :1])  # fewer tried rows a decision
+    episodes = [data, narrow, data, data]
+    n = len(data["executed"])
+    runs = chained(episodes, 2 * n)
+    assert [len(r["executed"]) for r in runs] == [2 * n, 2 * n]
+    joined = runs[0]
+    assert joined["tried"].shape[1] == data["tried"].shape[1]
+    # The added tried rows name no action: no loss.
+    assert (joined["tried"][n:, 1:, COLUMN["verb"]] == -1).all()
+    assert all(len(rows) == 2 * n for rows in joined["rows"])
+    assert torch.isfinite(_forward(LayeredSMBPolicy().eval(), runs, "cpu"))
+    settings = WorldModelConfig(chain_actions=2 * n, batch_chains=1)
+    assert [len(b) for b in batches(episodes, settings)] == [1, 1]
 
 
 @torch.no_grad()

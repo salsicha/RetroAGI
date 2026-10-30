@@ -75,7 +75,10 @@ class WorldModelConfig:
     episodes: str = "artifacts/block_smb/world_model/episodes.pkl"
     output: str = "artifacts/block_smb/world_model"
     epochs: int = 40
-    batch_episodes: int = 32
+    # Episodes are learnt joined into runs of at least chain_actions actions
+    # (chained), batch_chains runs a batch.
+    chain_actions: int = 64
+    batch_chains: int = 4
     learning_rate: float = 1e-3
     weight_decay: float = 0.01
     tried_weight: float = 1.0  # the tried actions' share of the loss
@@ -186,6 +189,58 @@ def episode_data(record) -> dict:
         "tried": tried,
         "family": record.family,
     }
+
+
+def chained(episodes, length: int) -> list:
+    """Episodes (episode_data), in the order given, joined into runs of at
+    least ``length`` actions (the last may be shorter): the world model's
+    state goes on from the end of one into the next, as through a long level;
+    each part keeps its own scenes and labels. User, 2026-10-30: the training
+    episodes are a few actions long (median 3, none past 30); a playthrough
+    of 1-1 runs to dozens, and with its memory past anything it had learnt
+    the world model sent the run back from the fourth pipe into it."""
+    chains, part, count = [], [], 0
+    for episode in episodes:
+        part.append(episode)
+        count += len(episode["executed"])
+        if count >= length:
+            chains.append(_join(part))
+            part, count = [], 0
+    if part:
+        chains.append(_join(part))
+    return chains
+
+
+def _join(parts: list) -> dict:
+    """Episodes' data as one run of actions (chained)."""
+    if len(parts) == 1:
+        return parts[0]
+    width = max(p["tried"].shape[1] for p in parts)
+
+    def widened(tried):
+        # Every decision has the same number of tried rows; the added ones
+        # name no action (verb -1: no loss).
+        if tried.shape[1] == width:
+            return tried
+        extra = np.zeros((tried.shape[0], width - tried.shape[1], tried.shape[2]), tried.dtype)
+        extra[:, :, COLUMN["verb"]] = -1
+        return np.concatenate([tried, extra], axis=1)
+
+    joined = {
+        key: np.concatenate([p[key] for p in parts])
+        for key in ("run_up", "context", "objects", "mario", "feedback", "executed", "steps", "step_pointers")
+    }
+    joined["rows"] = tuple(np.concatenate([p["rows"][i] for p in parts]) for i in range(len(parts[0]["rows"])))
+    joined["tried"] = np.concatenate([widened(p["tried"]) for p in parts])
+    joined["family"] = parts[0]["family"]
+    return joined
+
+
+def batches(episodes, settings) -> list:
+    """The training batches of one pass: the episodes (shuffled by the
+    caller) joined into runs (chained), ``settings.batch_chains`` a batch."""
+    runs = chained(episodes, settings.chain_actions)
+    return [runs[start : start + settings.batch_chains] for start in range(0, len(runs), settings.batch_chains)]
 
 
 def _forward(policy, episodes, device, tried_weight=1.0, collect=None):
@@ -357,10 +412,8 @@ def train_world_model(config: WorldModelConfig) -> dict:
         policy.memory.train()
         random.shuffle(train_data)
         losses = []
-        for start in range(0, len(train_data), config.batch_episodes):
-            loss = _forward(
-                policy, train_data[start : start + config.batch_episodes], config.device, config.tried_weight
-            )
+        for batch in batches(train_data, config):
+            loss = _forward(policy, batch, config.device, config.tried_weight)
             optimizer.zero_grad()
             loss.backward()
             torch.nn.utils.clip_grad_norm_(policy.memory.parameters(), 1.0)

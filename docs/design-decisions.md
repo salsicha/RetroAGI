@@ -62,7 +62,15 @@ User: go ahead with A, B and C.
   tactic is a climb from the first decision (it follows the next thing ahead:
   the pipe); with the walker first it advances, then climbs. The recording
   teacher wins all 24 sampled layouts.
-- B: the world model trained on longer runs of actions (below).
+- B (built): the world model learns its episodes joined into runs of at
+  least 64 actions (`world_model_train.chained`, 4 runs a batch), its state
+  carried from one episode into the next, as through a level; in every
+  place it trains (dataset_train, alongside a layer, its own trainer). A
+  pass takes 88 seconds against 37. On runs of 64 actions the world model
+  trained on single episodes started at a loss of -0.99 (on single
+  episodes -1.87); one pass took it to -1.41. Its evaluation also reports
+  runs of 64 (families_20261031/world_model_check.py). Then 1-1 is played
+  with its memory kept 12 actions (A) and 64 (what it learns from).
 
 ## 2026-10-29 — The pen from a pipe; the first Goomba as in 1-1 (user decision; built)
 

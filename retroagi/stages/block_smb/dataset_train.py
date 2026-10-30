@@ -127,8 +127,8 @@ def train(config: DatasetTrainConfig) -> dict:
         policy.memory.train()
         random.shuffle(world)
         world_losses = []
-        for start in range(0, len(world), settings.batch_episodes):
-            loss = wm._forward(policy, world[start : start + settings.batch_episodes], device, settings.tried_weight)
+        for batch in wm.batches(world, settings):
+            loss = wm._forward(policy, batch, device, settings.tried_weight)
             world_optimizer.zero_grad()
             loss.backward()
             torch.nn.utils.clip_grad_norm_(policy.memory.parameters(), 1.0)

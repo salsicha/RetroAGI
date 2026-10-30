@@ -3179,11 +3179,8 @@ class Predictions:
         for _ in range(PREDICTION_EPOCHS):
             model.train()
             rng.shuffle(world)
-            size = self.world_settings.batch_episodes
-            for start in range(0, len(world), size):
-                loss = wm._forward(
-                    self.policy, world[start : start + size], self.device, self.world_settings.tried_weight
-                )
+            for batch in wm.batches(world, self.world_settings):
+                loss = wm._forward(self.policy, batch, self.device, self.world_settings.tried_weight)
                 self.world_optimizer.zero_grad()
                 loss.backward()
                 torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
