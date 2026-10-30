@@ -26,6 +26,44 @@ commit). How the parts work is described in the
   the training set"); the recorded failures are fixed in the teacher. A
   failed gate is fixed in the teacher or the policy, never bypassed.
 
+## 2026-10-30 — Why 1-1's fourth pipe stops the agent; the world model's memory capped; the climb lesson from farther back (user decision; built)
+
+The round of 2026-10-29 (tactic_20261030; failures_20261031) left 25 deaths
+in 1-1's pens, 15 between pipes 3 and 4, six of them speed runs pressed
+against the 64-pixel fourth pipe, running into it until a Goomba came. User:
+"start on 1" (find why the climb lesson does not carry over). One stalled
+playthrough replayed (artifacts/full_smb/pipe4_probe_20261030):
+
+- The tactic layer would choose `climb_forward` there (91 to 100%), but held
+  "advance" (drawn at 30% when it last chose; the logged playthroughs draw
+  their choices) and its end check kept it (0.1 to 19%, once 57%). Forcing
+  `climb_forward` changed nothing.
+- The skill chose what the climb lesson teaches next to a tall pipe: a short
+  run on the floor before it. In the lesson the teacher's run backs off 7 to
+  11 pixels for room, and so does the agent's (the world model puts its end
+  there). At 1-1's pipe the world model put it 3 to 31 pixels forward, into
+  the pipe. Its memory had carried 26 actions by then; its training episodes
+  are 3 actions long at the median, 99% at most 24, none past 30. With its
+  memory reset at the pipe, the run backed off and Mario climbed.
+- Whole 1-1, the same agent (48 playthroughs): the world model's memory
+  reset before every action, average 844 (pen deaths 25 to 17, but first-
+  Goomba deaths 7 to 14); kept for 12 actions, then reset: 923 against 898,
+  speed runs 1008, pen deaths 17, past the fourth pipe 22 against 16, past
+  the first pit 17 against 9.
+
+User: go ahead with A, B and C.
+
+- A (built): in deployed play the world model's state is carried for at most
+  `WORLD_MODEL_MEMORY` (12) actions, then starts from its first state again
+  (`smb_agent._predicted`). Replayed: as above, 923.
+- C (built): `pen_pipe_climb` (compose `pipe_pen` inside) starts Mario 72 to
+  112 pixels back in half its layouts, in a wider pen (176 to 208), one
+  walker between him and the pipe. Started next to the pipe the teacher's
+  tactic is a climb from the first decision (it follows the next thing ahead:
+  the pipe); with the walker first it advances, then climbs. The recording
+  teacher wins all 24 sampled layouts.
+- B: the world model trained on longer runs of actions (below).
+
 ## 2026-10-29 — The pen from a pipe; the first Goomba as in 1-1 (user decision; built)
 
 The 47 failures of the 48 logged 1-1 playthroughs with landings from vision

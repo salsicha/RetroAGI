@@ -157,13 +157,22 @@ def pipe_pen(rng, difficulty, x, inside: bool = False) -> Section:
     pen, close to the second pipe (56 to 64 pixels tall: too tall to climb
     well from where he stands, a run-up needed), the walkers behind him (in
     Full SMB 1-1 the agent ran into that pipe again and again while a Goomba
-    walked into his back: user, 2026-10-28)."""
+    walked into his back: user, 2026-10-28); in half the layouts farther
+    back (72 to 112 pixels) in a wider pen, one walker between him and the
+    pipe."""
     tier = _tier(difficulty)
     first = (32, 48, 56)[tier] + rng.randint(-4, 8)
     second = min(64, first + rng.choice((0, 8, 16)))
+    # Inside, half the layouts start Mario farther back in a wider pen with a
+    # walker between him and the pipe: he deals with it first (advance), then
+    # climbs (user, 2026-10-30: in 1-1 the agent held "advance" up to the
+    # fourth pipe, two Goombas about, and ran into it; the teacher's tactic
+    # is a climb from the start whenever the pipe is the next thing ahead).
+    far = inside and rng.random() < 0.5
     if inside:
         second = rng.randint(56, 64)
-    lead, between, tail = 48, rng.randint(112, 144) if inside else rng.randint(80, 128), 48
+    lead, tail = 48, 48
+    between = rng.randint(176, 208) if far else rng.randint(112, 144) if inside else rng.randint(80, 128)
     width = lead + 32 + between + 32 + tail
     s = Section(width)
     s.add([x, FLOOR, width, 20])
@@ -172,11 +181,18 @@ def pipe_pen(rng, difficulty, x, inside: bool = False) -> Section:
     s.add([b, FLOOR - second, 32, second], "pipe")
     walkers = rng.choice((1, 2)) if tier else 1
     if inside:
-        s.spawn = b - 10 - rng.randint(0, 24)
-        room = s.spawn - 32 - (a + 32 + 8)  # where the walkers start, behind him
-        for k in range(walkers):
+        s.spawn = b - 10 - (rng.randint(72, 112) if far else rng.randint(0, 24))
+        behind = walkers
+        if far:
+            behind -= 1
+            front = s.spawn + 10
             speed = round((0.4, 0.5, 0.6)[tier] + rng.uniform(0, 0.1), 3)
-            place = a + 32 + 8 + k * room // walkers + rng.randint(0, max(0, room // walkers - 12))
+            place = rng.randint(front + 24, b - 12 - 16)
+            s.enemies.append([place, FLOOR - ENEMY_HEIGHT, a + 32, b - 12, speed, rng.choice((1, -1, -1))])
+        room = s.spawn - 32 - (a + 32 + 8)  # where the walkers start, behind him
+        for k in range(behind):
+            speed = round((0.4, 0.5, 0.6)[tier] + rng.uniform(0, 0.1), 3)
+            place = a + 32 + 8 + k * room // behind + rng.randint(0, max(0, room // behind - 12))
             s.enemies.append([place, FLOOR - ENEMY_HEIGHT, a + 32, b - 12, speed, rng.choice((1, 1, -1))])
         return s
     for k in range(walkers):

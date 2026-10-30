@@ -177,7 +177,9 @@ loss); until they are shown accurate the simulator's truth stands in
 before a lesson's first decision let the tracks see enemies move.
 
 Without the teacher (deployed play, `SMBAgents(world_model=True)`), the
-world model's predicted outcome is the executor's destination
+world model's predicted outcome is the executor's destination (its state
+carried for at most `WORLD_MODEL_MEMORY`, 12, actions, then from its first
+state again: its training episodes are a few actions long)
 (`smb_agent.destination_of`): a hold lasts the predicted frames, runs and
 jumps go to the predicted end, a run the world model says is a run-up keeps
 its speed (the teacher's are, about a third of its runs), a run or jump onto

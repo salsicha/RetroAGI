@@ -96,6 +96,14 @@ class Decision:
     predicted: Optional[dict] = None
 
 
+# The most actions the world model's state carries in deployed play: then it
+# starts again from its first state. Its training episodes are a few actions
+# long (median 3, 99% at most 24); in 1-1 Mario reached the fourth pipe after
+# 26, and the world model, its memory past anything it learned from, sent the
+# run back from that pipe into it (user, 2026-10-30).
+WORLD_MODEL_MEMORY = 12
+
+
 def landing_height(scene: SceneObservation, action: ActionToken) -> Optional[float]:
     """How far below Mario's feet (pixels, negative above) the top of the
     still thing a run or jump points at is, as vision reports it: a surface,
@@ -421,6 +429,7 @@ class _Copy:
     # from action to action, and the watch that ends a wait or a ground move
     # when a coming enemy needs a move (smb_threat.ThreatWatch).
     world: Optional[tuple] = None
+    world_actions: int = 0  # actions the world model's state has carried
     threat_watch: object = None
 
 
@@ -627,6 +636,9 @@ class SMBAgents:
         )
         model = self.policy.memory
         empty = model.initial(1, self.device)
+        for i in chosen:
+            if starting[i].world_actions >= WORLD_MODEL_MEMORY:
+                starting[i].world, starting[i].world_actions = None, 0
         hidden = torch.stack([(starting[i].world or (empty[0][0], empty[1][0]))[0] for i in chosen])
         cell = torch.stack([(starting[i].world or (empty[0][0], empty[1][0]))[1] for i in chosen])
         out, (hidden, cell) = model.predict(
@@ -635,6 +647,7 @@ class SMBAgents:
         for j, i in enumerate(chosen):
             copy = starting[i]
             copy.world = (hidden[j], cell[j])
+            copy.world_actions += 1
             made[i].predicted = {name: value[j] for name, value in out.items()}
             mean = out["mean"][j].tolist()
             made[i].skill = destination_of(

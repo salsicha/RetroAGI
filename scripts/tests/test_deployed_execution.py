@@ -133,6 +133,18 @@ def test_the_world_model_steps_once_per_action_and_its_state_carries():
     assert first is not None and first[0].shape == (policy.memory.width,)
     agents._actions([agents.copies[0]], made, [0], [0], now, pictures)
     assert calls == [1, 1] and not torch.equal(agents.copies[0].world[0], first[0])
+    # Carried for WORLD_MODEL_MEMORY actions, then from its first state again
+    # (its training episodes are short; user, 2026-10-30).
+    # Every action here has the same inputs: one from the first state again
+    # ends where the first action did.
+    from retroagi.core.smb_agent import WORLD_MODEL_MEMORY
+
+    for _ in range(WORLD_MODEL_MEMORY - 2):
+        agents._actions([agents.copies[0]], made, [0], [0], now, pictures)
+    assert agents.copies[0].world_actions == WORLD_MODEL_MEMORY
+    assert not torch.equal(agents.copies[0].world[0], first[0])
+    agents._actions([agents.copies[0]], made, [0], [0], now, pictures)
+    assert agents.copies[0].world_actions == 1 and torch.equal(agents.copies[0].world[0], first[0])
 
 
 def hit_at(frames):

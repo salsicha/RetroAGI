@@ -552,3 +552,37 @@ def test_a_pit_reached_running_is_jumped_running():
             break
     assert env.mario["vx"] >= 2.0  # it took off running
     env.close()
+
+
+@pytest.mark.timeout(900)
+def test_a_pen_pipe_climb_started_far_back_advances_past_a_walker_then_climbs():
+    # User, 2026-10-30: in 1-1 the agent held "advance" up to the fourth pipe
+    # and ran into it; started next to the pipe, the teacher's tactic is a
+    # climb from the first decision, so no lesson showed advance ending there.
+    import copy
+
+    from retroagi.stages.block_smb.teacher_replay import replay
+
+    sample = sample_block_smb_monte_carlo_scenario(
+        split="validation", seed=41, sample_index=0, family="pen_pipe_climb", difficulty="medium"
+    )
+    pipes = sorted(p for p, k in zip(sample.scenario["platforms"], sample.scenario["platform_kinds"]) if k == "pipe")
+    mario = sample.scenario["mario"][0]
+    pipe = min(p[0] for p in pipes if p[0] > mario)
+    assert 72 <= pipe - mario - 10 <= 112
+    assert any(mario < e[0] < pipe for e in sample.scenario["enemies"])  # a walker between
+    played = replay(copy.deepcopy(sample.scenario), family="pen_pipe_climb")
+    assert played["won"]
+    env = MarioScenarioEnv()
+    env.reset(scenario=copy.deepcopy(sample.scenario))
+    env.render = lambda: None
+    teacher = episode_teacher(sample.scenario)
+    marks, stances = {c["frame"] for c in played["commands"]}, []
+    for frame, action in enumerate(played["actions"]):
+        teacher.observe_frame(env)
+        if frame in marks:
+            stances.append(teacher_tactic(env, teacher).stance)
+        env.step(action)
+    env.close()
+    assert stances[0] == "advance" and "climb_forward" in stances
+    assert stances.index("climb_forward") > 0
