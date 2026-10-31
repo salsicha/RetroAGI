@@ -185,7 +185,9 @@ jumps go to the predicted end, a run the world model says is a run-up keeps
 its speed (the teacher's are, about a third of its runs), a run or jump onto
 a still thing vision sees (a surface, a pipe, a block) ends at that thing's
 top as vision draws it, how far it goes being the world model's
-(`smb_agent.landing_height`), a stomp goes to the
+(`smb_agent.landing_height`), a run ends inside the thing the skill aimed
+at, found again in every picture so that an end coming into view as Mario
+approaches stops it (`smb_aim`; jumps keep their takeoff plan), a stomp goes to the
 collision trackers' expected contact point. The executor ends a wait or a
 ground move as `threat` (feedback `collision_due`) when the trackers expect
 a hit within the lead a jump over that enemy needs, plus 5 frames

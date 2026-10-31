@@ -263,7 +263,11 @@ class SpatialFeedback:
         )
         self.previous = scene
 
-    def begin(self, destination, scene, proposed=None):
+    def begin(self, destination, scene, proposed=None, aim=None):
+        """The plan for ``destination``. ``aim`` (deployed play): the pointer
+        of what the skill aimed at; a run then ends inside the still thing it
+        names (smb_aim)."""
+        from .smb_aim import aimed_thing
         from .smb_executor import HOLD_GROUND, ActionPlan
 
         self.flight = None
@@ -293,6 +297,8 @@ class SpatialFeedback:
                 wait=destination.frames > 0,
                 threat=destination.threat,
             )
+        thing = aimed_thing(scene, aim) if aim is not None and scene.mario.box is not None else None
+        middle = (scene.mario.box[0] + scene.mario.box[2]) / 2 if scene.mario.box is not None else 0.0
         if proposed is None and destination.mode == "run":
             if scene.mario.box is None:
                 self.status = "lost_observation"
@@ -304,6 +310,7 @@ class SpatialFeedback:
                 scene.mario.box[3],
                 destination.y,
                 carry=destination.carry,
+                aim=None if thing is None else thing.shifted(-middle),
             )
             return ActionPlan(0, 1)
         if destination is not None and destination.mode == "jump" and scene.mario.box is None:

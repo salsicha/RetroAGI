@@ -959,7 +959,17 @@ class SMBAgents:
                 destination = (
                     None if given_actions and given_actions[j] is not None else decision.skill
                 )
-                decision.plan = playing[k].spatial.begin(destination, scenes[k], decision.plan)
+                # Without the teacher the executor drives to what the skill
+                # aimed at (smb_aim; user, 2026-10-31).
+                aim = (
+                    decision.action.target
+                    if destination is not None
+                    and decision.action is not None
+                    and self.carry_out is None
+                    and self.world_model
+                    else None
+                )
+                decision.plan = playing[k].spatial.begin(destination, scenes[k], decision.plan, aim=aim)
                 if playing[k].trackers is not None:
                     self._began(playing[k], decision, scenes[k])
                 decisions[k] = decision

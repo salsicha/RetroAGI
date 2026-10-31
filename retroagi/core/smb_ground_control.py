@@ -34,6 +34,24 @@ class GroundMove:
     # A run-up (SkillToken.carry): runs toward the destination without
     # braking and ends on reaching it, still running (_carry_press).
     carry: bool = False
+    # Deployed play: the still thing the skill aimed at (smb_aim.Aim, its
+    # pixels counted from Mario's middle where the run began), found again
+    # every picture; the run ends inside it (_goal).
+    aim: object = None
+
+    def _goal(self, scene) -> float:
+        """Where the run ends, from where it began: the destination, kept
+        inside the aimed thing as this picture shows it (an end that has come
+        into view bounds it)."""
+        if self.aim is None or scene is None or scene.mario.box is None:
+            return self.distance
+        from .smb_aim import refound
+
+        moved = self.feedback.displacement - self.start
+        middle = (scene.mario.box[0] + scene.mario.box[2]) / 2
+        # Its pixels in this picture, found again, and back.
+        self.aim = refound(self.aim.shifted(middle - moved), scene).shifted(moved - middle)
+        return self.aim.place(self.distance)
 
     def press(self, scene):
         if self.carry:
@@ -48,8 +66,9 @@ class GroundMove:
         if scene is None or scene.mario.box is None:
             self.done, self.status = True, "lost_observation"
             return 0
-        direction = 1 if self.distance > 0 else -1
-        remaining = self.distance - (self.feedback.displacement - self.start)
+        goal = self._goal(scene)
+        direction = 1 if goal > 0 else -1
+        remaining = goal - (self.feedback.displacement - self.start)
         button = 1 if direction > 0 else 3
         grounded = scene.mario.on_something and scene.mario.support != "air"
         if remaining * direction <= 0 or not grounded or self.elapsed >= 192:
@@ -75,7 +94,7 @@ class GroundMove:
         moving = support_box is not None
         platforms = [t for t in self.feedback.tracks.tracks if t.kind == "platform"]
         center = (scene.mario.box[0] + scene.mario.box[2]) / 2
-        remaining = self.distance - (self.feedback.displacement - self.start)
+        remaining = self._goal(scene) - (self.feedback.displacement - self.start)
         if self.started_moving is None:
             self.started_moving = moving
             goal = center + remaining

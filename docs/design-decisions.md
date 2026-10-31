@@ -26,6 +26,37 @@ commit). How the parts work is described in the
   the training set"); the recorded failures are fixed in the teacher. A
   failed gate is fixed in the teacher or the policy, never bypassed.
 
+## 2026-10-31 — Runs drive to what the skill aimed at (user decision; built)
+
+The executor drove Mario to a fixed point (the world model's predicted end,
+relative to his feet when the action began), never checking it against the
+thing the skill aimed at. User: "make executor drive to object the skill
+aimed at". In deployed play (without the teacher; Block SMB training is
+unchanged) the executor now gets the aimed thing (`SpatialFeedback.begin`,
+`aim`): a still surface, pipe or block (`smb_aim.aimed_thing`; its real ends:
+seams joined, enemies standing on it no ends, an end at the picture's edge
+open). A run is kept inside it, 8 pixels from its ends, and finds it again in
+every picture (`smb_aim.refound`, `GroundMove._goal`), so an end that comes
+into view as Mario approaches (a floor ending at a pit past the picture's
+edge) stops it.
+
+Measured on 1-1 with the combined agent (tactic_20261030's layers and
+predictions_20261031's world model, its memory 64 actions; 48 logged
+playthroughs, nothing learning):
+
+| The executor | Average | Speed run | Max points | Past pipe 4 | Past the first pit | Pit-1 deaths | First-Goomba deaths |
+|---|---|---|---|---|---|---|---|
+| To the destination (before) | 1008 | 1034 | 982 | 25 | 15 | 10 | 2 |
+| Runs and jumps to the aimed thing, steering in the air | 930 | 899 | 961 | 21 | 14 | 7 | 9 |
+| The same, steering only at still things | 922 | 973 | 870 | 17 | 12 | 5 | 7 |
+| Runs to the aimed thing, jumps to the destination (kept) | 1106 | 1199 | 1012 | 28 | 21 | 7 | 2 |
+
+Jumps aimed at the thing (landing on its top inside its ends, steering
+toward it in the air) did worse: Mario landed on the small blocks the skill
+aimed at and slid off beside the first Goomba; steering after a walker in a
+stomp landed him on the question block above it. They keep the plan made at
+takeoff.
+
 ## 2026-10-30 — Why 1-1's fourth pipe stops the agent; the world model's memory capped; the climb lesson from farther back (user decision; built)
 
 The round of 2026-10-29 (tactic_20261030; failures_20261031) left 25 deaths
