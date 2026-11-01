@@ -1006,3 +1006,23 @@ def test_a_skill_of_other_verbs_loads_with_its_verb_readings_started_afresh(tmp_
     assert torch.equal(loaded.skill.pointer_key.weight, policy.skill.pointer_key.weight)
     assert checkpoint["trained_layers"] == [] and checkpoint["world_model"] is None
     assert "verbs_replaced" in checkpoint["load_migrations"]
+
+
+def test_the_skill_rehearses_its_own_lessons_as_often_as_the_tactic_episodes():
+    # User, 2026-11-01: learning alongside the tactic layer, the skill forgot
+    # its own lessons (stomps 98.6% after skill training, 79% after).
+    import random
+    from types import SimpleNamespace
+
+    from retroagi.stages.block_smb.layered_train import skill_batches
+
+    replay = [SimpleNamespace(frames=100, name=f"t{i}") for i in range(30)]
+    rehearsal = [SimpleNamespace(frames=100, name=f"s{i}") for i in range(80)]
+    tagged = skill_batches(replay, rehearsal, 1000, random.Random(0))
+    kinds = [kind for kind, _ in tagged]
+    tactic = [e for kind, batch in tagged if kind == "tactic" for e in batch]
+    own = [e for kind, batch in tagged if kind == "rehearsal" for e in batch]
+    assert sorted(e.name for e in tactic) == sorted(e.name for e in replay)
+    assert len(own) == len(replay) and len({e.name for e in own}) == len(own)
+    assert kinds != sorted(kinds)  # interleaved
+    assert [kind for kind, _ in skill_batches(replay, [], 1000, random.Random(0))] == ["tactic"] * 3

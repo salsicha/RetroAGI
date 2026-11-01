@@ -136,6 +136,12 @@ class LayeredTrainConfig:
     # the tactic training"), from the teacher's actions in the tactic
     # episodes, each round after the tactic layer's passes (skill_losses).
     skill_learns: bool = True
+    # While it learns alongside the tactic layer, the skill also goes over its
+    # own lessons: a skill dataset's episodes (its rounds' folder), as many a
+    # pass as the tactic episodes (skill_batches). It forgot them otherwise
+    # (user, 2026-11-01: its stomp lessons won 98.6% after skill training,
+    # 79% after a tactic run). "" for none.
+    skill_rehearsal: str = ""
     epochs_per_round: int = 8
     batch_frames: int = 8192
     learning_rate: float = 3e-4
@@ -1193,6 +1199,18 @@ def kept_episodes(replay, played, capacity: int) -> list:
     combination each round, in family order; cutting it would drop whole
     families)."""
     return (list(replay) + list(played))[-max(capacity, len(played)) :]
+
+
+def skill_batches(replay, rehearsal, batch_frames: int, rng: random.Random) -> list:
+    """One pass of the skill learning alongside the tactic layer: the tactic
+    episodes' batches ("tactic") and as many episodes of its own lessons
+    (``rehearsal``, drawn afresh each pass; "rehearsal"), shuffled together."""
+    tagged = [("tactic", batch) for batch in _batches(replay, batch_frames, rng)]
+    if rehearsal:
+        drawn = rng.sample(rehearsal, min(len(rehearsal), len(replay)))
+        tagged += [("rehearsal", batch) for batch in _batches(drawn, batch_frames, rng)]
+    rng.shuffle(tagged)
+    return tagged
 
 
 def _batches(episodes: Sequence[EpisodeRecord], batch_frames: int, rng: random.Random):
@@ -2630,12 +2648,17 @@ def train_layer(config: LayeredTrainConfig) -> dict:
     # weights (not the scene encoder's: the world model reads it unchanged).
     skill_learning = list(policy.skill.parameters()) if config.learner == "tactic" and config.skill_learns else []
     skill_optimizer = None
+    rehearsal: list = []
     if skill_learning:
         for parameter in skill_learning:
             parameter.requires_grad_(True)
         skill_optimizer = torch.optim.AdamW(
             skill_learning, lr=config.learning_rate, weight_decay=config.weight_decay
         )
+        if config.skill_rehearsal:
+            for folder in sorted(Path(config.skill_rehearsal).glob("round_*")):
+                rehearsal += load_round(folder)[0]
+            print(f"[{config.learner}] the skill rehearses {len(rehearsal)} episodes of its own lessons", flush=True)
     pool = EpisodePool(config, policy.settings)
     sweep = config.learner == "skill" and config.sweep
     combinations: list[EpisodeTask] = []
@@ -2791,17 +2814,22 @@ def train_layer(config: LayeredTrainConfig) -> dict:
                         totals[name].append(float(value))
                 if skill_optimizer is not None:
                     # The skill: the teacher's actions in the episodes kept
-                    # (in reward rounds those the teacher played before).
-                    for batch in _batches(replay, config.batch_frames, rng):
-                        losses, stats = skill_losses(policy, batch, device)
+                    # (in reward rounds those the teacher played before), and
+                    # its own lessons (skill_rehearsal).
+                    for kind, batch in skill_batches(replay, rehearsal, config.batch_frames, rng):
+                        if kind == "tactic":
+                            losses, stats = skill_losses(policy, batch, device)
+                        else:
+                            losses, stats = learner_losses(policy, "skill", batch, config.expectation_weight, device)
                         if not losses:
                             continue
                         skill_optimizer.zero_grad()
                         sum(losses.values()).backward()
                         torch.nn.utils.clip_grad_norm_(skill_learning, 1.0)
                         skill_optimizer.step()
+                        prefix = "skill" if kind == "tactic" else "rehearsal"
                         for name, value in {**losses, **stats}.items():
-                            totals[f"skill_{name}"].append(float(value))
+                            totals[f"{prefix}_{name}"].append(float(value))
             policy.eval()
             learn_time = time.time() - started
             started = time.time()
