@@ -1,0 +1,24 @@
+{
+  "source": "/home/amoran/repos/RetroAGI/artifacts/block_smb/predictions_20261031/policy.pt",
+  "source_sha256": "5d6b97d515c8b8c4bafa457078cec3e01a8e75c16e39fec602a984d6fc95f6b4",
+  "initial_checkpoint": "/home/amoran/repos/RetroAGI/artifacts/block_smb/rec_tactic_20261101/init.pt",
+  "learner": "tactic",
+  "seed": 2026101201,
+  "families": [
+    "tactics_bridge_then_gap",
+    "chained_enemy_gauntlet",
+    "max_points_advance",
+    "max_points_climb_backward",
+    "max_points_pen_from_pipe",
+    "mixed_section",
+    "tactics_bridge_sequence",
+    "max_points_descend_backward",
+    "speed_run_climb_backward",
+    "full_smb_blocks_proxy"
+  ],
+  "extra_layouts": "",
+  "epochs_per_round": 64,
+  "load_migrations": [
+    "skill_ordered_choice_zero_initialized"
+  ]
+}
