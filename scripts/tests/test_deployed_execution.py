@@ -63,6 +63,12 @@ def test_a_landing_on_a_still_thing_it_sees_takes_its_height_from_vision():
     assert landing_height(seen, ActionToken("jump", ("pipes", 0))) == -32
     assert landing_height(seen, ActionToken("jump", ("blocks", 0))) == -64
     assert landing_height(seen, ActionToken("run", ("surfaces", 0))) == 0
+    # Higher than a jump reaches (1-1's brick row 128 up): the world model's
+    # height stands.
+    from retroagi.core.smb_agent import LANDING_REACH
+
+    row = SceneObservation(mario=seen.mario, surfaces=(Surface(150, 230, 208 - 128, False),))
+    assert LANDING_REACH == 83 and landing_height(row, ActionToken("jump", ("surfaces", 0))) is None
     # Not where it moves (a moving surface, a moving platform), not an enemy,
     # not a slot vision does not fill: the world model's height stands.
     assert landing_height(seen, ActionToken("jump", ("surfaces", 2))) is None

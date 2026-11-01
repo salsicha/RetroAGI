@@ -17,6 +17,7 @@ Training may supply teacher tokens for selected layers; runtime playback
 uses only the policy's own choices and the externally set strategy switch.
 """
 
+import math
 from dataclasses import dataclass, field
 from typing import Callable, Mapping, Optional, Sequence
 
@@ -104,15 +105,22 @@ class Decision:
 # 12 actions then). It now learns runs of 64 (world_model_train.chained;
 # the agent in use, 2026-11-01).
 WORLD_MODEL_MEMORY = 64
+# Vision's height for a landing only on a thing a jump can reach: its top at
+# most this far above Mario's feet (pixels; the NES motion model's highest
+# jump, at a full run, rises 83). Above that the world model's height stands:
+# aimed at 1-1's brick row 128 up over its second pit, Mario jumped straight
+# up and fell into the pit (2026-11-01: second-pit falls 11 to 8 of 48).
+LANDING_REACH = 83
 
 
 def landing_height(scene: SceneObservation, action: ActionToken) -> Optional[float]:
     """How far below Mario's feet (pixels, negative above) the top of the
     still thing a run or jump points at is, as vision reports it: a surface,
     a pipe or a block; None for an enemy, a moving platform or a moving
-    surface (their tops move before he lands), or when vision shows no
-    Mario or nothing in that slot (user, 2026-10-29: the world model put a
-    jump onto 1-1's first question block 54 pixels up, its top is 64)."""
+    surface (their tops move before he lands), a thing higher than a jump
+    reaches (LANDING_REACH), or when vision shows no Mario or nothing in that
+    slot (user, 2026-10-29: the world model put a jump onto 1-1's first
+    question block 54 pixels up, its top is 64)."""
     if action.target is None or scene.mario.box is None:
         return None
     name, slot = action.target
@@ -128,7 +136,8 @@ def landing_height(scene: SceneObservation, action: ActionToken) -> Optional[flo
         top = thing.top
     else:
         top = (thing.box if isinstance(thing, BlockView) else thing)[1]
-    return float(top - scene.mario.box[3])
+    below = float(top - scene.mario.box[3])
+    return below if below >= -LANDING_REACH else None
 
 
 def destination_of(

@@ -26,6 +26,31 @@ commit). How the parts work is described in the
   the training set"); the recorded failures are fixed in the teacher. A
   failed gate is fixed in the teacher or the policy, never bypassed.
 
+## 2026-11-01 — The agent in use's failures; landings only within reach (built)
+
+User: "Keep going". The agent in use's 47 failures on 1-1
+(failures_20261101_in_use): 11 in the pen between pipes 3 and 4 (7 of them
+max points, stomp jumps at its two Goombas landing on the floor beside
+them), 9 falls into the second pit, 7 into the first, 7 in the pen between
+pipes 2 and 3, 5 on the brick rows past the first pit, 7 further on, 2 at the
+first Goomba. At the second pit five runs and jumps were aimed at the brick
+row 128 pixels up: with its height from vision the jump went straight up and
+Mario fell; at the first pit the jumps took off from a run that braked and
+landed 4 to 23 pixels short.
+
+Two execution changes tried (48 playthroughs each, the agent in use):
+
+| | Average | First pit falls | Second pit falls | Finished |
+|---|---|---|---|---|
+| Neither (before) | 1106 | 7 | 11 | 0 |
+| A jump at a floor 32+ pixels wide lands no shorter than 8 past its near end | 1066 | 13 | 5 | 0 |
+| Vision's landing height only within a jump's reach (83 pixels) | 1123 | 7 | 8 | 1 |
+| Both | 1058 | 12 | 5 | 0 |
+
+Kept: vision's height only within reach (`smb_agent.LANDING_REACH`); above
+it the world model's height stands. Not kept: the jump moved onto the floor
+past a pit (the first pit's jumps, from a near standstill, failed instead).
+
 ## 2026-11-01 — The agent in use (user decision; built)
 
 User: keep the combined agent, with runs driven to what the skill aimed at,
