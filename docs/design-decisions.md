@@ -26,6 +26,30 @@ commit). How the parts work is described in the
   the training set"); the recorded failures are fixed in the teacher. A
   failed gate is fixed in the teacher or the policy, never bypassed.
 
+## 2026-11-01 — Is the tactic layer short of layouts? Twice as many for ten lessons (user decision; measured)
+
+User: "is there not enough training data? do we need more layouts when
+training?". The tactic layer matched the teacher on 99.6 to 99.9% of its
+training decisions but won 81 to 87% of fresh layouts (its weakest lessons
+11 to 67%), with about 96 recorded layouts a lesson. Two tests:
+
+- Retrained with another seed on the same data (tactic_20261031_seed2): 361
+  wins of 441 against 357 (the first seed) and 382 (tactic_20261030). The
+  seed alone changes the score of 25 of 49 lessons (each from 9 layouts),
+  but the level stays near 0.81 for this round's start and data.
+- Twice the layouts (8 more a round, another seed) for the ten weakest
+  lessons (tactic_20261101), trained from the same start with the same seed
+  as tactic_20261031: those ten lessons won 63 of 90 against 47 (and 53 with
+  the other seed), better in 7, worse in none; the other 39 lessons 312
+  against 310 (9 better, 8 worse). More layouts help the lessons that get
+  them.
+- But on 1-1 (48 logged playthroughs, the world model's memory 64) that
+  agent averaged 655 (656 with runs driven to what the skill aimed at),
+  against 1106 for the combined agent: 24 deaths at the first Goomba, ten of
+  them one path, a stomp jump at the Goomba under the first question block
+  (bumping the block, landing in front of it), in both modes. Better Block
+  SMB scores did not carry over here.
+
 ## 2026-10-31 — Runs drive to what the skill aimed at (user decision; built)
 
 The executor drove Mario to a fixed point (the world model's predicted end,
