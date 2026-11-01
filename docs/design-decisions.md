@@ -26,6 +26,18 @@ commit). How the parts work is described in the
   the training set"); the recorded failures are fixed in the teacher. A
   failed gate is fixed in the teacher or the policy, never bypassed.
 
+## 2026-11-01 — The agent in use (user decision; built)
+
+User: keep the combined agent, with runs driven to what the skill aimed at,
+as the agent in use. Saved as artifacts/block_smb/agent_20261101 (agent.pt:
+tactic_20261030's scene encoder, tactic layer and skill with
+predictions_20261031's world model, trained on runs of 64 actions; tracker.pt:
+predictions_20261031's collision trackers). The world model's memory in
+deployed play is now 64 actions by default (`WORLD_MODEL_MEMORY`; 12 was for
+a world model that had learned only single episodes). Played from the saved
+files with the code's defaults it reproduces its 1-1 result exactly: average
+1106, speed runs 1199, max points 1012, past pipe 4 28, past the first pit 21.
+
 ## 2026-11-01 — Is the tactic layer short of layouts? Twice as many for ten lessons (user decision; measured)
 
 User: "is there not enough training data? do we need more layouts when

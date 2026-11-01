@@ -97,11 +97,13 @@ class Decision:
 
 
 # The most actions the world model's state carries in deployed play: then it
-# starts again from its first state. Its training episodes are a few actions
-# long (median 3, 99% at most 24); in 1-1 Mario reached the fourth pipe after
-# 26, and the world model, its memory past anything it learned from, sent the
-# run back from that pipe into it (user, 2026-10-30).
-WORLD_MODEL_MEMORY = 12
+# starts again from its first state, never past what it learned from. In 1-1
+# Mario reached the fourth pipe after 26 actions, and a world model that had
+# learned only single episodes (a few actions long), its memory past anything
+# it knew, sent the run back from that pipe into it (user, 2026-10-30: kept
+# 12 actions then). It now learns runs of 64 (world_model_train.chained;
+# the agent in use, 2026-11-01).
+WORLD_MODEL_MEMORY = 64
 
 
 def landing_height(scene: SceneObservation, action: ActionToken) -> Optional[float]:
