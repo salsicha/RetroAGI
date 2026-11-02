@@ -180,12 +180,15 @@ class WorldModel(nn.Module):
         self.verb = nn.Embedding(len(VERBS), width)
         self.mario_motion = nn.Linear(len(MARIO_STATE), width)
         self.feedback = nn.Linear(EXECUTION_WIDTH, width)
-        # No reading of the tactic and the strategy switch an action was
-        # chosen under (user, 2026-10-28): in the teacher's recordings the
-        # tactic always matched the move, so the world model read where a
-        # jump ends from the tactic (told "climb backward" for a pipe ahead,
-        # it put the jump behind Mario); it reads the scene and the action.
-        for layer in (self.mario_motion, self.feedback):
+        # The tactic and the strategy switch an action was chosen under: the
+        # intent the action's object alone does not say (a run on a floor
+        # piece may stop short of a walker, run up to a pit's edge or back
+        # off from a pipe). Removed on 2026-10-28, its runs then ended 24
+        # pixels from the teacher's (90th percentile 123) in the stomp
+        # lessons; the user, 2026-11-01: "Clearly it was a mistake to remove
+        # tactic and strategy from the world model. Add it back".
+        self.context = nn.Linear(CONTEXT_WIDTH, width)
+        for layer in (self.mario_motion, self.feedback, self.context):
             nn.init.zeros_(layer.weight)
             nn.init.zeros_(layer.bias)
         # The list of tracked things: each row's numbers, and the row itself
@@ -238,25 +241,28 @@ class WorldModel(nn.Module):
         rows = (self.objects(numbers) + self.object_row) * listed[..., None]
         return torch.cat((tokens, rows), 1), torch.cat((present, listed), 1)
 
-    def _query(self, tokens, verbs, pointers, rows):
-        return self.verb(verbs) + tokens[rows, pointers]
+    def _query(self, tokens, verbs, pointers, rows, context):
+        query = self.verb(verbs) + tokens[rows, pointers]
+        return query if context is None else query + self.context(context)
 
-    def advance(self, tokens, feedback, verbs, pointers, state, rows=None):
+    def advance(self, tokens, feedback, verbs, pointers, state, rows=None, context=None):
         """One LSTM step for N actions from ``state`` ([N, memory width] each
         of hidden and cell): the scene's summary token, the action's verb and
-        object token, the feedback. ``rows`` [N]: each action's scene
-        (default: one each). Returns the state after the step."""
+        object token, what it was chosen under (``context`` [N,
+        CONTEXT_WIDTH]: the tactic and the strategy switch), the feedback.
+        ``rows`` [N]: each action's scene (default: one each). Returns the
+        state after the step."""
         rows = torch.arange(len(verbs), device=verbs.device) if rows is None else rows
-        query = self._query(tokens, verbs, pointers, rows)
+        query = self._query(tokens, verbs, pointers, rows, context)
         step = tokens[rows, 0] + query + self.feedback(feedback[rows])
         return self.cell(step, state)
 
-    def readout(self, tokens, present, hidden, verbs, pointers, rows=None) -> dict:
+    def readout(self, tokens, present, hidden, verbs, pointers, rows=None, context=None) -> dict:
         """Each action's outcome from its LSTM ``hidden`` state: {"mean",
         "sigma"} [N, OUTCOME_WIDTH] in pixels and frames, and "success" and
         "carry" (a run ending still running) [N] logits."""
         rows = torch.arange(len(verbs), device=verbs.device) if rows is None else rows
-        query = (self._query(tokens, verbs, pointers, rows) + self.state(hidden)).unsqueeze(1)
+        query = (self._query(tokens, verbs, pointers, rows, context) + self.state(hidden)).unsqueeze(1)
         keys = self.key_norm(tokens)[rows]
         attended, _ = self.attention(
             self.query_norm(query), keys, keys, key_padding_mask=~present[rows]
@@ -271,13 +277,13 @@ class WorldModel(nn.Module):
         return {"mean": mean, "sigma": sigma, "success": raw[:, 2 * OUTCOME_WIDTH],
                 "carry": raw[:, 2 * OUTCOME_WIDTH + 1]}
 
-    def predict(self, tokens, present, objects, mario, feedback, verbs, pointers, state):
+    def predict(self, tokens, present, objects, mario, feedback, verbs, pointers, state, context=None):
         """At play: the outcome of each copy's chosen action and its state
         after the step (one step per action); ``pointers`` index the tokens
         with_objects makes (object_pointers)."""
         tokens, present = self.with_objects(tokens, present, objects, mario)
-        state = self.advance(tokens, feedback, verbs, pointers, state)
-        return self.readout(tokens, present, state[0], verbs, pointers), state
+        state = self.advance(tokens, feedback, verbs, pointers, state, context=context)
+        return self.readout(tokens, present, state[0], verbs, pointers, context=context), state
 
 
 def outcome_loss(predicted, records):

@@ -263,6 +263,7 @@ def _forward(policy, episodes, device, tried_weight=1.0, collect=None):
     mario = torch.as_tensor(np.concatenate([e["mario"] for e in episodes]), device=device)
     feedback = torch.as_tensor(np.concatenate([e["feedback"] for e in episodes]), device=device)
     tokens, present = model.with_objects(tokens, present, objects, mario)
+    context = torch.as_tensor(np.concatenate([e["context"] for e in episodes]), device=device)
     hidden, cell = model.initial(len(episodes), device)
     losses, weights = [], []
     for k in range(max(counts)):
@@ -271,11 +272,11 @@ def _forward(policy, episodes, device, tried_weight=1.0, collect=None):
         state = (hidden[active], cell[active])
         verbs = torch.as_tensor([episodes[i]["steps"][k] for i in active], device=device)
         pointers = torch.as_tensor([episodes[i]["step_pointers"][k] for i in active], device=device)
-        stepped = model.advance(tokens, feedback, verbs, pointers, state, rows=at)
+        stepped = model.advance(tokens, feedback, verbs, pointers, state, rows=at, context=context[at])
         records = torch.as_tensor(np.stack([episodes[i]["executed"][k] for i in active]), device=device)
         named = records[:, COLUMN["verb"]] >= 0
         if named.any():
-            predicted = model.readout(tokens, present, stepped[0], verbs, pointers, rows=at)
+            predicted = model.readout(tokens, present, stepped[0], verbs, pointers, rows=at, context=context[at])
             predicted = {name: value[named] for name, value in predicted.items()}
             loss, _ = outcome_loss(predicted, records[named])
             # Whether each executed run ended still running (a run-up).
@@ -312,8 +313,11 @@ def _forward(policy, episodes, device, tried_weight=1.0, collect=None):
                 pointers,
                 (state[0][source], state[1][source]),
                 rows=rows_at,
+                context=context[rows_at],
             )
-            predicted = model.readout(tokens, present, branch[0], verbs, pointers, rows=rows_at)
+            predicted = model.readout(
+                tokens, present, branch[0], verbs, pointers, rows=rows_at, context=context[rows_at]
+            )
             loss, _ = outcome_loss(predicted, records)
             losses.append(loss * tried_weight)
             weights.append(float(len(records)) * tried_weight)

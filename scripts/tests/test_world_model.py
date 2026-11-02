@@ -210,42 +210,52 @@ def test_episodes_are_learnt_joined_into_long_runs_of_actions(enemy_hop_episode)
     assert [len(b) for b in batches(episodes, settings)] == [1, 1]
 
 
-@torch.no_grad()
-def test_the_world_model_reads_no_tactic_and_says_whether_a_run_keeps_its_speed():
-    # User, 2026-10-28: it read where a jump ends from the tactic it was
-    # chosen under; and every run it carried out braked (no run-ups).
-    import inspect
+def test_the_world_model_reads_the_tactic_and_says_whether_a_run_keeps_its_speed():
+    # User, 2026-11-01: "Clearly it was a mistake to remove tactic and
+    # strategy from the world model. Add it back" (removed 2026-10-28). It
+    # also says whether a run keeps its speed (2026-10-28).
+    from retroagi.core.tokens import StrategyToken, encode_strategy, encode_tactic, tactic_token
 
     torch.manual_seed(0)
     policy = LayeredSMBPolicy().eval()
     model = policy.memory
-    assert not hasattr(model, "context")
-    assert "context" not in inspect.signature(model.predict).parameters
     tokens, present, objects, mario, feedback = scene(policy, 2)
     verbs = torch.tensor([VERBS.index("run"), VERBS.index("jump")])
     pointers = torch.tensor([MARIO_TOKEN, MARIO_TOKEN])
-    out, _ = model.predict(tokens, present, objects, mario, feedback, verbs, pointers, model.initial(2, "cpu"))
-    assert out["carry"].shape == (2,)
-    # Untrained, a run brakes (about a third of the teacher's runs are run-ups).
-    assert (torch.sigmoid(out["carry"]) < 0.5).all()
+    context = torch.stack(
+        [torch.cat((encode_tactic(tactic_token(t)), encode_strategy(StrategyToken("speed_run", 1))))
+         for t in ("advance", "climb_backward")]
+    )
+    with torch.no_grad():
+        plain, _ = model.predict(tokens, present, objects, mario, feedback, verbs, pointers, model.initial(2, "cpu"))
+        told, _ = model.predict(tokens, present, objects, mario, feedback, verbs, pointers, model.initial(2, "cpu"),
+                                context=context)
+    # Untrained, the reading has no influence; a run brakes.
+    assert torch.equal(plain["mean"], told["mean"])
+    assert told["carry"].shape == (2,) and (torch.sigmoid(told["carry"]) < 0.5).all()
+    # It learns from it: the memory step's input carries it (the outputs
+    # start at zero, untrained).
+    with_objects = model.with_objects(tokens, present, objects, mario)[0]
+    state = model.advance(with_objects, feedback, verbs, pointers, model.initial(2, "cpu"), context=context)
+    state[0].pow(2).sum().backward()
+    assert model.context.weight.grad is not None and model.context.weight.grad.abs().sum() > 0
 
 
-def test_a_world_model_saved_reading_the_tactic_loads_without_it(tmp_path):
+def test_a_world_model_saved_without_the_tactic_reading_loads_with_it(tmp_path):
     from dataclasses import asdict
 
-    from retroagi.core.world_model import CONTEXT_WIDTH, OUTCOME_WIDTH
+    from retroagi.core.world_model import OUTCOME_WIDTH
     from retroagi.stages.block_smb.layered_train import load_layered_checkpoint
 
     torch.manual_seed(0)
     policy = LayeredSMBPolicy()
     state = dict(policy.state_dict())
     width = state["memory.verb.weight"].shape[1]
-    # As saved before: the tactic and strategy read, no run-up output.
-    state["memory.context.weight"] = torch.randn(width, CONTEXT_WIDTH)
-    state["memory.context.bias"] = torch.randn(width)
-    state["memory.out.weight"] = torch.randn(2 * OUTCOME_WIDTH + 1, width)
-    state["memory.out.bias"] = torch.randn(2 * OUTCOME_WIDTH + 1)
-    path = tmp_path / "before.pt"
+    # As saved between 2026-10-28 and 2026-11-01: no tactic reading.
+    for name in [n for n in state if n.startswith("memory.context.")]:
+        state.pop(name)
+    state["memory.out.weight"] = torch.randn(2 * OUTCOME_WIDTH + 2, width)
+    path = tmp_path / "without.pt"
     torch.save(
         {
             "settings": asdict(policy.settings),
@@ -258,12 +268,10 @@ def test_a_world_model_saved_reading_the_tactic_loads_without_it(tmp_path):
         path,
     )
     loaded, checkpoint = load_layered_checkpoint(path)
-    assert {"world_model_reads_no_tactic", "world_model_predicts_run_ups"} <= set(checkpoint["load_migrations"])
-    assert checkpoint["trained_layers"] == ["skill"]
-    assert torch.equal(loaded.memory.cell.weight_ih, policy.memory.cell.weight_ih)
-    # Every outcome it predicted is kept; the run-up output starts untrained.
-    assert torch.equal(loaded.memory.out.weight[: 2 * OUTCOME_WIDTH + 1], state["memory.out.weight"])
-    assert not loaded.memory.out.weight[-1].any()
+    assert "world_model_reads_tactic_and_strategy" in checkpoint["load_migrations"]
+    # The reading starts at zero: it predicts as it did.
+    assert not loaded.memory.context.weight.any() and not loaded.memory.context.bias.any()
+    assert torch.equal(loaded.memory.out.weight, state["memory.out.weight"])
 
 
 @torch.no_grad()
