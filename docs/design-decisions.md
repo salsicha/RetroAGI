@@ -26,6 +26,34 @@ commit). How the parts work is described in the
   the training set"); the recorded failures are fixed in the teacher. A
   failed gate is fixed in the teacher or the policy, never bypassed.
 
+## 2026-11-01 — Skill rehearsal; why the world model's runs miss; agent-played data (user decisions; measured)
+
+- Stomp lessons (8 skill lessons, 144 fresh layouts; artifacts/full_smb/
+  stomp_exam_20261101): the agent in use's choices won 79% carried out by the
+  teacher, 85% with the collision trackers aiming stomps and ending waits,
+  65% with the world model's destinations, 67% fully deployed. Its skill,
+  having learnt alongside the tactic layer, had forgotten its own lessons:
+  the skill right after skill training won 98.6%.
+- A, rehearsal (`skill_rehearsal`; artifacts/block_smb/rehearsal_20261101):
+  the tactic layer trained again as tactic_20261030 was, the skill also
+  learning its own lessons each pass. Its skill lessons (all, fresh layouts,
+  teacher carrying out) 98.7% against 88.4% for the agent in use's skill
+  (99.5% before tactic training); 1-1 with the agent in use's world model
+  1100 against 1123 (past pipe 4 29 against 25, one finish each); its tactic
+  evaluation 369 against 382 wins of 441.
+- B, which destinations break stomps (destinations.json): where the skill
+  chose what the teacher would, the world model's run destinations were 24
+  pixels from the teacher's at the median (90th percentile 123, 22 short on
+  average), its jumps 6 (21); 27 of 33 losses ended on a run.
+- Agent-played data for the world model (artifacts/block_smb/
+  agent_played_20261102): the agent in use chose every tactic and action,
+  the teacher carried each out (1,600 episodes, 1,411 won), the world model
+  trained again with them. Stomp lessons deployed 70.8%, 1-1 986 against
+  1123, its run destinations no nearer the teacher's (31 pixels at the
+  median). Not kept: a run's pointer names a floor piece, not where on it to
+  stop, and the teacher's stopping place follows its intent, which the
+  world model cannot see.
+
 ## 2026-11-01 — The agent in use's failures; landings only within reach (built)
 
 User: "Keep going". The agent in use's 47 failures on 1-1
