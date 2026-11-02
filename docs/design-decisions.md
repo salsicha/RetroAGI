@@ -26,6 +26,28 @@ commit). How the parts work is described in the
   the training set"); the recorded failures are fixed in the teacher. A
   failed gate is fixed in the teacher or the policy, never bypassed.
 
+## 2026-11-02 — The world model reads the tactic and strategy again (user decision; built, measured)
+
+User: "Clearly it was a mistake to remove tactic and strategy from the world
+model. Add it back" (ff9ac80). Trained as the agent in use's was
+(predictions_20261102_context; artifacts/block_smb/context_20261102):
+
+| | Without the tactic (agent in use) | With it |
+|---|---|---|
+| Runs on what it learned from, median / 90th percentile | 6.7 / 21.9 px | 6.2 / 17.4 px |
+| Stomp lessons: runs against the teacher's | 24 / 123 px | 13 / 75 px |
+| Stomp lessons: jumps against the teacher's | 6 / 21 px | 7 / 35 px |
+| Stomp lessons, the agent carrying out | 66.7% | 73.6% |
+| 1-1 average (48 logged playthroughs) | 1123 | 947 (speed runs 1121, max points 774) |
+
+Its runs follow the intent now, and in 1-1 that brings out the tactic
+layer's mistakes: it chooses "retreat" often there, and the world model now
+sends those runs backward (backward runs under retreat: max points 43 to 95,
+speed runs 30 to 70); four max-points playthroughs pushed against the left
+edge of the screen from the start until they timed out. The agent in use
+keeps its world model (a saved one without the reading loads with it at
+zero and plays as before).
+
 ## 2026-11-01 — Skill rehearsal; why the world model's runs miss; agent-played data (user decisions; measured)
 
 - Stomp lessons (8 skill lessons, 144 fresh layouts; artifacts/full_smb/
