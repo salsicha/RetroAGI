@@ -141,6 +141,21 @@ class TestRealFrames(unittest.TestCase):
         frame, before, after, _ = self.frames[0]
         self.assertTrue(P.label_frame(frame, before, after).on_ground)
 
+    def test_the_player_stands_still_as_the_agent_does(self):
+        # Half the plays begin standing at the start (vision made up pipes
+        # beside a standing Mario): his place unchanged over the first frames.
+        from retroagi.stages.full_smb.vision_frames import START_STANDING_SHARE
+
+        def stood(seed):
+            places = []
+            for _, (_, _, after, _) in zip(range(8), played_frames("Level1-1", frames=40, seed=seed, every=4)):
+                places.append(int(P.state_blocks(after)["RAM"][0x86]))  # [Player_X_Position]
+            return len(set(places)) == 1
+
+        standing = [stood(seed) for seed in range(8)]
+        self.assertGreater(START_STANDING_SHARE, 0)
+        self.assertTrue(any(standing) and not all(standing))
+
 
 if __name__ == "__main__":
     unittest.main()

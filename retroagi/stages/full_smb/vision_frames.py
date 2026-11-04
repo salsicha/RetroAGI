@@ -4,7 +4,12 @@ Each level's saved start is played by a simple random player: it mostly runs
 right, jumps for random lengths, and now and then stops or walks back. It is
 rewound a few seconds after each death so it reaches the whole level, so Mario
 is seen standing, running, jumping, falling, dying, stomping, riding lifts and
-pushing against walls. Every ``every``-th frame is labelled from game memory
+pushing against walls. It stands still as the agent does (user, 2026-11-04:
+"retrain the Full SMB vision with correct labels"): half its plays begin
+standing at the level's start, and it stops often and for long, without
+jumping; vision had made up pipes on 1-1's green hills and bushes beside a
+standing Mario (at the start, in the pens between pipes), which a player
+that hardly ever stood still had rarely shown it. Every ``every``-th frame is labelled from game memory
 (pixel_labels.label_frame); a frame memory does not fully explain is counted
 by its reason and skipped, never used.
 """
@@ -34,6 +39,13 @@ LEVELS = (
 WORLD, LEVEL = 0x75F, 0x75C  # [WorldNumber], [LevelNumber]
 ENGINE_ROUTINE, PLAYER_SCREEN_ROW = 0x0E, 0xB5  # [GameEngineSubroutine], [Player_Y_HighPos]
 REWIND_EVERY = 30  # frames between kept states for rewinding after a death
+# Standing still: the share of plays that begin standing at the start, and
+# for how many frames (the agent's opening hold is about 60); the chance a
+# frame starts a stop or a walk back, the share of those that are stops, and
+# their lengths (the agent's waits run to 255 frames).
+START_STANDING_SHARE, START_STANDING = 0.5, (1, 150)
+STOP_CHANCE, STOP_SHARE = 0.015, 0.6
+STOP_FRAMES, BACK_FRAMES = (5, 120), (5, 40)
 
 
 def _dying(ram) -> bool:
@@ -55,19 +67,20 @@ def played_frames(level: str, *, frames: int, seed: int, every: int) -> Iterator
         env.reset()
         start = (int(env.get_ram()[WORLD]), int(env.get_ram()[LEVEL]))
         history = deque(maxlen=40)
-        jump = back = wait = deaths = 0
+        jump = back = deaths = 0
+        wait = int(rng.integers(*START_STANDING)) if rng.random() < START_STANDING_SHARE else 0
         earlier_ram = None
         for t in range(frames):
             now_ram = env.get_ram().copy()  # the memory this frame's picture shows
             if t % REWIND_EVERY == 0:
                 history.append(env.em.get_state())
-            if jump == 0 and rng.random() < 0.07:
+            if jump == wait == 0 and rng.random() < 0.07:
                 jump = int(rng.integers(1, 33))
-            if back == wait == 0 and rng.random() < 0.01:
-                if rng.random() < 0.5:
-                    back = int(rng.integers(5, 25))
+            if back == wait == jump == 0 and rng.random() < STOP_CHANCE:
+                if rng.random() < STOP_SHARE:
+                    wait = int(rng.integers(*STOP_FRAMES))
                 else:
-                    wait = int(rng.integers(5, 25))
+                    back = int(rng.integers(*BACK_FRAMES))
             action = np.zeros(len(buttons), dtype=np.int8)
             action[buttons.index("B")] = int(rng.random() < 0.8)
             if back:
