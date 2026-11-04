@@ -3,11 +3,11 @@
   "checkpoint_kind": "vision_encoder",
   "checkpoint_schema_version": 1,
   "code_revision": {
-    "branch": null,
+    "branch": "main",
     "dirty": true,
-    "revision": "6cc36967380bc99c4d96439e6d1cdf853c637648",
-    "root": "/tmp/claude-1001/-home-amoran-repos-RetroAGI/30dc6aa2-f479-4291-8ed0-27f6d1795fee/scratchpad/fix4_tree",
-    "short_revision": "6cc3696",
+    "revision": "8e8d66c2b86b18b1f3ecbfdbc343a5345e8e0ec1",
+    "root": "/home/amoran/repos/RetroAGI",
+    "short_revision": "8e8d66c",
     "system": "git"
   },
   "config": {
@@ -15,7 +15,7 @@
       "best_metric": "held_out_total_loss",
       "best_mode": "min",
       "metadata": {},
-      "output_path": "/home/amoran/repos/RetroAGI/artifacts/full_smb/vision_types_20261021/full_vit_scene.pth",
+      "output_path": "artifacts/full_smb/vision_standing_20261104/full_vit_scene.pth",
       "resume_path": null,
       "save_interval_epochs": 1
     },
@@ -136,11 +136,11 @@
   "global_step": 0,
   "metadata": {
     "code_revision": {
-      "branch": null,
+      "branch": "main",
       "dirty": true,
-      "revision": "6cc36967380bc99c4d96439e6d1cdf853c637648",
-      "root": "/tmp/claude-1001/-home-amoran-repos-RetroAGI/30dc6aa2-f479-4291-8ed0-27f6d1795fee/scratchpad/fix4_tree",
-      "short_revision": "6cc3696",
+      "revision": "8e8d66c2b86b18b1f3ecbfdbc343a5345e8e0ec1",
+      "root": "/home/amoran/repos/RetroAGI",
+      "short_revision": "8e8d66c",
       "system": "git"
     },
     "runtime_environment": {
@@ -170,24 +170,24 @@
     "epoch": 40,
     "frames_seen": 1601280,
     "held_out": {
-      "enemy_type": 0.018710776755586266,
-      "facing": 0.008026337511759872,
-      "kind": 0.017425057693074147,
-      "on_something": 0.02584400216730622,
-      "pixels": 0.001497152649797499,
-      "support": 0.009735923639421041,
-      "total": 0.08123925091822942
+      "enemy_type": 0.014603511413248877,
+      "facing": 0.01645461739291204,
+      "kind": 0.013862674473474423,
+      "on_something": 0.013734162125270814,
+      "pixels": 0.0013225214124346772,
+      "support": 0.003632139634185781,
+      "total": 0.06360962697366873
     },
     "learned_numbers": 1268065,
-    "minutes": 66.04738808870316,
+    "minutes": 92.01558814843496,
     "train": {
-      "enemy_type": 0.01541898065190201,
-      "facing": 0.00963880460825994,
-      "kind": 0.013162287851844139,
-      "on_something": 0.014740452765929639,
-      "pixels": 0.0016638211325903673,
-      "support": 0.0065683453103701946,
-      "total": 0.06119269222577776
+      "enemy_type": 0.019308424315580122,
+      "facing": 0.010140656161571011,
+      "kind": 0.010496604995716216,
+      "on_something": 0.01929496786885405,
+      "pixels": 0.00169634500891696,
+      "support": 0.008023523840450202,
+      "total": 0.06896052231964138
     }
   },
   "model_name": "full_smb_vit",

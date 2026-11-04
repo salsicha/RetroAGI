@@ -1,5 +1,5 @@
 {
-  "checkpoint": "artifacts/full_smb/vision_types_20261021/full_vit_scene.pth",
+  "checkpoint": "artifacts/full_smb/vision_standing_20261104/full_vit_scene.pth",
   "levels": [
     "Level1-1",
     "Level1-4",
@@ -15,203 +15,214 @@
   "seed": 0,
   "plays": 10,
   "every": 4,
-  "refused_frames": {},
+  "refused_frames": {
+    "rebuilt picture differs at 4859 pixels (rows 16-231, columns 8-247)": 1,
+    "sprite drawing 51 is claimed by enemy 15, none known to draw it": 17,
+    "sprite drawing 52 is claimed by enemy 15, none known to draw it": 1,
+    "sprite drawing BE is claimed by enemy 2D, none known to draw it": 13,
+    "sprite drawing 5B is claimed by enemy 28, none known to draw it": 6,
+    "sprite drawing BF is claimed by enemy 2D, none known to draw it": 36,
+    "sprite drawing CD is claimed by enemy 35, none known to draw it": 18,
+    "square drawing [1D 11 24 24] under block code 00 has no one type": 32,
+    "square drawing [24 0B 24 24] under block code 00 has no one type": 61,
+    "sprite drawing 4E is claimed by mario, none known to draw it": 4
+  },
   "learned_numbers": 1268065,
-  "seconds": 223.4,
-  "frames": 20110,
-  "pixels_correct": 0.9995681804391324,
+  "seconds": 378.2,
+  "frames": 18063,
+  "pixels_correct": 0.9995485542664168,
   "mario": {
-    "frames": 19539,
-    "found": 0.9968780387942064,
-    "false_in_frames_without_mario": 23,
+    "frames": 17308,
+    "found": 0.9958978507048764,
+    "false_in_frames_without_mario": 77,
     "edge_error_px": {
-      "mean": 0.6347674299209365,
+      "mean": 0.7243139757498405,
       "p95": 3.0,
       "max": 16.0
     },
-    "facing": 0.997799273248375,
-    "support": 0.9892522647013665,
+    "facing": 0.9928356829211925,
+    "support": 0.9867691241044604,
     "support_confusion": {
       "air": {
-        "air": 12729,
-        "ground": 182,
-        "moving_platform": 3
+        "air": 9753,
+        "ground": 193,
+        "moving_platform": 0
       },
       "ground": {
-        "air": 21,
-        "ground": 6593,
-        "moving_platform": 3
+        "air": 33,
+        "ground": 7320,
+        "moving_platform": 0
       },
       "moving_platform": {
-        "air": 0,
-        "ground": 1,
-        "moving_platform": 7
+        "air": 3,
+        "ground": 0,
+        "moving_platform": 6
       }
     },
-    "on_something": 0.986744459798352,
-    "stomp_pictures": 96,
-    "stomps_seen": 0.40625
+    "on_something": 0.9838225098220476,
+    "stomp_pictures": 85,
+    "stomps_seen": 0.4235294117647059
   },
-  "enemy_kind_accuracy": 0.9968604697373127,
-  "enemy_type_accuracy": 0.9980129555299447,
+  "enemy_kind_accuracy": 0.9968564442892072,
+  "enemy_type_accuracy": 0.9986028641285365,
   "enemies": {
-    "true": 27194,
-    "found": 26422,
-    "recall": 0.9253144075899096,
-    "precision": 0.9523503141321626,
+    "true": 21741,
+    "found": 21549,
+    "recall": 0.9218067246216826,
+    "precision": 0.9300199545222516,
     "edge_error_px": {
-      "mean": 0.7881810594921115,
-      "p95": 4.0,
-      "max": 18.0
+      "mean": 0.699815378474128,
+      "p95": 3.0,
+      "max": 23.0
     }
   },
   "coins": {
-    "true": 24427,
-    "found": 24441,
-    "recall": 0.9966430589102223,
-    "precision": 0.9960721738063091,
+    "true": 22550,
+    "found": 22598,
+    "recall": 0.9967627494456762,
+    "precision": 0.9946455438534384,
     "edge_error_px": {
-      "mean": 0.02140069829533785,
+      "mean": 0.018952707211816522,
       "p95": 0.0,
-      "max": 8.0
+      "max": 6.0
     }
   },
   "power_ups": {
-    "true": 100,
-    "found": 168,
-    "recall": 0.93,
-    "precision": 0.5535714285714286,
+    "true": 47,
+    "found": 160,
+    "recall": 0.851063829787234,
+    "precision": 0.25,
     "edge_error_px": {
-      "mean": 0.8602150537634409,
-      "p95": 3.0,
-      "max": 7.0
+      "mean": 1.925,
+      "p95": 5.0,
+      "max": 6.0
     }
   },
   "moving_platforms": {
-    "true": 290,
-    "found": 323,
-    "recall": 0.9724137931034482,
-    "precision": 0.8730650154798761,
+    "true": 622,
+    "found": 639,
+    "recall": 0.9887459807073955,
+    "precision": 0.9624413145539906,
     "edge_error_px": {
-      "mean": 0.7411347517730497,
-      "p95": 5.0,
-      "max": 22.0
+      "mean": 0.16422764227642275,
+      "p95": 0.0,
+      "max": 9.0
     }
   },
   "pipes": {
-    "true": 7704,
-    "found": 7983,
-    "recall": 0.9992211838006231,
-    "precision": 0.9642991356632845,
+    "true": 8094,
+    "found": 8342,
+    "recall": 0.9992587101556709,
+    "precision": 0.9695516662670822,
     "edge_error_px": {
-      "mean": 0.08287866978435958,
-      "p95": 0.0,
+      "mean": 0.1554154302670623,
+      "p95": 1.0,
       "max": 16.0
     }
   },
   "blocks": {
-    "true": 16832,
-    "found": 17255,
-    "recall": 0.9976235741444867,
-    "precision": 0.9731671979136483,
+    "true": 16251,
+    "found": 16605,
+    "recall": 0.9974155436588518,
+    "precision": 0.9761517615176152,
     "edge_error_px": {
-      "mean": 0.25464506908051454,
+      "mean": 0.26355728299093095,
       "p95": 1.0,
-      "max": 35.0
+      "max": 46.0
     }
   },
   "surfaces": {
-    "true": 90837,
-    "found": 90295,
-    "recall": 0.9874720653478208,
-    "precision": 0.9933994130350517,
+    "true": 89362,
+    "found": 89075,
+    "recall": 0.9893355117387704,
+    "precision": 0.9925231546449621,
     "edge_error_px": {
-      "mean": 0.19424965718681367,
+      "mean": 0.18614620683414584,
       "p95": 1.0,
-      "max": 120.0
+      "max": 115.0
     }
   },
   "gaps": {
-    "true": 11686,
-    "found": 11673,
-    "recall": 0.996149238404929,
-    "precision": 0.99725863102887,
+    "true": 11489,
+    "found": 11495,
+    "recall": 0.9988684828966837,
+    "precision": 0.9983471074380166,
     "edge_error_px": {
-      "mean": 0.14268533631131347,
+      "mean": 0.082345765074939,
       "p95": 0.0,
-      "max": 119.0
+      "max": 103.0
     }
   },
   "families": {
     "Level1-1": {
-      "mario_found": 0.9954504094631483,
-      "support": 0.9872611464968153,
-      "enemy_recall": 0.9450819672131148,
-      "surface_recall": 0.9947618467535632,
+      "mario_found": 0.9988385598141696,
+      "support": 0.9698025551684089,
+      "enemy_recall": 0.9875389408099688,
+      "surface_recall": 0.9943905397210431,
       "gap_recall": 1.0
     },
     "Level1-4": {
-      "mario_found": 0.99860853432282,
-      "support": 0.9948979591836735,
-      "enemy_recall": 0.9757975797579758,
-      "surface_recall": 0.9962597402597403,
-      "gap_recall": 1.0
+      "mario_found": 0.9974763406940063,
+      "support": 0.9930599369085173,
+      "enemy_recall": 0.9861407249466951,
+      "surface_recall": 0.984783572167233,
+      "gap_recall": 0.9994199535962877
     },
     "Level2-1": {
-      "mario_found": 0.9955277280858676,
-      "support": 0.9923971377459749,
-      "enemy_recall": 0.8880798274002157,
-      "surface_recall": 0.9832561728395062,
+      "mario_found": 0.9986678507992895,
+      "support": 0.9915630550621669,
+      "enemy_recall": 0.9227696404793608,
+      "surface_recall": 0.9906745626574093,
       "gap_recall": 1.0
     },
     "Level2-1-clouds": {
-      "mario_found": 0.9972627737226277,
-      "support": 0.9990875912408759,
+      "mario_found": 0.9972665148063782,
+      "support": 0.9995444191343964,
       "enemy_recall": null,
-      "surface_recall": 0.9982532751091703,
-      "gap_recall": 0.9954128440366973
+      "surface_recall": 0.9995908346972177,
+      "gap_recall": 0.9946351931330472
     },
     "Level3-1": {
-      "mario_found": 0.9963817277250113,
-      "support": 0.984622342831298,
-      "enemy_recall": 0.9185709687801737,
-      "surface_recall": 0.9849882050182286,
-      "gap_recall": 0.9995056846267919
+      "mario_found": 0.9911330049261083,
+      "support": 0.9807881773399014,
+      "enemy_recall": 0.9015576323987539,
+      "surface_recall": 0.9902230971128609,
+      "gap_recall": 1.0
     },
     "Level4-1": {
-      "mario_found": 0.997979797979798,
-      "support": 0.9787878787878788,
-      "enemy_recall": 0.8392029657089898,
-      "surface_recall": 0.9923680305278779,
+      "mario_found": 0.9963325183374083,
+      "support": 0.9743276283618582,
+      "enemy_recall": 0.9431387414708112,
+      "surface_recall": 0.9863049776139057,
       "gap_recall": 1.0
     },
     "Level5-1": {
-      "mario_found": 0.9968999114260407,
-      "support": 0.9906997342781222,
-      "enemy_recall": 0.9430754066042385,
-      "surface_recall": 0.985799029300737,
+      "mario_found": 0.99375,
+      "support": 0.9879464285714286,
+      "enemy_recall": 0.9349356639961156,
+      "surface_recall": 0.9802565392354124,
       "gap_recall": 1.0
     },
     "Level6-1": {
-      "mario_found": 0.9950936663693131,
-      "support": 0.9946476360392507,
-      "enemy_recall": 0.9641178314008148,
-      "surface_recall": 0.994220342012751,
-      "gap_recall": 0.9838781907747425
+      "mario_found": 0.9973178363880196,
+      "support": 0.991953509164059,
+      "enemy_recall": 0.9381834411961616,
+      "surface_recall": 0.9972578279446463,
+      "gap_recall": 1.0
     },
     "Level7-1": {
-      "mario_found": 0.99880810488677,
-      "support": 0.9547079856972587,
-      "enemy_recall": 0.8542884990253411,
-      "surface_recall": 0.9752269579935374,
-      "gap_recall": 0.9933774834437086
+      "mario_found": 0.996523754345307,
+      "support": 0.9501738122827347,
+      "enemy_recall": 0.880201765447667,
+      "surface_recall": 0.9818021719988259,
+      "gap_recall": 1.0
     },
     "Level8-1": {
-      "mario_found": 0.9986468200270636,
-      "support": 0.9882724402345512,
-      "enemy_recall": 0.9533333333333334,
-      "surface_recall": 0.975004900999804,
-      "gap_recall": 0.9978858350951374
+      "mario_found": 0.9941625505163898,
+      "support": 0.9892231701841042,
+      "enemy_recall": 0.8813028499843407,
+      "surface_recall": 0.9840051183621241,
+      "gap_recall": 0.996268656716418
     }
   }
 }

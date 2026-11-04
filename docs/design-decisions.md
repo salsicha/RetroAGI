@@ -26,6 +26,40 @@ commit). How the parts work is described in the
   the training set"); the recorded failures are fixed in the teacher. A
   failed gate is fixed in the teacher or the policy, never bypassed.
 
+## 2026-11-04 — Why the tactic layer retreats in 1-1; the Full SMB vision trained again (user decisions; measured)
+
+The tactic layer barely retreats wrongly on fresh Block SMB layouts, outside
+the retreat lessons (artifacts/block_smb/retreat_study_20261104). In 1-1,
+its own memory drives most retreats: reset it, and they fall from 46 to 13
+of 176 choices. The memory reads the scene at each new tactic, and in 1-1
+vision made up pipes. At the start it reported a pipe 5 pixels wide right in
+front of Mario, splitting the floor; others appeared in the pens between
+pipes. Taken out, retreats fell to 4 of 51. The exact labels had none of
+these. They are 1-1's hills and bushes, drawn in the pipes' green, beside a
+standing Mario, and the player vision learnt from hardly ever stood still.
+
+User: "retrain the Full SMB vision with correct labels". The player now
+stands still as the agent does (8e8d66c), and vision was trained again with
+the same settings (artifacts/full_smb/vision_standing_20261104):
+
+| | Before | Retrained |
+|---|---|---|
+| Fresh plays of every level: pixels right; pipe, block precision | 0.99955; 0.971, 0.978 | 0.99955; 0.970, 0.976 |
+| The agent's 1-1 frames, per 100 frames: made-up pipes / blocks / enemies | 9.3 / 4.4 / 4.4 | 3.0 / 1.1 / 1.8 |
+| The agent's 1-1 frames: floor split, per 100 frames | 4.8 | 1.2 |
+
+It replaces data/full_vit/full_vit_scene.pth. The pipe at the very start
+remains, in one piece now. It covers 42 of the picture's 61,440 pixels, too
+few for a loss averaged over every pixel to notice.
+
+With the made-up pipes taken out, 1-1's speed runs met the first Goomba at
+full pace and died under the ? block: the climb onto it landed on its edge,
+then the jump over the Goomba hit it from below. The block_goomba lessons
+win 89% with the teacher carrying out the actions and 22% with the agent
+(artifacts/block_smb/block_goomba_exam_20261104). With max points, the
+world model's waits are too short. With speed runs, the runs stop at their
+ends and miss the time limit.
+
 ## 2026-11-02 — The world model reads the tactic and strategy again (user decision; built, measured)
 
 User: "Clearly it was a mistake to remove tactic and strategy from the world
