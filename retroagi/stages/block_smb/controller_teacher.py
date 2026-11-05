@@ -21,7 +21,7 @@ from typing import Optional
 
 from retroagi.core.smb_agent import LandingWatch
 from retroagi.core.smb_coaching import probe_state, training_target
-from retroagi.core.smb_executor import HOLD_FRAMES, SMBExecutor
+from retroagi.core.smb_executor import WAIT_SLICE, SMBExecutor
 from retroagi.core.smb_scene_labels import scene_from_labels
 from retroagi.core.smb_spatial_feedback import SpatialFeedback
 from retroagi.core.smb_trajectory import VisualTracks, aimed_goal, best_holds, hold_paths
@@ -263,7 +263,7 @@ def _trial(env, state, goal, target, *, save=False, visual=False, record=False):
                 goal_offset=offset,
             )
 
-        # A wait may be longer than a jump's trial (HOLD_FRAMES).
+        # Long enough for a jump's flight and settling, or a wait.
         for _ in range(max(192, plan.frames + SETTLE_FRAMES + 1)):
             button = executor.press(scene)
             spatial.executed(button, scene)
@@ -1792,9 +1792,9 @@ def _pit_wait(env, state, target, memo):
     if not clear:
         return None
     wait = min(clear)
-    # The whole wait as one hold (a wait is one action, its length the
-    # simulator's truth; user, 2026-10-15).
-    hold = SkillToken("hold", 0, 0, frames=min(wait, HOLD_FRAMES))
+    # Its first slice (WAIT_SLICE); the rest is played slice by slice
+    # (_planned_wait), the layers deciding again from what they see.
+    hold = SkillToken("hold", 0, 0, frames=min(wait, WAIT_SLICE))
     result = trial(env, state, hold, target)
     if not result.safe:
         return None
@@ -1822,7 +1822,7 @@ def _planned_wait(env, state):
     ):
         notes.pop("planned_wait", None)
         return None
-    return SkillToken("hold", 0, 0, frames=min(left, HOLD_FRAMES))
+    return SkillToken("hold", 0, 0, frames=min(left, WAIT_SLICE))
 
 
 def _best_certified(
@@ -2422,13 +2422,12 @@ def _dodge_in_area(env, state, target, timing=True):
 
 
 def _dodge_wait(env, state, target):
-    """The hold while no walker needs jumping yet, as one action: as many
-    frames as until _dodge_in_area would jump (the simulator's truth, by
-    holding on in a probe), or until the hold segment ends (at most
-    HOLD_FRAMES). A wait is one action whose length is predicted, as a
-    stomp's landing is (user, 2026-10-15); deployed, the predictor's."""
+    """The hold while no walker needs jumping yet: as many frames as until
+    _dodge_in_area would jump (the simulator's truth, by holding on in a
+    probe), or until the hold segment ends, at most WAIT_SLICE: then the
+    layers decide again from what they see (user, 2026-11-04)."""
     seg = tactic_schedule.current(env)
-    limit = HOLD_FRAMES
+    limit = WAIT_SLICE
     if "frames" in seg["end"]:
         limit = min(limit, seg["end"]["frames"] - (env.steps - env._tactic_started))
     if not seg.get("dodge") or limit <= 1:

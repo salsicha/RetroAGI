@@ -24,10 +24,13 @@ from retroagi.core.tokens import DEFAULT_STRATEGY, SkillToken, tactic_token
 
 
 def test_a_predicted_outcome_is_the_executors_destination():
+    from retroagi.core.smb_executor import WAIT_SLICE
+
     outcome = [37.4, -10.2, 0.0, 0.0, 41.6]
-    # A wait lasts as long as predicted (at most 255 frames).
-    assert destination_of(ActionToken("wait"), outcome) == SkillToken("hold", 0, 0, frames=42)
-    assert destination_of(ActionToken("wait"), [0, 0, 0, 0, 900.0]).frames == 255
+    # A wait holds a slice, whatever length is predicted; then the layers
+    # decide again from what they see (user, 2026-11-04).
+    assert destination_of(ActionToken("wait"), outcome) == SkillToken("hold", 0, 0, frames=WAIT_SLICE)
+    assert destination_of(ActionToken("wait"), [0, 0, 0, 0, 900.0]).frames == WAIT_SLICE
     run = ActionToken("run", ("surfaces", 0))
     assert destination_of(run, outcome) == SkillToken("run", 37, -10)
     jump = ActionToken("jump", ("surfaces", 1))
@@ -134,7 +137,9 @@ def test_the_world_model_steps_once_per_action_and_its_state_carries():
     now = policy.encode_scene(stack_rows(scene_rows(pictures), "cpu"))
     agents._actions([agents.copies[0]], made, [0], [0], now, pictures)
     assert calls == [1]
-    assert made[0].skill == SkillToken("hold", 0, 0, frames=30)
+    from retroagi.core.smb_executor import WAIT_SLICE
+
+    assert made[0].skill == SkillToken("hold", 0, 0, frames=WAIT_SLICE)
     first = agents.copies[0].world
     assert first is not None and first[0].shape == (policy.memory.width,)
     agents._actions([agents.copies[0]], made, [0], [0], now, pictures)

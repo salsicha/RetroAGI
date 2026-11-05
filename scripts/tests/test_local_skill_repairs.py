@@ -89,20 +89,27 @@ def test_a_hold_jumps_a_walker_at_a_trigger_distance_that_grows_with_its_speed()
         jumps = [d["trigger"][0] for d in played["decisions"] if d.get("trigger")]
         assert jumps and all(d["action"][0] == "jump" for d in played["decisions"] if d.get("trigger"))
         gaps[speed] = jumps[0]
-        # Each wait is one action, as long as the frames until the jump is
-        # due (user, 2026-10-15): a few decisions, not one a frame.
-        first = played["decisions"][0]
-        assert first["action"][0] == "wait" and first["hold_frames"] > 1
-        assert len(played["decisions"]) <= 6
+        # A wait lasts a slice (user, 2026-11-04: "wait based on
+        # perception"), then the teacher decides again: a decision a slice,
+        # not one a frame.
+        from retroagi.core.smb_executor import WAIT_SLICE
+
+        waits = [d for d in played["decisions"] if d["action"][0] == "wait"]
+        assert played["decisions"][0]["action"][0] == "wait"
+        assert waits[0]["hold_frames"] == WAIT_SLICE
+        assert all(d["hold_frames"] <= WAIT_SLICE for d in waits)  # 0: a one-frame hold
     assert gaps[0.8] > gaps[0.35] > 0
 
 
 def test_a_faster_walker_ends_the_wait_sooner_and_the_wait_ends_at_it():
     from copy import deepcopy
 
-    # The wait lasts until the walker needs the jump (the simulator's truth
-    # in training): sooner the faster it comes; and it is marked as ended by
-    # it, which the executor reports to the skill ("collision_due").
+    from retroagi.core.smb_executor import WAIT_SLICE
+
+    # The teacher waits slice by slice until the walker needs the jump (the
+    # simulator's truth in training): sooner the faster it comes; and the
+    # last slice is marked as ended by it, which the executor reports to the
+    # skill ("collision_due").
     base = sample("choice_hold_area")
     waits = {}
     for speed in (0.35, 0.8):
@@ -113,20 +120,31 @@ def test_a_faster_walker_ends_the_wait_sooner_and_the_wait_ends_at_it():
             env.reset(scenario=scenario)
             state = episode_teacher(scenario)
             state.observe_frame(env)
-            wait = teacher_skill(env, state, teacher_plan(env, state, certify_holds=False)[0])
+            waited = 0
+            for _ in range(64):
+                wait = teacher_skill(env, state, teacher_plan(env, state, certify_holds=False)[0])
+                assert wait.mode == "hold" and 1 <= wait.frames <= WAIT_SLICE
+                waited += wait.frames
+                if wait.threat:
+                    break
+                assert wait.frames == WAIT_SLICE
+                for _ in range(wait.frames):
+                    env.step(0)
+                    state.observe_frame(env)
         finally:
             env.close()
-        assert wait.mode == "hold" and wait.frames > 1 and wait.threat
-        waits[speed] = wait.frames
+        assert wait.threat
+        waits[speed] = waited
     assert waits[0.8] < waits[0.35]
 
 
-def test_a_teachers_one_frame_hold_is_played_as_one_whole_wait():
-    from retroagi.stages.block_smb.teacher_tokens import whole_wait
+def test_a_teachers_one_frame_hold_is_played_as_a_slice_of_its_wait():
+    from retroagi.core.smb_executor import WAIT_SLICE
+    from retroagi.stages.block_smb.teacher_tokens import teacher_wait
 
     # Holding a spot on a moving platform: the teacher holds again each
-    # frame; played, the hold is one wait as long as all of them, ended by
-    # no enemy (user, 2026-10-15).
+    # frame; played, the hold is a wait of a slice (it holds longer), ended
+    # by no enemy; then the layers decide again (user, 2026-11-04).
     scenario = sample("action_wait")
     env = MarioScenarioEnv()
     try:
@@ -136,11 +154,11 @@ def test_a_teachers_one_frame_hold_is_played_as_one_whole_wait():
         hold = teacher_skill(env, state, teacher_plan(env, state, certify_holds=False)[0])
         assert hold == SkillToken("hold", 0, 0)
         steps, x = env.steps, env.mario["x"]
-        wait = whole_wait(env, state, hold)
-        assert wait.mode == "hold" and wait.frames > 1 and not wait.threat
+        wait = teacher_wait(env, state, hold)
+        assert wait.mode == "hold" and wait.frames == WAIT_SLICE and not wait.threat
         assert (env.steps, env.mario["x"]) == (steps, x)  # measured in a probe
         run = SkillToken("run", 16, 0)
-        assert whole_wait(env, state, run) is run
+        assert teacher_wait(env, state, run) is run
     finally:
         env.close()
 

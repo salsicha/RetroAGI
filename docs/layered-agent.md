@@ -198,12 +198,17 @@ the air. `exam-layer --execution teacher | world_model | trackers | deployed`
 plays the same freshly generated layouts with each network carrying out its part, so
 what each costs is measured apart.
 
-In Block SMB training a wait is one action: the teacher's hold lasts until it
-would do something else, or until a coming enemy is close enough that a jump
-over it is due (`controller_teacher._dodge_wait`). Every other teacher hold
-is measured the same way when it is played (`teacher_tokens.whole_wait`):
-held on in a probe for as many frames as the teacher would hold again, up to
-the end of the schedule's segment or 255 frames. A wait that ends because a
+A wait lasts at most 8 frames (`smb_executor.WAIT_SLICE`), in training and
+in play; then the layers decide again from what they see, waiting on or
+going (user, 2026-11-04: "wait based on perception"). In Block SMB training
+the teacher's hold lasts until it would do something else, until a coming
+enemy is close enough that a jump over it is due
+(`controller_teacher._dodge_wait`), or until the slice ends. Every other
+teacher hold is measured the same way when it is played
+(`teacher_tokens.teacher_wait`): held on in a probe for as many frames as
+the teacher would hold again, up to the end of the schedule's segment or the
+slice. Before, a wait was one action as long as the teacher's whole hold,
+and in play its length was the world model's guess. A wait that ends because a
 walker coming at Mario would reach him soon (within 48 frames, by the
 simulator's truth) is marked so: the executor ends it as `threat`, and the
 skill's next execution feedback says so (`collision_due`). The skill then

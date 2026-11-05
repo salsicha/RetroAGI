@@ -33,9 +33,16 @@ EXECUTOR_ACTIONS = (*tuple(SMBAction), HOLD_GROUND)
 
 # Supported button-hold durations for physical control and teacher playback.
 FRAME_COUNTS = tuple(range(1, 33))
-# A hold (HOLD_GROUND) may last longer: a wait is one action, as long as the
-# predicted time until something needs a move (user, 2026-10-15).
+# A hold (HOLD_GROUND) may last longer than a button press.
 HOLD_FRAMES = 255
+# A wait lasts at most this many frames, then the agent decides again from
+# what it sees, waiting on or going (user, 2026-11-04: "wait based on
+# perception"); the teacher's waits are played in the same slices, so the
+# layers learn when to go from the picture. A wait used to be one action as
+# long as the time until something needed a move (2026-10-15), its length
+# predicted by the world model: 12 frames off on fresh layouts, up to 215 in
+# play.
+WAIT_SLICE = 8
 
 
 @dataclass
@@ -44,8 +51,8 @@ class ActionPlan:
 
     action: int
     frames: int
-    # A hold the skill gave a length (a wait as one action): played to its
-    # end, not re-decided after a frame (reconsider).
+    # A hold the skill gave a length (a wait, at most WAIT_SLICE frames):
+    # played to its end, not re-decided after a frame (reconsider).
     wait: bool = False
     # Such a hold ends because a coming enemy will need a move then: its end
     # is reported as "threat".

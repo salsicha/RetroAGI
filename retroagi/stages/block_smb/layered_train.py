@@ -71,7 +71,7 @@ from retroagi.core.smb_observer import (
     before_enemy_types,
     observation_layout,
 )
-from retroagi.core.smb_executor import HOLD_FRAMES
+from retroagi.core.smb_executor import WAIT_SLICE
 from retroagi.core.tokens import (
     COMMAND_FIELDS,
     EXECUTION_WIDTH,
@@ -744,10 +744,10 @@ class _Lane:
             self.asked["action_label"] = self._as_action(own) if own is not None else None
         label = (self.asked.get("action_label") or {}).get("action")
         if action.verb == "wait":
-            from .teacher_tokens import whole_wait
+            from .teacher_tokens import teacher_wait
 
-            # The teacher's hold, played: as long as its whole wait.
-            self.asked["skill"] = whole_wait(self.env, self.teacher, self.asked.get("skill"))
+            # The teacher's hold, played: a slice of its wait (WAIT_SLICE).
+            self.asked["skill"] = teacher_wait(self.env, self.teacher, self.asked.get("skill"))
         return carry_out(self.env, self.teacher, action, label, self.asked.get("skill"))
 
     def stalled(self) -> bool:
@@ -787,10 +787,10 @@ class _Lane:
                 )
             asked["skill"] = teacher_skill(self.env, self.teacher, asked["action"])
             if asked["plays_teacher"] or teacher_plays_skill:
-                from .teacher_tokens import whole_wait
+                from .teacher_tokens import teacher_wait
 
-                # Played: a hold as long as its whole wait.
-                asked["skill"] = whole_wait(self.env, self.teacher, asked["skill"])
+                # Played: a slice of the teacher's wait (WAIT_SLICE).
+                asked["skill"] = teacher_wait(self.env, self.teacher, asked["skill"])
             asked["skill_given"] = teacher_plays_skill
             if self.task.label and asked["skill"] is not None:
                 from .teacher_actions import _trial_of
@@ -952,8 +952,9 @@ def play_episodes(
         def carry(number, action):
             command = playing[number].carry_out(action)
             if execution == "trackers" and command is not None and command.mode == "hold":
-                # The wait is left open: the collision trackers end it.
-                return SkillToken("hold", 0, 0, frames=HOLD_FRAMES)
+                # The wait's slice is not cut short by the teacher's truth:
+                # only the collision trackers end it early.
+                return SkillToken("hold", 0, 0, frames=WAIT_SLICE)
             return command
 
     agents = SMBAgents(

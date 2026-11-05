@@ -40,7 +40,7 @@ from .layered_policy import (
     encode_choice,
     held_features,
 )
-from .smb_executor import HOLD_FRAMES, HOLD_GROUND, ActionPlan, SMBExecutor
+from .smb_executor import HOLD_GROUND, WAIT_SLICE, ActionPlan, SMBExecutor
 from .smb_observer import SEQ_LEN_A, SEQ_LEN_B, VisionObserver, column_codes, pack_c, packed_lists
 from .smb_scene_labels import STOMP_ROWS, BlockView, SceneObservation, Surface
 from .smb_spatial_feedback import SpatialFeedback
@@ -146,7 +146,8 @@ def destination_of(
 ) -> SkillToken:
     """The executor's destination for an action from its predicted outcome
     (core/world_model OUTCOME_FIELDS: dx, dy, object_dx, object_dy, frames):
-    a wait holds for the predicted frames (1 to HOLD_FRAMES); a run or a jump
+    a wait holds WAIT_SLICE frames, then the layers decide again from what
+    they see (user, 2026-11-04: "wait based on perception"); a run or a jump
     goes to the predicted end, one that ends on an enemy (a stomp) to
     ``contact`` (the collision trackers' meeting point) when given; a run
     keeps its speed to its end when ``run_up`` (the world model's "carry":
@@ -155,7 +156,7 @@ def destination_of(
     place of the predicted height; how far it goes is still the world
     model's."""
     if action.verb == "wait":
-        return SkillToken("hold", 0, 0, frames=int(min(HOLD_FRAMES, max(1, round(outcome[4])))))
+        return SkillToken("hold", 0, 0, frames=WAIT_SLICE)
     stomp = action.target[0] == "enemies"
     dx, dy = contact if (stomp and contact is not None) else outcome[:2]
     if landing is not None and not stomp:

@@ -376,14 +376,15 @@ def teacher_skill(env, state: TeacherState, plan: Optional[ActionPlan]) -> Optio
     return destination(env, state, proposal if plan is not None else None)
 
 
-def whole_wait(env, state: TeacherState, command: Optional[SkillToken]) -> Optional[SkillToken]:
-    """The teacher's one-frame hold ``command`` as one whole wait, for playing
-    it: held on in a probe (the executor's own hold buttons) for as many
-    frames as the teacher would hold again each frame. It ends where the
-    teacher would do anything else, where the schedule's segment ends (the
-    tactic is decided again), when Mario leaves the ground or after
-    HOLD_FRAMES. A wait is one action, its length the simulator's truth in
-    training (user, 2026-10-15). ``threat``: it ends with a walker that
+def teacher_wait(env, state: TeacherState, command: Optional[SkillToken]) -> Optional[SkillToken]:
+    """The teacher's one-frame hold ``command`` as a wait, for playing it:
+    held on in a probe (the executor's own hold buttons) for as many frames
+    as the teacher would hold again each frame. It ends where the teacher
+    would do anything else, where the schedule's segment ends (the tactic is
+    decided again), when Mario leaves the ground or after WAIT_SLICE frames,
+    when the layers decide again from what they see (user, 2026-11-04: "wait
+    based on perception"; a wait was one action as long as the teacher's
+    whole hold). ``threat``: it ends with a walker that
     would reach Mario, standing, within DODGE_FRAMES (collision_truth): the
     executor then reports the wait as ended by a coming enemy.
 
@@ -397,7 +398,7 @@ def whole_wait(env, state: TeacherState, command: Optional[SkillToken]) -> Optio
     ):
         return command
     from retroagi.core.smb_coaching import probe_state
-    from retroagi.core.smb_executor import HOLD_FRAMES, SMBExecutor
+    from retroagi.core.smb_executor import WAIT_SLICE, SMBExecutor
     from retroagi.core.smb_scene_labels import scene_from_labels
     from retroagi.core.smb_spatial_feedback import SpatialFeedback
 
@@ -420,9 +421,9 @@ def whole_wait(env, state: TeacherState, command: Optional[SkillToken]) -> Optio
         if state.controller is not None:
             executor.hold = copy.deepcopy(state.controller.hold)
             executor.last_button = state.controller.last_button
-        executor.start(spatial.begin(SkillToken("hold", 0, 0, frames=HOLD_FRAMES), scene))
+        executor.start(spatial.begin(SkillToken("hold", 0, 0, frames=WAIT_SLICE), scene))
         mark = (env._tactic_index, env._route_done)
-        while held < HOLD_FRAMES:
+        while held < WAIT_SLICE:
             button = executor.press(scene)
             spatial.executed(button, scene)
             _, _, done, truncated, _ = env.step(button)

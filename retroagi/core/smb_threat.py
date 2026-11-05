@@ -4,7 +4,7 @@ or ground move when the collision trackers say an enemy will hit him within
 the lead a jump over it needs at its closing speed, plus THREAT_SLACK frames;
 the skill then picks again (and learned from the teacher to jump). Its end is
 reported as "threat" (the execution feedback "collision_due"). In training
-the teacher's truth ends waits instead (teacher_tokens.whole_wait).
+the teacher's truth ends waits instead (teacher_tokens.teacher_wait).
 
 The lead is the executor's own: from its jump model (smb_trajectory.
 hold_paths, open loop from where Mario stands), the smallest gap between him

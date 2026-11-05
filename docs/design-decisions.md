@@ -26,6 +26,23 @@ commit). How the parts work is described in the
   the training set"); the recorded failures are fixed in the teacher. A
   failed gate is fixed in the teacher or the policy, never bypassed.
 
+## 2026-11-04 — Waits in slices: the layers decide when to go from what they see (user decision; built, recording)
+
+The world model's wait lengths were 6.6 frames off on what it learned from,
+11.9 on fresh layouts, with 36% within 4 frames. In play they were 35 to 215
+frames off, and waits over 255 frames could not be predicted at all
+(artifacts/block_smb/world_model_lessons_20261104). User: "Sure wait based
+on perception".
+
+A wait now lasts at most `smb_executor.WAIT_SLICE` (8) frames, in training
+and in play; then the layers decide again, waiting on or going. The teacher
+plays its waits in the same slices, so the tactic layer and the skill learn
+when to go from the picture: the Goomba out from under the block, the walker
+near enough to jump. Re-deciding only in play was tried first: after one
+slice the tactic layer ended "hold ground", having learned that a hold ends
+after its one wait. The teacher's lessons with waits longer than a slice
+(3 skill, 18 tactic) are recorded again (artifacts/block_smb/waits_20261104).
+
 ## 2026-11-04 — Why the tactic layer retreats in 1-1; the Full SMB vision trained again (user decisions; measured)
 
 The tactic layer barely retreats wrongly on fresh Block SMB layouts, outside
