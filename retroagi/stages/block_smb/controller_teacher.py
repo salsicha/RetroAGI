@@ -1276,7 +1276,11 @@ def destination(env, state, proposal):
     # vision when it is available). The trials are kept for the margin search.
     winners, progressing, memo = [], [], {}
     options = [(o.command, o.result) for o in _jump_table(env, state, target, memo)]
-    options += _run_options(env, state, target, memo)
+    if not getattr(env, "_action_jump_direction", 0):
+        # A lesson that is one given jump teaches that jump: a run that wins
+        # it is another maneuver (action_stomp_down: walking off the pipe
+        # onto the walker below was taught in 18 of 96 layouts).
+        options += _run_options(env, state, target, memo)
     for goal, result in options:
         if not _nameable(env, state, goal, result):
             continue

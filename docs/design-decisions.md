@@ -26,6 +26,17 @@ commit). How the parts work is described in the
   the training set"); the recorded failures are fixed in the teacher. A
   failed gate is fixed in the teacher or the policy, never bypassed.
 
+## 2026-11-06 — A lesson that is one given jump teaches only jumps (user: "yes" to fixing the stomp-down test)
+
+In a single-jump lesson (scenario `action_jump_direction`) the teacher no
+longer ranks runs beside its jumps (`controller_teacher.destination`). A run
+that won the lesson had been taught instead of its jump. In
+action_stomp_down, walking off the pipe onto the walker below was taught in
+18 of 96 layouts; in skill_enemy_bypass, a short run in 9 of 288. Every other
+rule already treated these lessons as one fixed jump (no run-up, no pit
+run-up, no choice between stomping and passing). The single-jump lessons are
+recorded again (artifacts/block_smb/waits_20261104/record_skill_jumps.sh).
+
 ## 2026-11-04 — Waits in slices: the layers decide when to go from what they see (user decision; built, recording)
 
 The world model's wait lengths were 6.6 frames off on what it learned from,
