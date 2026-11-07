@@ -51,9 +51,10 @@ def test_stomping_and_passing_a_walker():
     stomp = plan_jump(Goal("stomp", ("slots", 0)), NESPlayerMotion(), STANDING, [FLOOR], [walker], 1)
     # The stomp bounces Mario, who then lands.
     assert stomp is not None and stomp.outcome.stomped is walker and stomp.outcome.end == "landed"
-    passing = plan_jump(Goal("pass", ("slots", 0), x1=200), NESPlayerMotion(), STANDING, [FLOOR], [walker], 1)
+    passing = plan_jump(Goal("pass", ("slots", 0)), NESPlayerMotion(), STANDING, [FLOOR], [walker], 1)
     assert passing is not None and passing.outcome.end == "landed"
-    assert (passing.outcome.body[0] + passing.outcome.body[2]) / 2 >= 200
+    # Beyond where the walker is when Mario lands.
+    assert passing.outcome.body[0] >= walker.at(passing.outcome.frame + 1)[2]
 
 
 def test_a_run_stops_at_its_x():
@@ -75,3 +76,14 @@ def test_a_run_stops_at_its_x():
     assert controller.event == "arrived"
     assert abs(x + 6 - 180) <= 6
     assert stopping_distance(NESPlayerMotion(), 1) == 0
+
+
+def test_a_walker_turns_back_at_a_wall():
+    from retroagi.core.smb_planner import enemy_paths
+
+    # Walking right at half a pixel a frame into a pipe 20 pixels away: it
+    # comes back, as the game turns walkers.
+    walker = Enemy((200.0, 194.0, 216.0, 208.0), 0.5, 0.0, ("slots", 0))
+    enemy_paths([walker], [FLOOR, pipe(236, 176)], 120)
+    xs = [b[0] for b in walker.path]
+    assert max(xs) <= 236 - 16 + 0.5 and xs[-1] < xs[60]

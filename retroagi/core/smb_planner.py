@@ -9,7 +9,8 @@ ledge, down a step), rolling each out with the NES motion
 model (smb_physics) and checking it against the scene: walls (which stop
 Mario's sideways motion, as the game's do: a jump pressed against a pipe
 rises along it and over), blocks hit from below, landings on tops, enemies
-met on their estimated paths (constant velocity). The plan reaching the goal with the most margin wins;
+met on their estimated paths (their velocity, turned back at walls as the
+game turns walkers: enemy_paths). The plan reaching the goal with the most margin wins;
 none reaching it is an answer too (None: infeasible, for the chooser to
 decide again).
 
@@ -43,6 +44,13 @@ STOMP_BOUNCE = -4
 # A stomp needs this much sideways overlap with the enemy (pixels): in 1-1 a
 # fall grazing a Goomba's top corner by one pixel was a hit, not a stomp.
 STOMP_OVERLAP = 4
+# A landing is safe only if no enemy reaches Mario within this many frames
+# after it, as he slides on his momentum, buttons released (time to decide
+# and jump again): dropping off 1-1's second pipe and sliding toward a
+# Goomba left no room to jump it.
+SAFE_AFTER = 12
+# A pass lands this far clear of the enemy (pixels).
+PASS_GAP = 4
 # How far inside a thing's ends a landing is kept (pixels; Mario is 10-12
 # wide): the goal region's margin. On a thing too narrow for it (a 16-pixel
 # step), at least NARROW_KEEP of it: Mario's middle stays on the top.
@@ -67,26 +75,50 @@ class Solid:
 
 @dataclass
 class Enemy:
-    """An enemy's box now (world pixels) and its velocity (pixels a frame)."""
+    """An enemy's box now (world pixels) and its velocity (pixels a frame);
+    ``path``: its box each frame from now, when predicted (enemy_paths)."""
 
     box: tuple
     vx: float
     vy: float
     ref: tuple
     stompable: bool = True
+    path: Optional[list] = None
 
     def at(self, frame: int) -> tuple:
+        if self.path is not None and frame < len(self.path):
+            return self.path[frame]
         b = self.box
         dx, dy = self.vx * frame, self.vy * frame
         return (b[0] + dx, b[1] + dy, b[2] + dx, b[3] + dy)
 
 
+def enemy_paths(enemies: Sequence[Enemy], solids: Sequence[Solid], frames: int) -> None:
+    """Each enemy's box every frame for ``frames`` frames (Enemy.path): moving
+    at its velocity, turned back when it walks into a wall (a solid rising
+    above its feet), as the game turns walkers at pipes and steps."""
+    for e in enemies:
+        x0, y0, x1, y1 = e.box
+        vx, path = e.vx, [e.box]
+        for _ in range(frames):
+            nx0, nx1 = x0 + vx, x1 + vx
+            if vx and any(_overlap(nx0, nx1, s.x0, s.x1) and s.top < y1 - WALL_DEPTH and y0 < s.bottom
+                          for s in solids):
+                vx = -vx
+                nx0, nx1 = x0 + vx, x1 + vx
+            x0, x1 = nx0, nx1
+            y0, y1 = y0 + e.vy, y1 + e.vy
+            path.append((x0, y0, x1, y1))
+        e.path = path
+
+
 @dataclass
 class Goal:
     """What the chooser asked for: "land" on ``ref`` (inside x0..x1 by
-    INSET), "stomp" the enemy ``ref``, or "pass" it (land beyond ``x1``,
-    world pixels, on its ``side``: 1 right of it, -1 left, without touching
-    it). ``prefer``: where on a landing, "near", "middle" or "far"."""
+    INSET), "stomp" the enemy ``ref``, or "pass" it (land on its ``side``,
+    1 right of it, -1 left, PASS_GAP clear of where it is at the landing,
+    without touching it: a walker coming at Mario can pass under a jump).
+    ``prefer``: where on a landing, "near", "middle" or "far"."""
 
     kind: str
     ref: tuple
@@ -98,9 +130,9 @@ class Goal:
 
 @dataclass
 class Outcome:
-    """How a rollout ends: "landed" (on ``solid``), "hit" (``enemy``),
-    "bonk" (a block from below), "fell", "timeout"; at ``frame``, Mario's
-    body then. A stomp on the way bounces Mario and the rollout goes on to
+    """How a rollout ends: "landed" (on ``solid``), "hit" (``enemy``; also a
+    landing an enemy reaches within SAFE_AFTER frames), "bonk" (a block from
+    below), "fell", "timeout"; at ``frame``, Mario's body then. A stomp on the way bounces Mario and the rollout goes on to
     his landing; ``stomped`` is the enemy stomped."""
 
     end: str
@@ -156,6 +188,27 @@ def blocked(x: float, width: float, top: float, feet: float, solids: Sequence[So
     )
 
 
+def _reached(body: tuple, motion: NESPlayerMotion, enemies: Sequence[Enemy], stomped: Optional[Enemy],
+             frame: int) -> Optional[Enemy]:
+    """The enemy reaching Mario, landed at ``body`` at ``frame`` and sliding
+    on (``motion``, buttons released), within SAFE_AFTER frames (with
+    ENEMY_MARGIN); None if none does."""
+    m = copy(motion)
+    x0, y0, x1, y1 = body
+    for k in range(1, SAFE_AFTER + 1):
+        dx, _, _ = m.advance(direction=0, jump=False, grounded=True, y=y0, run=False)
+        x0, x1 = x0 + dx, x1 + dx
+        for e in enemies:
+            if e is stomped:
+                continue
+            b = e.at(frame + k)
+            if _overlap(x0, x1, b[0] - ENEMY_MARGIN, b[2] + ENEMY_MARGIN) and _overlap(
+                y0, y1, b[1] - ENEMY_MARGIN, b[3] + ENEMY_MARGIN
+            ):
+                return e
+    return None
+
+
 def rollout(motion: NESPlayerMotion, body: tuple, pre_run: int, hold: int, direction: int,
             solids: Sequence[Solid], enemies: Sequence[Enemy], horizon: int = HORIZON) -> Outcome:
     """Mario from ``body`` (world pixels), standing, running ``pre_run``
@@ -189,6 +242,9 @@ def rollout(motion: NESPlayerMotion, body: tuple, pre_run: int, hold: int, direc
                 for s in solids:
                     if _overlap(nx, nx + width, s.x0, s.x1) and feet <= s.top <= ny + height:
                         body = (nx, s.top - height, nx + width, s.top)
+                        threat = _reached(body, m, enemies, stomped, frame)
+                        if threat is not None:
+                            return Outcome("hit", frame, body, enemy=threat)
                         return Outcome("landed", frame, body, solid=s, stomped=stomped)
         now = (nx, ny, nx + width, ny + height)
         for e in enemies:
@@ -215,7 +271,7 @@ def rollout(motion: NESPlayerMotion, body: tuple, pre_run: int, hold: int, direc
     return Outcome("timeout", horizon, (x, y, x + width, y + height))
 
 
-def _meets(goal: Goal, outcome: Outcome) -> Optional[float]:
+def _meets(goal: Goal, outcome: Outcome, enemies: Sequence[Enemy] = ()) -> Optional[float]:
     """The margin by which ``outcome`` meets ``goal`` (larger is better);
     None if it does not."""
     middle = (outcome.body[0] + outcome.body[2]) / 2
@@ -223,8 +279,13 @@ def _meets(goal: Goal, outcome: Outcome) -> Optional[float]:
         stomped = outcome.end == "landed" and outcome.stomped is not None and outcome.stomped.ref == goal.ref
         return 0.0 if stomped else None
     if goal.kind == "pass":
-        beyond = (middle - goal.x1) * goal.side
-        if outcome.end != "landed" or beyond < 0:
+        enemy = next((e for e in enemies if e.ref == goal.ref), None)
+        if outcome.end != "landed" or enemy is None:
+            return None
+        b = enemy.at(outcome.frame + 1)
+        edge = outcome.body[0] if goal.side > 0 else outcome.body[2]
+        beyond = (edge - b[2]) - PASS_GAP if goal.side > 0 else (b[0] - edge) - PASS_GAP
+        if beyond < 0:
             return None
         return min(beyond, 64.0)
     if outcome.end != "landed" or outcome.solid.ref != goal.ref:
@@ -247,15 +308,20 @@ def buttons_of(pre_run: int, hold: int, direction: int, frames: int) -> list:
 
 
 def plan_jump(goal: Goal, motion: NESPlayerMotion, body: tuple, solids: Sequence[Solid],
-              enemies: Sequence[Enemy], direction: int) -> Optional[Plan]:
+              enemies: Sequence[Enemy], direction: int, latest_takeoff: int = HORIZON) -> Optional[Plan]:
     """The plan meeting ``goal`` with the most margin (then the soonest);
     None when no takeoff and hold (nor walking on) does: the goal is
-    infeasible from here."""
+    infeasible from here. ``latest_takeoff``: no plan taking off later
+    (frames of running) than this; walking on without jumping is a plan that
+    never takes off, allowed only when unbounded."""
     best = None
-    tries = [(HORIZON, 0)] + [(pre_run, hold) for pre_run in PRE_RUNS for hold in NES_JUMP_FRAMES]
+    enemy_paths(enemies, solids, HORIZON + SAFE_AFTER + 1)
+    tries = [(pre_run, hold) for pre_run in PRE_RUNS if pre_run <= latest_takeoff for hold in NES_JUMP_FRAMES]
+    if latest_takeoff >= HORIZON:
+        tries.insert(0, (HORIZON, 0))
     for pre_run, hold in tries:
         outcome = rollout(motion, body, pre_run, hold, direction, solids, enemies)
-        margin = _meets(goal, outcome)
+        margin = _meets(goal, outcome, enemies)
         if margin is None:
             continue
         key = (margin, -outcome.frame)

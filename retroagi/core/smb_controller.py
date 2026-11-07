@@ -25,7 +25,7 @@ from dataclasses import dataclass, field
 from typing import Optional
 
 from .smb_physics import NESPlayerMotion
-from .smb_planner import BUTTON, Enemy, Goal, Plan, blocked, plan_jump, solids_of
+from .smb_planner import BUTTON, HORIZON, Enemy, Goal, Plan, blocked, plan_jump, solids_of
 
 # Frames of a planned jump after which the chooser decides again even if
 # Mario has not landed (a plan gone wrong).
@@ -135,15 +135,19 @@ class Controller:
         if choice.verb == "jump":
             self._plan(state)
 
-    def _plan(self, state: State) -> None:
+    def _plan(self, state: State, latest_takeoff: int = HORIZON) -> None:
         goal = self.choice.goal
         middle = (state.body[0] + state.body[2]) / 2
-        target = (goal.x0 + goal.x1) / 2 if goal.kind == "land" else goal.x1 if goal.kind == "pass" else None
-        if goal.kind == "stomp":
+        if goal.kind == "land":
+            direction = 1 if (goal.x0 + goal.x1) / 2 >= middle else -1
+        elif goal.kind == "pass":
+            direction = goal.side
+        else:
             enemy = next((e for e in state.enemies if e.ref == goal.ref), None)
             target = (enemy.box[0] + enemy.box[2]) / 2 if enemy else middle
-        direction = 1 if target >= middle else -1
-        self.plan = plan_jump(goal, state.motion, state.body, state.solids, state.enemies, direction)
+            direction = 1 if target >= middle else -1
+        self.plan = plan_jump(goal, state.motion, state.body, state.solids, state.enemies, direction,
+                              latest_takeoff=latest_takeoff)
         # The plan's first button is pressed this frame (or, from start, the
         # first press).
         self.plan_frame = max(0, self.frame - 1)
@@ -166,7 +170,10 @@ class Controller:
         step = self.frame - 1 - self.plan_frame
         taken_off = step >= plan.pre_run
         if not taken_off and state.grounded and step % REPLAN_EVERY == 0 and step:
-            self._plan(state)
+            # Re-planned on the new state, taking off no later than the plan
+            # it replaces (each re-plan postponing takeoff by its own run-up
+            # ran Mario off the edge of 1-1's second pit).
+            self._plan(state, latest_takeoff=plan.pre_run - step)
             if self.event:
                 return 0
             plan, step = self.plan, self.frame - 1 - self.plan_frame

@@ -131,7 +131,8 @@ class ScriptedChooser:
             if last.goal.kind == "stomp":
                 enemy = next((e for e in state.enemies if e.ref == last.goal.ref), None)
                 if enemy is not None:
-                    return Choice("jump", Goal("pass", enemy.ref, x1=enemy.box[2] + 16))
+                    side = 1 if _middle(enemy.box) >= mx else -1
+                    return Choice("jump", Goal("pass", enemy.ref, side=side))
             if last.goal.kind == "pass":
                 return Choice("wait", frames=8)
             target = last.goal.x0
@@ -150,9 +151,8 @@ class ScriptedChooser:
             enemy = min(ahead, key=lambda e: abs(_middle(e.box) - mx))
             if self.mode == "max_points" and enemy.stompable:
                 return Choice("jump", Goal("stomp", enemy.ref))
-            if _middle(enemy.box) < mx:  # from behind: over it backward
-                return Choice("jump", Goal("pass", enemy.ref, x1=enemy.box[0] - 16, side=-1))
-            return Choice("jump", Goal("pass", enemy.ref, x1=enemy.box[2] + 16))
+            # Beyond it: ahead of Mario over it forward, from behind backward.
+            return Choice("jump", Goal("pass", enemy.ref, side=1 if _middle(enemy.box) >= mx else -1))
         standing = [s for s in state.solids if s.x0 <= mx <= s.x1 and abs(s.top - feet) <= 2]
         under = standing[0] if standing else None
         raised = sorted(
