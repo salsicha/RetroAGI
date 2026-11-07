@@ -13,17 +13,22 @@ controller's events, looking ahead from Mario:
   BEHIND: stomp it (max points) or pass it (speed run), passing when a
   stomp is infeasible, waiting a moment when neither is feasible;
 - a raised thing ahead within RAISED_AHEAD (a pipe, a step): land on it;
-- the floor ending within PIT_AHEAD at a pit: land beyond it;
+- the floor ending within PIT_AHEAD at a pit: land beyond it, across at
+  the same height within ACROSS before down into what lies between;
 - standing on something raised whose end is near: land on what follows;
 - else run on toward the next of these, keeping speed into a jump.
 A jump found infeasible is followed by a run closer to its target, or, at
 a thing Mario touches, a step back (STEP_BACK) for room.
-ScriptedPlayer plays it through the controller for the obstacle bench.
+ScriptedPlayer plays it through the controller for the obstacle bench,
+deciding only while Mario stands (a plan made in the air would start from
+a standing jump), on game memory (TruthState) or, with ``vision``, on what
+the Full SMB vision shows and the executor estimates (smb_controller.
+perceived): the difference is what perception costs the controller.
 """
 
 from typing import Optional
 
-from retroagi.core.smb_controller import Choice, Controller, State
+from retroagi.core.smb_controller import Choice, Controller, State, perceived
 from retroagi.core.smb_physics import NESPlayerMotion
 from retroagi.core.smb_planner import Enemy, Goal, solids_of
 from retroagi.core.smb_scene_labels import scene_from_labels
@@ -38,6 +43,9 @@ BEHIND = 40
 STEP_BACK = 24
 RAISED_AHEAD = 96
 PIT_AHEAD = 48
+# Where the floor ends, a landing at about the same height this near is
+# taken before dropping down (pixels).
+ACROSS = 64
 # How far before a target an infeasible jump's run stops (pixels).
 CLOSER = 40
 # The longest stretch a plain run covers before deciding again (pixels).
@@ -162,8 +170,11 @@ class ScriptedChooser:
         if under is not None and under.x1 - mx < PIT_AHEAD:
             beyond = sorted((s for s in state.solids if s.x0 >= under.x1 - 2 and s.kind != "block"),
                             key=lambda s: s.x0)
+            # Across at the same height (from one staircase to the next)
+            # before down into what lies between.
+            level = [s for s in beyond if s.top <= feet + RAISE and s.x0 - under.x1 <= ACROSS]
             if beyond:
-                s = beyond[0]
+                s = level[0] if level else beyond[0]
                 prefer = "near" if s.top >= feet - RAISE else "middle"
                 return Choice("jump", Goal("land", s.ref, s.x0, s.x1, prefer=prefer))
         targets = [s.x0 for s in state.solids if s.x0 > mx + 8 and s.kind in ("pipe", "ground") and s.top < feet - RAISE]
@@ -174,11 +185,38 @@ class ScriptedChooser:
                       keep_speed=True)
 
 
-class ScriptedPlayer:
-    """The scripted chooser and the controller as an obstacle bench player."""
+class PerceivedState:
+    """The controller's state from the Full SMB vision and the executor's
+    estimates; the button pressed is told back (pressed)."""
 
-    def __init__(self, level: str = "Level1-1"):
-        self.source = TruthState(level)
+    def __init__(self, vision):
+        self.vision = vision
+
+    def reset(self):
+        from retroagi.core.smb_spatial_feedback import SpatialFeedback
+
+        self.feedback, self.scene = SpatialFeedback(), None
+
+    def read(self, screen) -> Optional[State]:
+        import torch
+
+        with torch.no_grad():
+            self.scene = self.vision.scene([screen])[0]
+        self.feedback.observe(self.scene)
+        return perceived(self.feedback, self.scene)
+
+    def pressed(self, button: int) -> None:
+        if self.scene is not None:
+            self.feedback.executed(button, self.scene)
+
+
+class ScriptedPlayer:
+    """The scripted chooser and the controller as an obstacle bench player,
+    on game memory, or on perception with ``vision`` (a Full SMB vision
+    model)."""
+
+    def __init__(self, level: str = "Level1-1", vision=None):
+        self.source = TruthState(level) if vision is None else PerceivedState(vision)
         self.controller = Controller()
 
     def reset(self, seed: int, mode: str) -> None:
@@ -188,9 +226,17 @@ class ScriptedPlayer:
         self.last_event, self.last_choice = None, None
 
     def act(self, screen, game) -> int:
-        state = self.source.read(game)
-        if not state.solids:
+        if isinstance(self.source, TruthState):
+            return self._act(self.source.read(game))
+        button = self._act(self.source.read(screen))
+        self.source.pressed(button)
+        return button
+
+    def _act(self, state: Optional[State]) -> int:
+        if state is None or not state.solids:
             return 0
+        if (self.controller.choice is None or self.controller.event is not None) and not state.grounded:
+            return 0  # decisions are made standing: in the air, coast until he lands
         if self.controller.choice is None or self.controller.event is not None:
             self.last_event = self.controller.event
             choice = self.chooser.decide(state, self.last_event, self.last_choice)

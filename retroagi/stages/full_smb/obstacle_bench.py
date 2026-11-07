@@ -14,7 +14,8 @@ play it.
 
 ``--player scripted``: the hand-written chooser reading game memory with the
 choose-and-control controller (scripted_chooser), testing the controller
-alone.
+alone; ``--player scripted_vision``: the same on what the Full SMB vision
+shows and the executor estimates.
 """
 
 import argparse
@@ -120,18 +121,23 @@ class LayeredPlayer:
 def main(argv=None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     parser.add_argument("--bench", type=Path, required=True)
-    parser.add_argument("--player", choices=("layered", "scripted"), default="layered")
+    parser.add_argument("--player", choices=("layered", "scripted", "scripted_vision"), default="layered")
     parser.add_argument("--checkpoint")
     parser.add_argument("--tracker")
     parser.add_argument("--runs", type=int, default=4)
     parser.add_argument("--only", nargs="*", default=())
     parser.add_argument("--output", type=Path)
     args = parser.parse_args(argv)
-    if args.player == "scripted":
+    if args.player in ("scripted", "scripted_vision"):
         from .scripted_chooser import ScriptedPlayer
 
         level = json.loads((args.bench / "index.json").read_text())["level"]
-        make_player = lambda: ScriptedPlayer(level)  # noqa: E731
+        vision = None
+        if args.player == "scripted_vision":
+            from .vision import load_full_vit_checkpoint
+
+            vision = load_full_vit_checkpoint("data/full_vit/full_vit_scene.pth", device="cuda").model.eval()
+        make_player = lambda: ScriptedPlayer(level, vision)  # noqa: E731
     else:
         if not (args.checkpoint and args.tracker):
             parser.error("the layered player needs --checkpoint and --tracker")

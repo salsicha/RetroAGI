@@ -61,3 +61,21 @@ Each phase ends with a measurement that decides whether to go on.
 
 Phase 1 comes before any learning: if a correct chooser and the controller
 cannot pass an obstacle, nothing learned on top will.
+
+## Progress
+
+- **Phase 0 (2026-11-07, done).** data/full_smb_obstacles/Level1-1: 24
+  obstacles from the first Goomba to the flag, each with a checked start
+  state (retroagi/stages/full_smb/obstacles.py, obstacle_bench.py). The
+  learned agent of the old design (tactic_20261104) passes 60%.
+- **Phase 1 (2026-11-07, done with game memory).** The jump planner
+  (retroagi/core/smb_planner.py) and controller (smb_controller.py), driven
+  by a scripted chooser reading game memory (stages/full_smb/
+  scripted_chooser.py), pass all 24 obstacles in both modes and finish 1-1
+  from its start: speed run 2,990 frames, max points 3,473 (score 500). The
+  motion model's predicted paths matched the game frame for frame; what had
+  to be fixed was everything around it (walls, enemy speed estimates, the
+  stomp rule, the bounce, walking off ledges, narrow steps, the bench's
+  starts). Next: the same chooser on perceived state (vision and the
+  executor's estimates), then phase 2.
+

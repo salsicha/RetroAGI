@@ -26,6 +26,19 @@ commit). How the parts work is described in the
   the training set"); the recorded failures are fixed in the teacher. A
   failed gate is fixed in the teacher or the policy, never bypassed.
 
+## 2026-11-07 — Choose and control: the controller finishes 1-1 with a scripted chooser (user decision; built, measured)
+
+User: "Yes I agree, make it so" to the rethink (docs/choose-and-control-plan.md):
+a small decision network at sparse decision points, a model-based controller
+every frame, a faithful simulator of the real levels, the teacher labelling
+the agent's own play there. Phase 0's obstacle bench and phase 1's
+controller are built. With a scripted chooser reading game memory, the
+controller passes all 24 1-1 obstacles in both modes and finishes the level
+(speed run 2,990 frames; max points 3,473, score 500); the old design's
+learned agent passes 60% of the obstacles. With perfect vision the old
+agent did worse in 1-1 (632 vs 871 average): it had learned to rely on how
+its own vision describes scenes.
+
 ## 2026-11-06 — A lesson that is one given jump teaches only jumps (user: "yes" to fixing the stomp-down test)
 
 In a single-jump lesson (scenario `action_jump_direction`) the teacher no

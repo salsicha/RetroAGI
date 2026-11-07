@@ -7,7 +7,7 @@ A choice is a verb, the thing it is about and a coarse modifier:
 - "jump" to land on a still thing (``prefer``: near, middle or far), to
   stomp an enemy, or to pass it: planned by smb_planner (takeoff after some
   running, the jump-button hold) and played frame by frame, re-planned
-  while Mario is still on the ground;
+  while Mario is still on the ground, done when he stands again;
 - "run" to a level x: running there and braking so as to stop at it (the
   motion model's stopping distance), or keeping speed (``keep_speed``);
 - "wait": standing until an enemy is clear of a level x (``until_clear``),
@@ -16,8 +16,8 @@ A choice is a verb, the thing it is about and a coarse modifier:
 Events: "landed", "stomped", "arrived", "waited", "infeasible", "hit",
 "blocked". The state each frame (State) is the scene's solids and enemies
 in world pixels, Mario's body and his motion: from vision and the
-executor's estimates in play, or from game memory to test the controller
-alone.
+executor's estimates in play (perceived), or from game memory to test the
+controller alone.
 """
 
 from copy import copy
@@ -25,7 +25,7 @@ from dataclasses import dataclass, field
 from typing import Optional
 
 from .smb_physics import NESPlayerMotion
-from .smb_planner import BUTTON, Goal, Plan, blocked, plan_jump
+from .smb_planner import BUTTON, Enemy, Goal, Plan, blocked, plan_jump, solids_of
 
 # Frames of a planned jump after which the chooser decides again even if
 # Mario has not landed (a plan gone wrong).
@@ -59,6 +59,36 @@ class State:
     grounded: bool
     solids: list = field(default_factory=list)
     enemies: list = field(default_factory=list)
+
+
+def perceived(feedback, scene) -> Optional[State]:
+    """The controller's state from what vision shows (``scene``) and the
+    executor's estimates (``feedback``, smb_spatial_feedback.SpatialFeedback,
+    already observing the scene): world pixels are screen pixels plus its
+    camera position; enemies are its tracks seen this frame, with their
+    averaged velocities; Mario's motion is its estimate. None while vision
+    does not show Mario."""
+    if scene.mario.box is None:
+        return None
+    camera = feedback.camera_position
+    enemies = [
+        Enemy(
+            (t.box[0] + camera, t.box[1], t.box[2] + camera, t.box[3]),
+            *(t.velocity or (0.0, 0.0)),
+            ("enemies", t.identity),
+            stompable=t.kind == "walker",
+        )
+        for t in feedback.tracks.tracks
+        if t.kind != "platform" and t.missed == 0
+    ]
+    box = scene.mario.box
+    return State(
+        body=(box[0] + camera, box[1], box[2] + camera, box[3]),
+        motion=copy(feedback.motion),
+        grounded=scene.mario.on_something and scene.mario.support != "air",
+        solids=solids_of(scene, camera),
+        enemies=enemies,
+    )
 
 
 def stopping_distance(motion: NESPlayerMotion, direction: int) -> float:
@@ -123,6 +153,11 @@ class Controller:
             if self.event:
                 return 0
             plan, step = self.plan, self.frame - 1 - self.plan_frame
+        if taken_off and state.grounded and step > plan.pre_run + 1:
+            # Landed (or stomped and landed): the choice is done, whatever
+            # buttons the plan had left.
+            self.event = "stomped" if plan.outcome.stomped is not None else "landed"
+            return 0
         if step >= len(plan.buttons):
             if state.grounded:
                 self.event = "stomped" if plan.outcome.stomped is not None else "landed"
