@@ -9,7 +9,12 @@ wraps the layered agent (core.smb_agent.SMBAgents) as the 1-1 playthroughs
 play it.
 
     python -m retroagi.stages.full_smb.obstacle_bench --bench DIR \\
-        --checkpoint AGENT.pt --tracker TRACKER.pt [--runs 4] [--output OUT.json]
+        (--checkpoint AGENT.pt --tracker TRACKER.pt | --player scripted) \\
+        [--runs 4] [--output OUT.json]
+
+``--player scripted``: the hand-written chooser reading game memory with the
+choose-and-control controller (scripted_chooser), testing the controller
+alone.
 """
 
 import argparse
@@ -115,14 +120,23 @@ class LayeredPlayer:
 def main(argv=None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     parser.add_argument("--bench", type=Path, required=True)
-    parser.add_argument("--checkpoint", required=True)
-    parser.add_argument("--tracker", required=True)
+    parser.add_argument("--player", choices=("layered", "scripted"), default="layered")
+    parser.add_argument("--checkpoint")
+    parser.add_argument("--tracker")
     parser.add_argument("--runs", type=int, default=4)
     parser.add_argument("--only", nargs="*", default=())
     parser.add_argument("--output", type=Path)
     args = parser.parse_args(argv)
-    results = run_bench(args.bench, lambda: LayeredPlayer(args.checkpoint, args.tracker), args.runs,
-                        only=args.only)
+    if args.player == "scripted":
+        from .scripted_chooser import ScriptedPlayer
+
+        level = json.loads((args.bench / "index.json").read_text())["level"]
+        make_player = lambda: ScriptedPlayer(level)  # noqa: E731
+    else:
+        if not (args.checkpoint and args.tracker):
+            parser.error("the layered player needs --checkpoint and --tracker")
+        make_player = lambda: LayeredPlayer(args.checkpoint, args.tracker)  # noqa: E731
+    results = run_bench(args.bench, make_player, args.runs, only=args.only)
     print(f"obstacles passed on average: {results['passed']:.2f}")
     if args.output:
         args.output.write_text(json.dumps(results, indent=1) + "\n")
