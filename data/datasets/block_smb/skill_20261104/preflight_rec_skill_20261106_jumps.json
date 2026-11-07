@@ -1,0 +1,30 @@
+{
+  "source": "/home/amoran/repos/RetroAGI/artifacts/block_smb/agent_20261101/agent.pt",
+  "source_sha256": "6f29a6ae6e8a196dd6ecb1c96ce55d32d32c5c19bac5e40c9fbace3f014a439f",
+  "initial_checkpoint": "/home/amoran/repos/RetroAGI/artifacts/block_smb/rec_skill_20261106_jumps/init.pt",
+  "learner": "skill",
+  "seed": 2026101201,
+  "families": [
+    "action_jump_gap",
+    "action_climb",
+    "action_climb_back",
+    "action_jump_gap_back",
+    "action_platform_up",
+    "action_platform_up_back",
+    "action_stomp_back",
+    "action_stomp_up",
+    "action_stomp_up_back",
+    "action_jump_down",
+    "action_jump_down_back",
+    "action_climb_pipe",
+    "action_stomp_down",
+    "skill_enemy_bypass",
+    "skill_enemy_bypass_back"
+  ],
+  "extra_layouts": "skill_enemy_bypass=16",
+  "epochs_per_round": 64,
+  "load_migrations": [
+    "skill_ordered_choice_zero_initialized",
+    "world_model_reads_tactic_and_strategy"
+  ]
+}

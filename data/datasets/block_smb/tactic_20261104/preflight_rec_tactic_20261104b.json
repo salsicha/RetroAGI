@@ -1,0 +1,20 @@
+{
+  "source": "/home/amoran/repos/RetroAGI/artifacts/block_smb/agent_20261101/agent.pt",
+  "source_sha256": "6f29a6ae6e8a196dd6ecb1c96ce55d32d32c5c19bac5e40c9fbace3f014a439f",
+  "initial_checkpoint": "/home/amoran/repos/RetroAGI/artifacts/block_smb/rec_tactic_20261104b/init.pt",
+  "learner": "tactic",
+  "seed": 2026101201,
+  "families": [
+    "chained_enemy_gauntlet",
+    "tactics_bridge_sequence",
+    "tactics_bridge_then_gap",
+    "mixed_section",
+    "full_smb_blocks_proxy"
+  ],
+  "extra_layouts": "",
+  "epochs_per_round": 64,
+  "load_migrations": [
+    "skill_ordered_choice_zero_initialized",
+    "world_model_reads_tactic_and_strategy"
+  ]
+}

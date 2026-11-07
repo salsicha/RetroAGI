@@ -1,0 +1,54 @@
+# Tactic families dataset (2026-10-22: plants that wait for Mario)
+
+`tactic_20261018` with its five plant families recorded again under the
+plant rule (user, 2026-10-22: "make every Block SMB plant follow the real
+game's rule": a plant does not come up while Mario is within 33 pixels of
+it, as the NES's do): full_smb_opening_proxy, mixed_section,
+piranha_avoidance, tactics_bridge_sequence and tactics_obstacle_sequence,
+the same layouts (tactic_plants_20261022, commit 7732531; 440 episodes over
+twelve rounds). The other 37 families' files are tactic_20261018's. 3,936
+episodes.
+
+- `round_NN/<family>.pkl.gz`, `round_NN/complete.json`: as tactic_20261018.
+- `missed/train_NN.json`: every layout of a round whose episode missed its
+  objective (the plant families' from the new recording).
+- `unmade/`, `preflight.json`: tactic_20261018's.
+
+The skill also learns from these episodes during tactic training (user,
+2026-10-22: `LayeredTrainConfig.skill_learns`).
+
+## 2026-10-25
+
+tactic_20261022 with full_smb_blocks_proxy, max_points_hold_ground, speed_run_hold_ground from the teacher's recording rec_tactic_20261025 (artifacts/block_smb; 12 rounds, 8 layouts a family a round, seed 2026101201): the families found missing from the Full SMB failures, and the hold-ground scene that shows what Mario holds for. Their episodes are added to each round (replacing any the old dataset had).
+
+## 2026-10-25
+
+tactic_20261025 with full_smb_blocks_proxy from the teacher's recording rec_tactic_20261026 (artifacts/block_smb; 12 rounds, 8 layouts a family a round, seed 2026101201): the families found missing from the Full SMB failures, and the hold-ground scene that shows what Mario holds for. Their episodes are added to each round (replacing any the old dataset had).
+
+## 2026-10-25
+
+tactic_20261026 with max_points_block_goomba, speed_run_block_goomba from the teacher's recording rec_tactic_20261027 (artifacts/block_smb; 12 rounds, 8 layouts a family a round, seed 2026101201): the families found missing from the Full SMB failures, and the hold-ground scene that shows what Mario holds for. Their episodes are added to each round (replacing any the old dataset had).
+
+## 2026-10-25
+
+tactic_20261027 with pen_pipe_climb, full_smb_rows_proxy from the teacher's recording rec_tactic_20261028 (artifacts/block_smb; 12 rounds, 8 layouts a family a round, seed 2026101201): the families found missing from the Full SMB failures, and the hold-ground scene that shows what Mario holds for. Their episodes are added to each round (replacing any the old dataset had).
+
+## 2026-10-29
+
+tactic_20261028 with max_points_block_goomba and speed_run_block_goomba recorded again (rec_tactic_20261029, 8 layouts a family a round), replacing their old episodes: in half the layouts Mario arrives running and max points stops short of the block, holding until the Goomba is out from under it. 12 rounds, seed 2026101201; their episodes are added to each round (replacing any the old dataset had).
+
+## 2026-10-30
+
+tactic_20261029 with max_points_block_goomba and speed_run_block_goomba recorded again (half their layouts with 1-1's brick row past the block, the Goomba starting under it), replacing their episodes, and max_points_pen_from_pipe and speed_run_pen_from_pipe added (Mario on a pipe, a walker pacing the pen beyond, a taller pipe after: max points stomps it, speed run passes it), from the teacher's recording rec_tactic_20261030 (8 layouts a family a round, 12 rounds, seed 2026101201).
+
+## 2026-10-31
+
+tactic_20261030 with pen_pipe_climb recorded again (half its layouts start Mario 72 to 112 pixels back in a wider pen with a walker between him and the pipe: the teacher advances past it, then climbs), replacing its episodes, from the teacher's recording rec_tactic_20261031 (8 layouts a round, 12 rounds, seed 2026101201).
+
+## 2026-11-01
+
+tactic_20261031 with twice the layouts for tactics_bridge_then_gap, chained_enemy_gauntlet, max_points_advance, max_points_climb_backward, max_points_pen_from_pipe, mixed_section, tactics_bridge_sequence, max_points_descend_backward, speed_run_climb_backward, full_smb_blocks_proxy: each round's episodes of those lessons joined by 8 new layouts from the teacher's recording rec_tactic_20261101 (seed 2026103101, 12 rounds), added to the old ones; every other lesson unchanged.
+
+## 2026-11-04
+
+Waits in slices of 8 frames (user: "wait based on perception"): speed_run_hold_ground, chained_enemy_gauntlet, bridge_dismount, wait_timing, max_points_block_goomba, bridge_wait, bridge_mount, tactics_mixed_sequence, max_points_hold_ground, tactics_bridge_sequence, monster_retreat, piranha_avoidance, tactics_bridge_then_gap, full_smb_opening_proxy, mixed_section, tactics_obstacle_sequence, full_smb_blocks_proxy, moving_bridge recorded again (rec_tactic_20261104, seed 2026101201; chained_enemy_gauntlet, tactics_bridge_sequence, tactics_bridge_then_gap, mixed_section, full_smb_blocks_proxy also rec_tactic_20261104b, seed 2026103101; 12 rounds of 8 layouts), replacing their episodes; every other lesson's episodes with a longer wait dropped.

@@ -1,0 +1,33 @@
+{
+  "source": "/home/amoran/repos/RetroAGI/artifacts/block_smb/agent_20261101/agent.pt",
+  "source_sha256": "6f29a6ae6e8a196dd6ecb1c96ce55d32d32c5c19bac5e40c9fbace3f014a439f",
+  "initial_checkpoint": "/home/amoran/repos/RetroAGI/artifacts/block_smb/rec_tactic_20261104/init.pt",
+  "learner": "tactic",
+  "seed": 2026101201,
+  "families": [
+    "speed_run_hold_ground",
+    "chained_enemy_gauntlet",
+    "bridge_dismount",
+    "wait_timing",
+    "max_points_block_goomba",
+    "bridge_wait",
+    "bridge_mount",
+    "tactics_mixed_sequence",
+    "max_points_hold_ground",
+    "tactics_bridge_sequence",
+    "monster_retreat",
+    "piranha_avoidance",
+    "tactics_bridge_then_gap",
+    "full_smb_opening_proxy",
+    "mixed_section",
+    "tactics_obstacle_sequence",
+    "full_smb_blocks_proxy",
+    "moving_bridge"
+  ],
+  "extra_layouts": "",
+  "epochs_per_round": 64,
+  "load_migrations": [
+    "skill_ordered_choice_zero_initialized",
+    "world_model_reads_tactic_and_strategy"
+  ]
+}
