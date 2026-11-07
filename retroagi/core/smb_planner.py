@@ -36,6 +36,12 @@ WALL_DEPTH = 2
 STAND = 1
 # Landing on an enemy's top within this of its top is a stomp (pixels).
 STOMP_REACH = 4
+# Enemies are kept this much wider on every side than their boxes when a
+# hit is checked (pixels): the game's boxes include their last pixel, and
+# estimates are not exact. A stomp needs the box itself.
+ENEMY_MARGIN = 2
+# A stomp bounces Mario up at this vertical speed (the game's $FC).
+STOMP_BOUNCE = -4
 # How far inside a thing's ends a landing is kept (pixels; Mario is 10-12
 # wide): the goal region's margin. On a thing too narrow for it (a 16-pixel
 # step), at least NARROW_KEEP of it: Mario's middle stays on the top.
@@ -91,15 +97,17 @@ class Goal:
 
 @dataclass
 class Outcome:
-    """How a rollout ends: "landed" (on ``solid``), "stomp" or "hit" (an
-    enemy), "bonk" (a block from below), "fell", "timeout"; at ``frame``,
-    Mario's body then."""
+    """How a rollout ends: "landed" (on ``solid``), "hit" (``enemy``),
+    "bonk" (a block from below), "fell", "timeout"; at ``frame``, Mario's
+    body then. A stomp on the way bounces Mario and the rollout goes on to
+    his landing; ``stomped`` is the enemy stomped."""
 
     end: str
     frame: int
     body: tuple
     solid: Optional[Solid] = None
     enemy: Optional[Enemy] = None
+    stomped: Optional[Enemy] = None
 
 
 @dataclass
@@ -156,6 +164,7 @@ def rollout(motion: NESPlayerMotion, body: tuple, pre_run: int, hold: int, direc
     x, y, x1, y1 = body
     width, height = x1 - x, y1 - y
     airborne = False
+    stomped = None
     for frame in range(horizon):
         jump = pre_run <= frame < pre_run + hold
         dx, dy, jumped = m.advance(direction=direction, jump=jump, grounded=not airborne, y=y, run=True)
@@ -178,13 +187,22 @@ def rollout(motion: NESPlayerMotion, body: tuple, pre_run: int, hold: int, direc
             else:
                 for s in solids:
                     if _overlap(nx, nx + width, s.x0, s.x1) and feet <= s.top <= ny + height:
-                        return Outcome("landed", frame, (nx, s.top - height, nx + width, s.top), solid=s)
+                        body = (nx, s.top - height, nx + width, s.top)
+                        return Outcome("landed", frame, body, solid=s, stomped=stomped)
         now = (nx, ny, nx + width, ny + height)
         for e in enemies:
+            if e is stomped:
+                continue
             b = e.at(frame + 1)
-            if _overlap(now[0], now[2], b[0], b[2]) and _overlap(now[1], now[3], b[1], b[3]):
-                stomp = airborne and dy > 0 and e.stompable and feet <= b[1] + STOMP_REACH
-                return Outcome("stomp" if stomp else "hit", frame, now, enemy=e)
+            near = (b[0] - ENEMY_MARGIN, b[1] - ENEMY_MARGIN, b[2] + ENEMY_MARGIN, b[3] + ENEMY_MARGIN)
+            if not (_overlap(now[0], now[2], near[0], near[2]) and _overlap(now[1], now[3], near[1], near[3])):
+                continue
+            touching = _overlap(now[0], now[2], b[0], b[2]) and _overlap(now[1], now[3], b[1], b[3])
+            if stomped is None and touching and airborne and dy > 0 and e.stompable and feet <= b[1] + STOMP_REACH:
+                stomped = e
+                m.y_speed, m.y_force, m.force = STOMP_BOUNCE, 0, m.force_down
+                break
+            return Outcome("hit", frame, now, enemy=e)
         if ny > SCREEN_BOTTOM:
             return Outcome("fell", frame, now)
         x, y = nx, ny
@@ -196,7 +214,8 @@ def _meets(goal: Goal, outcome: Outcome) -> Optional[float]:
     None if it does not."""
     middle = (outcome.body[0] + outcome.body[2]) / 2
     if goal.kind == "stomp":
-        return 0.0 if outcome.end == "stomp" and outcome.enemy.ref == goal.ref else None
+        stomped = outcome.end == "landed" and outcome.stomped is not None and outcome.stomped.ref == goal.ref
+        return 0.0 if stomped else None
     if goal.kind == "pass":
         beyond = (middle - goal.x1) * goal.side
         if outcome.end != "landed" or beyond < 0:

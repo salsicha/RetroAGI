@@ -6,7 +6,8 @@ obstacle, nothing learned on top of them will.
 TruthState builds the controller's state from game memory each frame:
 Mario's body and motion (smb_physics.NESPlayerMotion.from_ram), the solids
 from the exact labels (pixel_labels), the enemies from the game's slots with
-velocities from their last move. ScriptedChooser decides at each of the
+velocities averaged over their last SPEED_FRAMES frames (a Goomba walks half
+a pixel a frame, as 0 and 1 by turns: one frame's move says 0 or 1). ScriptedChooser decides at each of the
 controller's events, looking ahead from Mario:
 - an enemy ahead within ENEMY_AHEAD, or coming from behind within
   BEHIND: stomp it (max points) or pass it (speed run), passing when a
@@ -47,6 +48,14 @@ RAISE = 4
 SAME_LEVEL = 24
 # Labels are made again every this many frames (the solids are still).
 LABEL_EVERY = 4
+# An enemy's velocity: its move over at most this many frames, averaged.
+SPEED_FRAMES = 16
+# A slot's enemy moving more than this in a frame is another enemy.
+JUMP = 16
+# Seen for fewer frames than this, an enemy is taken to walk as walkers do:
+# WALK pixels a frame toward Mario (its speed not yet measured).
+MEASURED = 4
+WALK = 0.5
 
 
 class TruthState:
@@ -56,11 +65,11 @@ class TruthState:
         self.level = level
         self.previous_state = None
         self.solids: list = []
-        self.last_boxes: dict = {}
+        self.seen: dict = {}  # slot -> [(frame, x, y)], its recent places
         self.frame = 0
 
     def reset(self):
-        self.previous_state, self.solids, self.last_boxes, self.frame = None, [], {}, 0
+        self.previous_state, self.solids, self.seen, self.frame = None, [], {}, 0
 
     def read(self, game) -> State:
         ram = game.env.get_ram()
@@ -78,11 +87,19 @@ class TruthState:
         for k, slot in enumerate(truth["slots"]):
             box = slot["box"]
             if not (slot["active"] and slot["enemy"] and box and not slot["defeated"] and box[2] > box[0]):
-                self.last_boxes.pop(k, None)
+                self.seen.pop(k, None)
                 continue
-            last = self.last_boxes.get(k)
-            vx, vy = (box[0] - last[0], box[1] - last[1]) if last else (0.0, 0.0)
-            self.last_boxes[k] = box
+            places = self.seen.setdefault(k, [])
+            if places and abs(box[0] - places[-1][1]) > JUMP:
+                places.clear()
+            places.append((self.frame, box[0], box[1]))
+            del places[:-SPEED_FRAMES]
+            first = places[0]
+            frames = self.frame - first[0]
+            if frames >= MEASURED:
+                vx, vy = (box[0] - first[1]) / frames, (box[1] - first[2]) / frames
+            else:
+                vx, vy = (-WALK if box[0] > truth["mario"][0] else WALK), 0.0
             enemies.append(Enemy(tuple(float(v) for v in box), vx, vy, ("slots", k), slot["stompable"]))
         return State(
             body=tuple(float(v) for v in truth["mario"]),

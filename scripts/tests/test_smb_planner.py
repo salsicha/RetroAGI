@@ -49,7 +49,8 @@ def test_too_far_is_infeasible():
 def test_stomping_and_passing_a_walker():
     walker = Enemy((170.0, 194.0, 186.0, 208.0), -0.5, 0.0, ("slots", 0))
     stomp = plan_jump(Goal("stomp", ("slots", 0)), NESPlayerMotion(), STANDING, [FLOOR], [walker], 1)
-    assert stomp is not None and stomp.outcome.end == "stomp"
+    # The stomp bounces Mario, who then lands.
+    assert stomp is not None and stomp.outcome.stomped is walker and stomp.outcome.end == "landed"
     passing = plan_jump(Goal("pass", ("slots", 0), x1=200), NESPlayerMotion(), STANDING, [FLOOR], [walker], 1)
     assert passing is not None and passing.outcome.end == "landed"
     assert (passing.outcome.body[0] + passing.outcome.body[2]) / 2 >= 200

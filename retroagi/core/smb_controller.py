@@ -125,7 +125,7 @@ class Controller:
             plan, step = self.plan, self.frame - 1 - self.plan_frame
         if step >= len(plan.buttons):
             if state.grounded:
-                self.event = {"stomp": "stomped"}.get(plan.outcome.end, "landed")
+                self.event = "stomped" if plan.outcome.stomped is not None else "landed"
                 return 0
             if step >= len(plan.buttons) + PLAN_SLACK:
                 self.event = "landed"
