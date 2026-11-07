@@ -87,3 +87,23 @@ def test_a_walker_turns_back_at_a_wall():
     enemy_paths([walker], [FLOOR, pipe(236, 176)], 120)
     xs = [b[0] for b in walker.path]
     assert max(xs) <= 236 - 16 + 0.5 and xs[-1] < xs[60]
+
+
+def test_the_compiled_motion_matches_the_motion_model():
+    import random
+
+    from retroagi.core.smb_planner import _MOTION_FIELDS, _advance, _motion_array
+
+    rng = random.Random(0)
+    for trial in range(300):
+        motion = NESPlayerMotion(x_speed=rng.randint(-40, 40), moving=rng.choice((-1, 1)), facing=rng.choice((-1, 1)))
+        array = _motion_array(motion)
+        grounded, y = rng.random() < 0.7, 192.0
+        for _ in range(60):
+            direction, jump, run = rng.choice((-1, 0, 1)), rng.random() < 0.4, rng.random() < 0.8
+            expected = motion.advance(direction=direction, jump=jump, grounded=grounded, y=y, run=run)
+            got = _advance(array, direction, jump, grounded, y, run)
+            assert tuple(int(v) for v in got) == tuple(int(v) for v in expected)
+            assert [int(getattr(motion, f)) for f in _MOTION_FIELDS] == list(array)
+            y += expected[1]
+            grounded = rng.random() < 0.5

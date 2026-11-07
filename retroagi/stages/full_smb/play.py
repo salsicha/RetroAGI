@@ -69,6 +69,9 @@ class FullSMBGame:
             "SuperMarioBros-Nes",
             state=level if start_state is None else retro.State.DEFAULT,
             inttype=retro.data.Integrations.STABLE,
+            # No viewer window: retro's default draws one every step (7% of a
+            # frame's time) that nobody looks at.
+            render_mode=None,
         )
         self.buttons = list(self.env.buttons)
         self.start: tuple[int, int] = (0, 0)

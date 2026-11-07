@@ -61,7 +61,9 @@ def played_frames(level: str, *, frames: int, seed: int, every: int) -> Iterator
     import retro
 
     rng = np.random.default_rng(seed)
-    env = retro.make("SuperMarioBros-Nes", state=level, inttype=retro.data.Integrations.STABLE)
+    env = retro.make(
+        "SuperMarioBros-Nes", state=level, inttype=retro.data.Integrations.STABLE, render_mode=None
+    )
     try:
         buttons = list(env.buttons)
         env.reset()

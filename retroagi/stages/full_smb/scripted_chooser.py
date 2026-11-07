@@ -54,8 +54,11 @@ RUN_STRETCH = 96
 RAISE = 4
 # Enemies whose feet are this close to Mario's feet's height are on his way.
 SAME_LEVEL = 24
-# Labels are made again every this many frames (the solids are still).
-LABEL_EVERY = 4
+# The solids are labelled again once the camera has scrolled this far
+# (pixels) or this many frames have passed (blocks bumped, broken): they
+# stay still otherwise, and a label costs 17 ms.
+LABEL_SCROLL = 8
+LABEL_FRAMES = 16
 # An enemy's velocity: its move over at most this many frames, averaged.
 SPEED_FRAMES = 16
 # A slot's enemy moving more than this in a frame is another enemy.
@@ -69,20 +72,30 @@ class TruthState:
         self.level = level
         self.previous_state = None
         self.solids: list = []
+        self.labelled_at = (None, 0)  # (camera, frame) of the last label
         self.seen: dict = {}  # slot -> [(frame, x, y)], its recent places
         self.frame = 0
 
     def reset(self):
         self.previous_state, self.solids, self.seen, self.frame = None, [], {}, 0
+        self.labelled_at = (None, 0)
 
     def read(self, game) -> State:
         ram = game.env.get_ram()
         truth = true_frame(ram, game.start)
         now = game.env.em.get_state()
-        if self.previous_state is not None and (self.frame % LABEL_EVERY == 0 or not self.solids):
+        camera, then = self.labelled_at
+        due = (
+            not self.solids
+            or camera is None
+            or abs(truth["camera"] - camera) >= LABEL_SCROLL
+            or self.frame - then >= LABEL_FRAMES
+        )
+        if self.previous_state is not None and due:
             try:
                 labelled = label_frame(game.raw, self.previous_state, now, family=self.level)
                 self.solids = solids_of(scene_from_labels(labelled.scene), truth["camera"])
+                self.labelled_at = (truth["camera"], self.frame)
             except Unexplained:
                 pass
         self.previous_state = now
