@@ -86,6 +86,8 @@ Legacy spatial-skill checkpoints warm-start by discarding the action network
 and preserving skill, tactic, scene encoder, and memory weights. No action
 training or action checkpoint is required.
 
+The agent is being rebuilt around a small decision network and a model-based
+controller: see [the plan](docs/choose-and-control-plan.md) (2026-11-07).
 See [the architecture and training guide](docs/layered-agent.md) for exact
 inputs, outputs, timing, curriculum, qualification gates and known limits,
 and [design decisions](docs/design-decisions.md) for what was decided, why,
