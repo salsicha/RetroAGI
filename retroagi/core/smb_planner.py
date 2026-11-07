@@ -34,14 +34,15 @@ SCREEN_BOTTOM = 240
 WALL_DEPTH = 2
 # Feet this close to a solid's top stand on it (pixels).
 STAND = 1
-# Landing on an enemy's top within this of its top is a stomp (pixels).
-STOMP_REACH = 4
 # Enemies are kept this much wider on every side than their boxes when a
 # hit is checked (pixels): the game's boxes include their last pixel, and
 # estimates are not exact. A stomp needs the box itself.
 ENEMY_MARGIN = 2
 # A stomp bounces Mario up at this vertical speed (the game's $FC).
 STOMP_BOUNCE = -4
+# A stomp needs this much sideways overlap with the enemy (pixels): in 1-1 a
+# fall grazing a Goomba's top corner by one pixel was a hit, not a stomp.
+STOMP_OVERLAP = 4
 # How far inside a thing's ends a landing is kept (pixels; Mario is 10-12
 # wide): the goal region's margin. On a thing too narrow for it (a 16-pixel
 # step), at least NARROW_KEEP of it: Mario's middle stays on the top.
@@ -198,7 +199,12 @@ def rollout(motion: NESPlayerMotion, body: tuple, pre_run: int, hold: int, direc
             if not (_overlap(now[0], now[2], near[0], near[2]) and _overlap(now[1], now[3], near[1], near[3])):
                 continue
             touching = _overlap(now[0], now[2], b[0], b[2]) and _overlap(now[1], now[3], b[1], b[3])
-            if stomped is None and touching and airborne and dy > 0 and e.stompable and feet <= b[1] + STOMP_REACH:
+            across = min(now[2], b[2]) - max(now[0], b[0])
+            from_above = feet <= b[1]  # last frame's feet above its top
+            if (
+                stomped is None and touching and airborne and dy > 0 and e.stompable
+                and from_above and across >= STOMP_OVERLAP
+            ):
                 stomped = e
                 m.y_speed, m.y_force, m.force = STOMP_BOUNCE, 0, m.force_down
                 break
