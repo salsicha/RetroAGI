@@ -38,6 +38,10 @@ ARRIVE = 2
 TOO_CLOSE = 24
 # Frames a run may last before the chooser decides again.
 RUN_FRAMES = 240
+# Perceived enemies seen for fewer frames than this are taken to walk as
+# walkers do, WALK pixels a frame toward Mario.
+MEASURED = 4
+WALK = 0.5
 
 
 @dataclass
@@ -59,6 +63,9 @@ class State:
     grounded: bool
     solids: list = field(default_factory=list)
     enemies: list = field(default_factory=list)
+    # Whether Mario's motion is known well enough to plan from (perceived:
+    # the executor has measured his speed; always, from game memory).
+    ready: bool = True
 
 
 def perceived(feedback, scene) -> Optional[State]:
@@ -66,28 +73,38 @@ def perceived(feedback, scene) -> Optional[State]:
     executor's estimates (``feedback``, smb_spatial_feedback.SpatialFeedback,
     already observing the scene): world pixels are screen pixels plus its
     camera position; enemies are its tracks seen this frame, with their
-    averaged velocities; Mario's motion is its estimate. None while vision
-    does not show Mario."""
+    averaged velocities (seen for fewer than MEASURED frames: a walker's
+    WALK pixels a frame toward Mario); Mario's motion is its estimate, ready
+    once it has measured his speed; he stands when vision says so or when
+    his feet rest still on a solid's top (vision's flag alone left him "in
+    the air" in a third of the frames beside 1-1's fourth pipe). None while
+    vision does not show Mario."""
     if scene.mario.box is None:
         return None
     camera = feedback.camera_position
-    enemies = [
-        Enemy(
-            (t.box[0] + camera, t.box[1], t.box[2] + camera, t.box[3]),
-            *(t.velocity or (0.0, 0.0)),
-            ("enemies", t.identity),
-            stompable=t.kind == "walker",
-        )
-        for t in feedback.tracks.tracks
-        if t.kind != "platform" and t.missed == 0
-    ]
     box = scene.mario.box
+    body = (box[0] + camera, box[1], box[2] + camera, box[3])
+    enemies = []
+    for t in feedback.tracks.tracks:
+        if t.kind == "platform" or t.missed:
+            continue
+        world = (t.box[0] + camera, t.box[1], t.box[2] + camera, t.box[3])
+        if len(t.samples) >= MEASURED:
+            vx, vy = t.velocity
+        else:
+            vx, vy = (-WALK if world[0] > body[0] else WALK), 0.0
+        enemies.append(Enemy(world, vx, vy, ("enemies", t.identity), stompable=t.kind == "walker"))
+    solids = solids_of(scene, camera)
+    resting = abs(feedback.feet_velocity) < 1 and any(
+        s.x0 < body[2] and body[0] < s.x1 and abs(s.top - body[3]) <= 2 for s in solids
+    )
     return State(
-        body=(box[0] + camera, box[1], box[2] + camera, box[3]),
+        body=body,
         motion=copy(feedback.motion),
-        grounded=scene.mario.on_something and scene.mario.support != "air",
-        solids=solids_of(scene, camera),
+        grounded=(scene.mario.on_something and scene.mario.support != "air") or resting,
+        solids=solids,
         enemies=enemies,
+        ready=feedback.motion_ready,
     )
 
 

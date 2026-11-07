@@ -28,7 +28,7 @@ perceived): the difference is what perception costs the controller.
 
 from typing import Optional
 
-from retroagi.core.smb_controller import Choice, Controller, State, perceived
+from retroagi.core.smb_controller import MEASURED, WALK, Choice, Controller, State, perceived
 from retroagi.core.smb_physics import NESPlayerMotion
 from retroagi.core.smb_planner import Enemy, Goal, solids_of
 from retroagi.core.smb_scene_labels import scene_from_labels
@@ -60,10 +60,6 @@ LABEL_EVERY = 4
 SPEED_FRAMES = 16
 # A slot's enemy moving more than this in a frame is another enemy.
 JUMP = 16
-# Seen for fewer frames than this, an enemy is taken to walk as walkers do:
-# WALK pixels a frame toward Mario (its speed not yet measured).
-MEASURED = 4
-WALK = 0.5
 
 
 class TruthState:
@@ -235,8 +231,10 @@ class ScriptedPlayer:
     def _act(self, state: Optional[State]) -> int:
         if state is None or not state.solids:
             return 0
-        if (self.controller.choice is None or self.controller.event is not None) and not state.grounded:
-            return 0  # decisions are made standing: in the air, coast until he lands
+        if (self.controller.choice is None or self.controller.event is not None) and not (
+            state.grounded and state.ready
+        ):
+            return 0  # decisions are made standing, Mario's speed known
         if self.controller.choice is None or self.controller.event is not None:
             self.last_event = self.controller.event
             choice = self.chooser.decide(state, self.last_event, self.last_choice)
