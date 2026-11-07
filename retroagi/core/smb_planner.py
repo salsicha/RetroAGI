@@ -4,10 +4,12 @@ layers choose a goal (land on this thing, stomp this enemy, pass it), the
 planner works out how, from what perception reports.
 
 It searches takeoff after a few frames of running (PRE_RUNS) and every
-jump-button hold (1 to 32 frames), rolling each out with the NES motion
-model (smb_physics) and checking it against the scene: walls, blocks hit
-from below, landings on tops, enemies met on their estimated paths
-(constant velocity). The plan reaching the goal with the most margin wins;
+jump-button hold (1 to 32 frames), and walking on without jumping (off a
+ledge, down a step), rolling each out with the NES motion
+model (smb_physics) and checking it against the scene: walls (which stop
+Mario's sideways motion, as the game's do: a jump pressed against a pipe
+rises along it and over), blocks hit from below, landings on tops, enemies
+met on their estimated paths (constant velocity). The plan reaching the goal with the most margin wins;
 none reaching it is an answer too (None: infeasible, for the chooser to
 decide again).
 
@@ -35,8 +37,10 @@ STAND = 1
 # Landing on an enemy's top within this of its top is a stomp (pixels).
 STOMP_REACH = 4
 # How far inside a thing's ends a landing is kept (pixels; Mario is 10-12
-# wide): the goal region's margin.
+# wide): the goal region's margin. On a thing too narrow for it (a 16-pixel
+# step), at least NARROW_KEEP of it: Mario's middle stays on the top.
 INSET = 8
+NARROW_KEEP = 3
 # Buttons: SMBAction RIGHT 1, LEFT 3, RIGHT_JUMP 2, LEFT_JUMP 4, NOOP 0, JUMP 5.
 BUTTON = {(1, False): 1, (-1, False): 3, (0, False): 0, (1, True): 2, (-1, True): 4, (0, True): 5}
 
@@ -74,21 +78,22 @@ class Enemy:
 class Goal:
     """What the chooser asked for: "land" on ``ref`` (inside x0..x1 by
     INSET), "stomp" the enemy ``ref``, or "pass" it (land beyond ``x1``,
-    world pixels, without touching it). ``prefer``: where on a landing,
-    "near", "middle" or "far"."""
+    world pixels, on its ``side``: 1 right of it, -1 left, without touching
+    it). ``prefer``: where on a landing, "near", "middle" or "far"."""
 
     kind: str
     ref: tuple
     x0: float = 0.0
     x1: float = 0.0
     prefer: str = "middle"
+    side: int = 1
 
 
 @dataclass
 class Outcome:
     """How a rollout ends: "landed" (on ``solid``), "stomp" or "hit" (an
-    enemy), "wall", "bonk" (a block from below), "fell", "timeout"; at
-    ``frame``, Mario's body then."""
+    enemy), "bonk" (a block from below), "fell", "timeout"; at ``frame``,
+    Mario's body then."""
 
     end: str
     frame: int
@@ -134,6 +139,14 @@ def solids_of(scene, camera: float) -> list:
     return out
 
 
+def blocked(x: float, width: float, top: float, feet: float, solids: Sequence[Solid]) -> bool:
+    """Whether a body at ``x`` (``width`` wide, from ``top`` to ``feet``)
+    would be inside a solid's side: a wall, not a ledge it stands on."""
+    return any(
+        _overlap(x, x + width, s.x0, s.x1) and feet > s.top + WALL_DEPTH and top < s.bottom for s in solids
+    )
+
+
 def rollout(motion: NESPlayerMotion, body: tuple, pre_run: int, hold: int, direction: int,
             solids: Sequence[Solid], enemies: Sequence[Enemy], horizon: int = HORIZON) -> Outcome:
     """Mario from ``body`` (world pixels), standing, running ``pre_run``
@@ -149,9 +162,9 @@ def rollout(motion: NESPlayerMotion, body: tuple, pre_run: int, hold: int, direc
         airborne = airborne or jumped
         nx = x + dx
         feet = y + height
-        for s in solids:
-            if _overlap(nx, nx + width, s.x0, s.x1) and feet > s.top + WALL_DEPTH and y < s.bottom:
-                return Outcome("wall", frame, (x, y, x + width, feet), solid=s)
+        if blocked(nx, width, y, feet, solids):
+            nx = x  # a wall: no sideways motion, as the game stops it
+            m.x_speed = m.x_accumulator = m.x_fraction = 0
         if not airborne:
             ny = y
             if not any(_overlap(nx, nx + width, s.x0, s.x1) and abs(s.top - feet) <= STAND for s in solids):
@@ -185,14 +198,14 @@ def _meets(goal: Goal, outcome: Outcome) -> Optional[float]:
     if goal.kind == "stomp":
         return 0.0 if outcome.end == "stomp" and outcome.enemy.ref == goal.ref else None
     if goal.kind == "pass":
-        if outcome.end != "landed" or middle < goal.x1:
+        beyond = (middle - goal.x1) * goal.side
+        if outcome.end != "landed" or beyond < 0:
             return None
-        return min(middle - goal.x1, 64.0)
+        return min(beyond, 64.0)
     if outcome.end != "landed" or outcome.solid.ref != goal.ref:
         return None
-    left, right = goal.x0 + INSET, goal.x1 - INSET
-    if right - left < 0:
-        left = right = (goal.x0 + goal.x1) / 2
+    inset = min(INSET, max(NARROW_KEEP, (goal.x1 - goal.x0) / 2 - NARROW_KEEP))
+    left, right = goal.x0 + inset, goal.x1 - inset
     if not left - 0.5 <= middle <= right + 0.5:
         return None
     room = min(middle - goal.x0, goal.x1 - middle)
@@ -211,17 +224,18 @@ def buttons_of(pre_run: int, hold: int, direction: int, frames: int) -> list:
 def plan_jump(goal: Goal, motion: NESPlayerMotion, body: tuple, solids: Sequence[Solid],
               enemies: Sequence[Enemy], direction: int) -> Optional[Plan]:
     """The plan meeting ``goal`` with the most margin (then the soonest);
-    None when no takeoff and hold does: the goal is infeasible from here."""
+    None when no takeoff and hold (nor walking on) does: the goal is
+    infeasible from here."""
     best = None
-    for pre_run in PRE_RUNS:
-        for hold in NES_JUMP_FRAMES:
-            outcome = rollout(motion, body, pre_run, hold, direction, solids, enemies)
-            margin = _meets(goal, outcome)
-            if margin is None:
-                continue
-            key = (margin, -outcome.frame)
-            if best is None or key > best[0]:
-                best = (key, Plan(pre_run, hold, direction, outcome, margin))
+    tries = [(HORIZON, 0)] + [(pre_run, hold) for pre_run in PRE_RUNS for hold in NES_JUMP_FRAMES]
+    for pre_run, hold in tries:
+        outcome = rollout(motion, body, pre_run, hold, direction, solids, enemies)
+        margin = _meets(goal, outcome)
+        if margin is None:
+            continue
+        key = (margin, -outcome.frame)
+        if best is None or key > best[0]:
+            best = (key, Plan(pre_run, hold, direction, outcome, margin))
     if best is None:
         return None
     plan = best[1]

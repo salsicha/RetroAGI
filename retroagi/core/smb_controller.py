@@ -25,7 +25,7 @@ from dataclasses import dataclass, field
 from typing import Optional
 
 from .smb_physics import NESPlayerMotion
-from .smb_planner import BUTTON, Goal, Plan, plan_jump, rollout
+from .smb_planner import BUTTON, Goal, Plan, blocked, plan_jump
 
 # Frames of a planned jump after which the chooser decides again even if
 # Mario has not landed (a plan gone wrong).
@@ -141,7 +141,8 @@ class Controller:
         if left <= ARRIVE or self.frame > RUN_FRAMES:
             self.event = "arrived"
             return BUTTON[direction, False] if choice.keep_speed else 0
-        if rollout(state.motion, state.body, RUN_FRAMES, 0, direction, state.solids, [], 2).end == "wall":
+        x0, top, x1, feet = state.body
+        if blocked(x0 + direction * 2, x1 - x0, top, feet, state.solids):
             self.event = "blocked"
             return 0
         if not choice.keep_speed and left <= stopping_distance(state.motion, direction):

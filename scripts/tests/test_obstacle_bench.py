@@ -47,6 +47,9 @@ def test_an_obstacle_starts_from_the_state_kept_nearest_before_it():
     states = {10: b"a", 20: b"b", 30: b"c"}
     assert state_for(states, 25 * BUCKET) == (20, b"b")
     assert state_for(states, 5 * BUCKET) is None
+    # A start that fails its check (Mario falling, an enemy on him) gives way
+    # to the nearest earlier one that passes.
+    assert state_for(states, 35 * BUCKET, check=lambda state: state != b"c") == (20, b"b")
 
 
 class FakeGame:

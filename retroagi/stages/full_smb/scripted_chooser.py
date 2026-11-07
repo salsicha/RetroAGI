@@ -8,14 +8,15 @@ Mario's body and motion (smb_physics.NESPlayerMotion.from_ram), the solids
 from the exact labels (pixel_labels), the enemies from the game's slots with
 velocities from their last move. ScriptedChooser decides at each of the
 controller's events, looking ahead from Mario:
-- an enemy ahead within ENEMY_AHEAD: stomp it (max points) or pass it
-  (speed run), passing when a stomp is infeasible, waiting a moment when
-  neither is feasible;
+- an enemy ahead within ENEMY_AHEAD, or coming from behind within
+  BEHIND: stomp it (max points) or pass it (speed run), passing when a
+  stomp is infeasible, waiting a moment when neither is feasible;
 - a raised thing ahead within RAISED_AHEAD (a pipe, a step): land on it;
 - the floor ending within PIT_AHEAD at a pit: land beyond it;
 - standing on something raised whose end is near: land on what follows;
 - else run on toward the next of these, keeping speed into a jump.
-A jump found infeasible is followed by a run closer to its target.
+A jump found infeasible is followed by a run closer to its target, or, at
+a thing Mario touches, a step back (STEP_BACK) for room.
 ScriptedPlayer plays it through the controller for the obstacle bench.
 """
 
@@ -30,6 +31,10 @@ from .pixel_labels import PLAYER_FLOAT_STATE, Unexplained, label_frame
 from .truth import true_frame
 
 ENEMY_AHEAD = 112
+# Enemies coming at Mario from behind this close are met too (pixels).
+BEHIND = 40
+# A step back from a thing too close to jump onto (pixels).
+STEP_BACK = 24
 RAISED_AHEAD = 96
 PIT_AHEAD = 48
 # How far before a target an infeasible jump's run stops (pixels).
@@ -97,7 +102,6 @@ class ScriptedChooser:
 
     def __init__(self, mode: str):
         self.mode = mode
-        self.closer: Optional[float] = None  # a run closer to an infeasible jump's target
 
     def decide(self, state: State, last_event: Optional[str], last: Optional[Choice]) -> Choice:
         body = state.body
@@ -112,14 +116,21 @@ class ScriptedChooser:
             target = last.goal.x0
             if target - mx > CLOSER:
                 return Choice("run", x=target - CLOSER, keep_speed=True)
+            return Choice("run", x=mx - STEP_BACK)
         ahead = [
             e for e in state.enemies
-            if 0 < _middle(e.box) - mx < ENEMY_AHEAD and abs(e.box[3] - feet) < SAME_LEVEL
+            if abs(e.box[3] - feet) < SAME_LEVEL
+            and (
+                0 < _middle(e.box) - mx < ENEMY_AHEAD
+                or (-BEHIND < _middle(e.box) - mx <= 0 and e.vx > 0)
+            )
         ]
         if ahead:
-            enemy = min(ahead, key=lambda e: e.box[0])
+            enemy = min(ahead, key=lambda e: abs(_middle(e.box) - mx))
             if self.mode == "max_points" and enemy.stompable:
                 return Choice("jump", Goal("stomp", enemy.ref))
+            if _middle(enemy.box) < mx:  # from behind: over it backward
+                return Choice("jump", Goal("pass", enemy.ref, x1=enemy.box[0] - 16, side=-1))
             return Choice("jump", Goal("pass", enemy.ref, x1=enemy.box[2] + 16))
         standing = [s for s in state.solids if s.x0 <= mx <= s.x1 and abs(s.top - feet) <= 2]
         under = standing[0] if standing else None

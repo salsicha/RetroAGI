@@ -17,8 +17,12 @@ def pipe(x0, top, slot=0):
 def test_a_rollout_lands_hits_walls_and_bumps_blocks():
     motion = NESPlayerMotion()
     assert rollout(motion, STANDING, 0, 16, 1, [FLOOR], []).end == "landed"
-    # A pipe in the way of a low hop: its side is a wall.
-    assert rollout(motion, STANDING, 0, 1, 1, [FLOOR, pipe(116, 160)], []).end == "wall"
+    # A pipe in the way of a low hop: its side stops Mario, who lands back
+    # on the floor before it; a high jump pressed against it rises over it.
+    hop = rollout(motion, STANDING, 0, 1, 1, [FLOOR, pipe(116, 176)], [])
+    assert hop.end == "landed" and hop.solid is FLOOR and hop.body[2] <= 116
+    tall = rollout(motion, (104.0, 192.0, 116.0, 208.0), 0, 20, 1, [FLOOR, pipe(116, 176)], [])
+    assert tall.end == "landed" and tall.solid.kind == "pipe"
     # A block just above Mario's head: jumping into it bumps it.
     block = Solid(98, 160, 114, 176, "block", ("blocks", 0))
     assert rollout(motion, STANDING, 0, 16, 0, [FLOOR, block], []).end == "bonk"

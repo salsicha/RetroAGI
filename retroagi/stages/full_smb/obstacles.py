@@ -18,6 +18,11 @@ The obstacles (obstacles_of): each pipe, each pit, each group of enemies
 woken together, each run of steps, and the flag. Each starts from the kept
 state at its approach point: APPROACH pixels before a pipe, a pit, steps or
 the flag; for enemies, just before Mario's scroll wakes the first of them.
+A start is usable (usable) when Mario stands through STILL_FRAMES frames of
+standing still and no enemy is within CLEAR pixels of him; otherwise the
+nearest usable kept state before it is taken (memory can read "standing" a
+frame before a fall, and the enemies of one group are still about at the
+next one's start).
 It is passed when Mario stands PASSED pixels beyond its end (obstacle_bench).
 """
 
@@ -51,6 +56,9 @@ FLOOR_TOP = 208
 # Objects cut by the picture's edge are not measured (their ends are unseen).
 EDGE = 8
 SCREEN_WIDTH, SCREEN_HEIGHT = 256, 240
+# A start's check: frames of standing still, and how near an enemy may be.
+STILL_FRAMES = 8
+CLEAR = 64
 
 
 @dataclass
@@ -208,13 +216,39 @@ def obstacles_of(level_map: LevelMap) -> list:
     return found
 
 
-def state_for(states: dict, approach_x: int) -> Optional[tuple]:
-    """(bucket, state) kept nearest before ``approach_x``; None if none is."""
-    before = [b for b in states if b * BUCKET <= approach_x]
-    if not before:
-        return None
-    bucket = max(before)
-    return bucket, states[bucket]
+def usable(level: str, state: bytes) -> bool:
+    """Whether Mario, started from ``state``, stands still for STILL_FRAMES
+    frames alive and standing, with no enemy within CLEAR pixels."""
+    from .play import FullSMBGame
+
+    game = FullSMBGame(level, state)
+    try:
+        game.reset()
+        for frame in range(STILL_FRAMES + 1):
+            ram = game.env.get_ram()
+            truth = true_frame(ram, game.start)
+            mario = truth["mario"]
+            if _dying(ram) or int(ram[PLAYER_FLOAT_STATE]) != 0 or mario[3] > FLOOR_TOP:
+                return False
+            for slot in truth["slots"]:
+                box = slot["box"]
+                if slot["active"] and slot["enemy"] and box and not slot["defeated"] and box[2] > box[0]:
+                    if box[0] < mario[2] + CLEAR and mario[0] < box[2] + CLEAR:
+                        return False
+            if frame < STILL_FRAMES:
+                game.step(0)
+        return True
+    finally:
+        game.close()
+
+
+def state_for(states: dict, approach_x: int, check=None) -> Optional[tuple]:
+    """(bucket, state) kept nearest before ``approach_x`` that ``check``
+    (a state's test, e.g. usable) passes; None if none does."""
+    for bucket in sorted((b for b in states if b * BUCKET <= approach_x), reverse=True):
+        if check is None or check(states[bucket]):
+            return bucket, states[bucket]
+    return None
 
 
 def save_bench(level: str, level_map: LevelMap, states: dict, folder: Path) -> list:
@@ -223,7 +257,7 @@ def save_bench(level: str, level_map: LevelMap, states: dict, folder: Path) -> l
     folder.mkdir(parents=True, exist_ok=True)
     saved = []
     for o in obstacles_of(level_map):
-        kept = state_for(states, max(0, o.approach_x))
+        kept = state_for(states, max(0, o.approach_x), check=lambda state: usable(level, state))
         if kept is None:
             continue
         bucket, state = kept
