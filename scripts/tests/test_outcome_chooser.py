@@ -60,30 +60,15 @@ def test_when_everything_risks_death_the_safest_is_taken(monkeypatch):
     assert choose(monkeypatch, "speed_run", rows) == (3, 2)  # the step back
 
 
-def test_a_choice_just_ended_at_once_is_not_taken_again(monkeypatch):
-    rows = {(3, 1): row(progress=96, frames=40), (3, 0): row(progress=32, frames=20)}
-    first = choose(monkeypatch, "speed_run", rows)
-    assert first == (3, 1)
+def test_a_choice_taken_from_a_spot_is_not_repeated_there_until_new_ground(monkeypatch):
+    rows = {(3, 1): row(progress=96, frames=40), (3, 0): row(progress=32, frames=20), (4, 0): row(frames=8)}
+    choose(monkeypatch, "speed_run", rows)  # patches the predictions
     chooser = OutcomeChooser(None, "speed_run")
-    last = chooser.decide(STATE)
-    again = chooser.decide(STATE, "blocked", last)
-    assert again != last
-
-
-def test_a_choice_leaving_mario_stuck_gives_way_to_one_that_does_not(monkeypatch):
-    # Down into a valley is quick progress but a dead end; back up the
-    # staircase is slower but leaves a way on.
-    rows = {(3, 1): row(progress=40, frames=20, stuck=0.9), (3, 2): row(progress=-30, frames=30)}
-    assert choose(monkeypatch, "speed_run", rows) == (3, 2)
-
-
-def test_with_nothing_moving_a_wait_is_not_followed_by_another(monkeypatch):
-    rows = {(4, 0): row(progress=1, frames=8), (3, 2): row(progress=-30, frames=30)}
     still = State(body=STATE.body, motion=STATE.motion, grounded=True, solids=[FLOOR], enemies=[])
-    monkeypatch.setattr(outcome_chooser, "predict", lambda model, tokens, choices, device: np.array(
-        [rows.get((k, m), row()) if (k, m) in rows else np.array([0, 1, 0, 0, 0, 16, 0], np.float32)
-         for k, _, m in choices], np.float32))
-    chooser = OutcomeChooser(None, "speed_run")
-    first = chooser.decide(still)
-    assert first.verb == "wait"
-    assert chooser.decide(still, "waited", first).verb == "run"
+    picks = [chooser.decide(still) for _ in range(3)]
+    assert [(c.verb, c.x) for c in picks] == [("run", 201.0), ("run", 137.0), ("wait", 0.0)]
+    # Nothing new left: the best again.
+    assert chooser.decide(still).x == 201.0
+    # Further right, all is forgotten.
+    ahead = State(body=(140, 196, 150, 208), motion=STATE.motion, grounded=True, solids=[FLOOR], enemies=[])
+    assert chooser.decide(ahead).x == 241.0

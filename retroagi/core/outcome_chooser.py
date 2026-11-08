@@ -15,10 +15,15 @@ in one pass (smb_choices.candidates, outcome_network.predict). Then:
    pixels a frame of progress, so a stomp wins when it costs little
    progress; in a speed run points are worth nothing.
 Waiting and retreating come out of the rules: when every forward choice
-risks death, a wait or a step back that does not is the one kept. A choice
-the executor has just ended at once (blocked, infeasible) is not taken again
-from the same place, and with nothing on screen moving a wait is not
-followed by another.
+risks death, a wait or a step back that does not is the one kept.
+
+What was tried is remembered for a short while: a choice taken from a spot
+(SPOT pixels) is not taken from it again until Mario reaches NEW_GROUND
+pixels beyond his furthest so far (then all is forgotten), unless nothing
+else is left; waits with enemies on screen may repeat. One choice at a time
+the chooser had tried two failing landings by turns, and gone round a
+staircase it could not climb: land on a step, back down, run into it, land
+again.
 """
 
 import numpy as np
@@ -28,6 +33,8 @@ from .smb_choices import candidates, state_tokens
 from .smb_controller import Choice, State
 
 SAFE = 0.05
+SPOT = 8
+NEW_GROUND = 16
 SLACK = 0.02
 MIN_FRAMES = 8
 POINT_VALUE = {"speed_run": 0.0, "max_points": 0.2}
@@ -38,6 +45,8 @@ class OutcomeChooser:
     def __init__(self, model, mode: str, device="cpu"):
         self.model, self.mode, self.device = model, mode, device
         self.last = None  # (options, predictions, picked index): for inspection
+        self.tried: dict = {}  # spot -> the choices taken from it
+        self.furthest = float("-inf")
 
     def decide(self, state: State, last_event=None, last=None) -> Choice:
         options = candidates(state)
@@ -45,14 +54,15 @@ class OutcomeChooser:
         rows = [(kind, slots.get(ref, -1) if ref is not None else -1, m) for _, kind, ref, m in options]
         p = predict(self.model, (mario, surfaces, enemies), rows, self.device)
         feasible = p[:, INFEASIBLE] < 0.5
-        if last_event in ("blocked", "infeasible"):
-            # The choice that just ended at once is not taken again from the
-            # same place (a blocked run was taken 6,000 times at a wall).
-            feasible &= np.array([choice != last for choice, _, _, _ in options])
-        if last_event == "waited" and not state.enemies:
-            # Nothing on screen moves: waiting again changes nothing (Mario
-            # waited 689 times on a staircase).
-            feasible &= np.array([choice.verb != "wait" for choice, _, _, _ in options])
+        x = state.body[0]
+        if x >= self.furthest + NEW_GROUND:
+            self.tried.clear()
+        self.furthest = max(self.furthest, x)
+        spot = (round(x / SPOT), round(state.body[3] / SPOT))
+        signatures = [self._signature(o, state) for o in options]
+        fresh = np.array([sig not in self.tried.get(spot, ()) for sig in signatures])
+        if (feasible & fresh).any():
+            feasible &= fresh
         if not feasible.any():
             feasible = np.ones(len(p), bool)
         risk = np.where(feasible, p[:, DEATH], np.inf)
@@ -63,4 +73,16 @@ class OutcomeChooser:
                  + POINT_VALUE[self.mode] * p[:, POINTS] + p[:, FINISHED] * 100.0)
         best = int(np.argmax(np.where(allowed, value, -np.inf)))
         self.last = (options, p, best)
+        if not (options[best][0].verb == "wait" and state.enemies):
+            self.tried.setdefault(spot, set()).add(signatures[best])
         return options[best][0]
+
+    @staticmethod
+    def _signature(option, state) -> tuple:
+        """What a choice is, the same from one decision to the next: its
+        kind and modifier, and for a landing where it lands (its slot moves
+        as the camera scrolls)."""
+        choice, kind, _, modifier = option
+        if choice.goal is not None and choice.goal.kind == "land":
+            return kind, modifier, round(choice.goal.x0 / SPOT)
+        return kind, modifier
