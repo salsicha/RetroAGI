@@ -4,7 +4,7 @@ planner's goals and its "infeasible" answer, and the controller's runs."""
 
 from copy import copy
 
-from retroagi.core.smb_controller import Choice, Controller, State, stopping_distance
+from retroagi.core.smb_controller import Choice, Controller, State, meets_soon, stopping_distance
 from retroagi.core.smb_physics import NESPlayerMotion
 from retroagi.core.smb_planner import INSET, Enemy, Goal, Solid, floor_behind, plan_flight, plan_jump, rollout
 
@@ -148,7 +148,38 @@ def test_a_floor_gap_an_enemy_stands_in_is_floor():
     goomba = Enemy((700.0, 198.0, 710.0, 204.0), -0.5, 0.0, ("slots", 0))
     floor = [s for s in floor_behind([left, right], [goomba]) if s.kind == "ground"]
     assert [(s.x0, s.x1, s.ref) for s in floor] == [(500, 900, ("surfaces", 0))]
+    # As vision boxes it: drawn, its last row one below the floor's top.
+    seen = Enemy((697.0, 193.0, 713.0, 209.0), -0.5, 0.0, ("enemies", 4))
+    assert len(floor_behind([left, right], [seen])) == 1
     # A real pit, or an enemy elsewhere, keeps the gap.
     assert len(floor_behind([left, right], [])) == 2
     falling = Enemy((700.0, 220.0, 710.0, 226.0), -0.5, 1.0, ("slots", 0))
     assert len(floor_behind([left, right], [falling])) == 2
+
+
+def test_a_bounce_can_stomp_the_next_walker_too():
+    # Two Goombas close together: the first stomp's bounce comes down on the
+    # second, a second stomp, and Mario lands beyond them.
+    first = Enemy((170.0, 194.0, 186.0, 208.0), -0.5, 0.0, ("slots", 0))
+    second = Enemy((194.0, 194.0, 210.0, 208.0), -0.5, 0.0, ("slots", 1))
+    plan = plan_jump(Goal("stomp", ("slots", 0)), NESPlayerMotion(), STANDING, [FLOOR], [first, second], 1)
+    assert plan is not None and plan.outcome.end == "landed" and plan.outcome.stomped is first
+    assert plan.outcome.body[0] > second.at(plan.outcome.frame)[2]
+
+
+def test_a_run_ends_when_an_enemy_will_meet_mario_soon():
+    running = NESPlayerMotion(x_speed=32, moving=1)  # two pixels a frame
+    near = Enemy((172.0, 194.0, 188.0, 208.0), -0.5, 0.0, ("slots", 0))
+    far = Enemy((400.0, 194.0, 416.0, 208.0), -0.5, 0.0, ("slots", 1))
+    behind = Enemy((40.0, 194.0, 56.0, 208.0), -0.5, 0.0, ("slots", 2))
+    above = Enemy((172.0, 130.0, 188.0, 144.0), -0.5, 0.0, ("slots", 3))
+    state = State(STANDING, running, True, [FLOOR], [near])
+    assert meets_soon(state, near)
+    assert not any(meets_soon(state, e) for e in (far, behind, above))
+    controller = Controller()
+    controller.start(Choice("run", x=600, keep_speed=True), state)
+    assert controller.press(state) == 1 and controller.event == "threat"  # still running on
+    clear = State(STANDING, running, True, [FLOOR], [far, behind, above])
+    controller.start(Choice("run", x=600, keep_speed=True), clear)
+    controller.press(clear)
+    assert controller.event is None

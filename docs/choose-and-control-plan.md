@@ -125,4 +125,33 @@ Each phase ends with a measurement that decides whether to go on.
     step for the target).
   Result: all 24 obstacles in both modes, and 1-1 finished from its start:
   speed run 2,017 frames, max points 2,109 frames (score 500).
+- **Phase 1 on perception, 2026-11-08.** The same chooser and controller on
+  what the Full SMB vision shows and the executor estimates: 0.73 of the
+  bench before, **0.98** after, and **1-1 finished from vision alone** in
+  the speed run (2,098 frames; max points died at x 1556). Game memory
+  stays at all 24 and finishes both modes (2,380 and 2,420 frames, score
+  1,200). What perception needed:
+  - a floor gap where an enemy stands is floor also when vision's box runs
+    a pixel below the floor's top;
+  - Mario's body is his collision box (10 wide, 4 below the drawn top)
+    inside the drawn sprite, which is 16 wide: the planner stood him on a
+    16-pixel step past its edge (and the jump's origin height moves with
+    it);
+  - the executor's motion estimate takes a seen bounce (falling in the
+    model, clearly rising on screen) as a stomp, and corrects its speed
+    when its own moves over four frames are 2 pixels off the seen ones (a
+    wall bump it did not know left it 0.37 pixels a frame fast);
+  - the screen's left edge is a wall, and nothing solid lies inside
+    Mario's drawn box (his cut-off sprite read as a 3-pixel pipe there);
+  - a run ends when an enemy ahead will meet Mario within 48 frames at
+    their closing speed, and the chooser counts such an enemy as ahead (a
+    96-pixel run blind to enemies met a Goomba pair too close to jump);
+  - a bounce can stomp the next walker too, and in the air with no landing
+    12 frames clear of enemies, one 4 frames clear is taken over a plan
+    known to hit;
+  - after an infeasible pass: a jump back when the enemy meets Mario soon,
+    else running from it, else waiting; a stomp target vision renumbered is
+    found by place.
+  Left: 11_enemies_1682 stalls in half its runs; max points on perception
+  over the whole level. Next: phase 2, random levels in Block SMB.
 

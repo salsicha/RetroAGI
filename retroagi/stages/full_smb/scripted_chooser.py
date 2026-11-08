@@ -10,9 +10,13 @@ velocities averaged over their last SPEED_FRAMES frames (a Goomba walks half
 a pixel a frame, as 0 and 1 by turns: one frame's move says 0 or 1). ScriptedChooser decides at each of the
 controller's events, looking ahead from Mario:
 - an enemy ahead within ENEMY_AHEAD, or coming from behind within
-  BEHIND, with no raised thing between: stomp it (max points) or pass it
-  (speed run), passing when a stomp is infeasible, waiting a moment when
-  neither is feasible;
+  BEHIND, or meeting Mario soon at their closing speed (the controller's
+  meets_soon, which also ends runs), with no raised thing between: stomp
+  it (max points) or pass it (speed run), passing when a stomp is
+  infeasible, jumping back (when it meets him soon) to land
+  on Mario's side of it when passing is infeasible too, running from it
+  (RETREAT) when none is feasible and it meets him soon, else waiting a
+  moment;
 - a raised thing ahead within RAISED_AHEAD (a pipe, a step): land on it;
 - the floor ending within PIT_AHEAD at a pit: land beyond it, across at
   the same height within ACROSS before down into what lies between (a
@@ -31,9 +35,9 @@ perceived): the difference is what perception costs the controller.
 
 from typing import Optional
 
-from retroagi.core.smb_controller import ARRIVE, MEASURED, WALK, Choice, Controller, State, perceived
+from retroagi.core.smb_controller import ARRIVE, MEASURED, WALK, Choice, Controller, State, meets_soon, perceived
 from retroagi.core.smb_physics import NESPlayerMotion
-from retroagi.core.smb_planner import Enemy, Goal, floor_behind, solids_of
+from retroagi.core.smb_planner import Enemy, Goal, floor_behind, screen_edge, solids_of
 from retroagi.core.smb_scene_labels import scene_from_labels
 
 from .pixel_labels import PLAYER_FLOAT_STATE, Unexplained, label_frame
@@ -44,6 +48,8 @@ ENEMY_AHEAD = 112
 BEHIND = 40
 # A step back from a thing too close to jump onto (pixels).
 STEP_BACK = 24
+# How far Mario runs from an enemy no jump gets past (pixels).
+RETREAT = 64
 RAISED_AHEAD = 96
 PIT_AHEAD = 48
 # Where the floor ends, a landing at about the same height this near is
@@ -134,7 +140,7 @@ class TruthState:
             body=tuple(float(v) for v in truth["mario"]),
             motion=NESPlayerMotion.from_ram(ram, top=truth["mario"][1]),
             grounded=int(ram[PLAYER_FLOAT_STATE]) == 0,
-            solids=list(self.solids),
+            solids=list(self.solids) + [screen_edge(truth["camera"])],
             enemies=enemies,
         )
 
@@ -151,6 +157,17 @@ def _steps_down(state: State, under) -> bool:
     after = under.x1 + 2
     return any(s.x0 <= after < s.x1 and 0 < s.top - under.top <= STEP_DOWN and s.kind != "block"
                for s in state.solids)
+
+
+def _the_enemy(state: State, ref, mx: float, feet: float):
+    """The enemy ``ref``; if vision has given it a new identity since, the
+    nearest at Mario's level (None if none: a stomp target lost after an
+    infeasible plan had Mario step back into the next Goombas)."""
+    enemy = next((e for e in state.enemies if e.ref == ref), None)
+    if enemy is not None:
+        return enemy
+    level = [e for e in state.enemies if abs(e.box[3] - feet) < SAME_LEVEL]
+    return min(level, key=lambda e: abs(_middle(e.box) - mx), default=None)
 
 
 def _walled_off(state: State, mx: float, feet: float, enemy) -> bool:
@@ -171,21 +188,38 @@ class ScriptedChooser:
     def decide(self, state: State, last_event: Optional[str], last: Optional[Choice]) -> Choice:
         body = state.body
         mx, feet = _middle(body), body[3]
-        standing = [s for s in state.solids if s.x0 <= mx <= s.x1 and abs(s.top - feet) <= 2]
+        # What Mario stands on: under any part of him (the game stands him at
+        # a floor's end with his middle over the pit), the one under his
+        # middle first.
+        standing = sorted(
+            (s for s in state.solids if s.x0 < body[2] and body[0] < s.x1 and abs(s.top - feet) <= 2),
+            key=lambda s: not (s.x0 <= mx <= s.x1),
+        )
         under = standing[0] if standing else None
         # Where the floor ends at a pit (not a step down onto something
         # lower right after it), no run ends beyond it (a run 40 pixels short
         # of the far side's landing ran into the pit).
         pit = under is not None and not _steps_down(state, under)
         edge = under.x1 - EDGE if pit else float("inf")
-        if last_event == "infeasible" and last is not None and last.goal is not None:
-            if last.goal.kind == "stomp":
-                enemy = next((e for e in state.enemies if e.ref == last.goal.ref), None)
-                if enemy is not None:
-                    side = 1 if _middle(enemy.box) >= mx else -1
-                    return Choice("jump", Goal("pass", enemy.ref, side=side))
-            if last.goal.kind == "pass":
+        infeasible = last_event == "infeasible" and last is not None and last.goal is not None
+        if infeasible and last.goal.kind != "land":
+            enemy = _the_enemy(state, last.goal.ref, mx, feet)
+            if enemy is not None:
+                beyond = 1 if _middle(enemy.box) >= mx else -1
+                if last.goal.kind == "stomp":
+                    return Choice("jump", Goal("pass", enemy.ref, side=beyond))
+                if last.goal.side == beyond and meets_soon(state, enemy):
+                    # Back: a jump landing on Mario's side of it, braking in
+                    # the air (after a stomp at full speed the next Goombas
+                    # came into view too close to jump); not for one still
+                    # far off (Mario jumped back over 1-1's second pit).
+                    return Choice("jump", Goal("pass", enemy.ref, side=-beyond))
+                if meets_soon(state, enemy):
+                    # No jump will do: run from it (waiting, Mario stood
+                    # beside a Goomba until it walked into him).
+                    return Choice("run", x=mx - beyond * RETREAT)
                 return Choice("wait", frames=8)
+        elif infeasible:
             closer = min(last.goal.x0 - CLOSER, edge)
             if closer - mx > ARRIVE:
                 return Choice("run", x=closer, keep_speed=True)
@@ -196,6 +230,7 @@ class ScriptedChooser:
             and (
                 0 < _middle(e.box) - mx < ENEMY_AHEAD
                 or (-BEHIND < _middle(e.box) - mx <= 0 and e.vx > 0)
+                or meets_soon(state, e)
             )
             and not _walled_off(state, mx, feet, e)
         ]
@@ -281,8 +316,8 @@ class ScriptedPlayer:
         return button
 
     def _act(self, state: Optional[State]) -> int:
-        if state is None or not state.solids:
-            return 0
+        if state is None or all(s.kind == "edge" for s in state.solids):
+            return 0  # nothing labelled yet
         if (self.controller.choice is None or self.controller.event is not None) and not (
             state.grounded and state.ready
         ):

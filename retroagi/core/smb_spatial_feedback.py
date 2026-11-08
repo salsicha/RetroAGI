@@ -76,6 +76,9 @@ def moving_support_offset(scene):
 class SpatialFeedback:
     previous: object = None
     velocities: deque = field(default_factory=lambda: deque(maxlen=4))
+    # The motion model's own moves for the same frames (whole pixels, as
+    # seen ones are): their sums differing by 2 or more is a real error.
+    predicted_moves: deque = field(default_factory=lambda: deque(maxlen=4))
     speed: float | None = None
     displacement: float = 0.0
     tracked: bool = False
@@ -87,6 +90,9 @@ class SpatialFeedback:
     travel: object = None
     motion: NESPlayerMotion = field(default_factory=NESPlayerMotion)
     predicted_dx: float | None = None
+    # The vertical move the motion model predicted for this frame (pixels,
+    # down positive; None when unknown).
+    predicted_dy: float | None = None
     motion_ready: bool = False
     camera_position: float = 0.0
     start_feet: float = 0.0
@@ -144,11 +150,11 @@ class SpatialFeedback:
     def executed(self, button, scene):
         """Propagate the actual button history, including release and braking."""
         if scene.mario.box is None:
-            self.predicted_dx = None
+            self.predicted_dx = self.predicted_dy = None
             self.motion_ready = False
             return
         direction = 1 if button in (1, 2) else -1 if button in (3, 4) else 0
-        self.predicted_dx, _, _ = self.motion.advance(
+        self.predicted_dx, self.predicted_dy, _ = self.motion.advance(
             direction=direction,
             jump=button in (2, 4, 5),
             grounded=scene.mario.on_something and scene.mario.support != "air",
@@ -164,6 +170,7 @@ class SpatialFeedback:
             self.feet_velocity = 0.0
             self.positions.clear()
             self.velocities.clear()
+            self.predicted_moves.clear()
             self.speed = None
             self.predicted_dx = None
             self.motion_ready = False
@@ -202,6 +209,7 @@ class SpatialFeedback:
             elif (before_support is None) != (support is None):
                 # Do not mix carried world displacement into player momentum.
                 self.velocities.clear()
+                self.predicted_moves.clear()
                 dx = None
             old, now = self.previous.mario.box, scene.mario.box
             if (now[2] - now[0]) != (old[2] - old[0]):
@@ -213,6 +221,7 @@ class SpatialFeedback:
                 dx = None
             if dx is not None and abs(dx) <= 6:
                 self.velocities.append(dx)
+                self.predicted_moves.append(self.predicted_dx)
                 self.speed = sum(self.velocities) / len(self.velocities)
                 # Keep fractional physics through ordinary pixel quantization;
                 # correct substantial disagreement (e.g. a wall or changed speed).
@@ -229,8 +238,18 @@ class SpatialFeedback:
                     and sum(abs(self.speed * 16) >= n for n in (9, 16, 25, 28))
                     != sum(abs(self.motion.x_speed) >= n for n in (9, 16, 25, 28))
                 )
+                # The model's moves over the last four frames off the seen ones
+                # by 2 pixels or more (pixel rounding makes at most 1): a wall
+                # the model did not know stopped him (a jump against a step's
+                # side left it 0.37 pixels a frame fast, under 0.75, and a
+                # flight check then braked him into 1-1's last pit).
+                drifted = (
+                    len(self.predicted_moves) == 4
+                    and None not in self.predicted_moves
+                    and abs(sum(self.velocities) - sum(self.predicted_moves)) >= 2
+                )
                 if len(self.velocities) >= samples_needed and (
-                    abs(self.speed - self.motion.x_speed / 16) >= 0.75 or takeoff_bucket_changed
+                    abs(self.speed - self.motion.x_speed / 16) >= 0.75 or takeoff_bucket_changed or drifted
                 ):
                     self.motion.x_speed = round(self.speed * 16)
                     self.motion.moving = (self.speed > 0) - (self.speed < 0)
@@ -247,6 +266,7 @@ class SpatialFeedback:
                     self.motion_ready = True
             else:
                 self.velocities.clear()
+                self.predicted_moves.clear()
                 self.speed = None
         if shift is not None:
             self.camera_position += shift
@@ -261,6 +281,15 @@ class SpatialFeedback:
             if self.previous is not None and self.previous.mario.box is not None
             else 0.0
         )
+        airborne = not (scene.mario.on_something and scene.mario.support != "air")
+        if airborne and self.predicted_dy is not None and self.predicted_dy >= 1 and self.feet_velocity <= -2:
+            # Seen going up where the model had him falling: bounced off an
+            # enemy (a stomp, as the game's $FC). Without this the model fell
+            # on through every bounce and each plan made in the air was wrong;
+            # a pixel's wobble at the top of a jump is no bounce (taken for
+            # one, it threw Mario's jump over 1-1's second pit short).
+            self.motion.bounce()
+            self.motion.y_force = 0
         self.previous = scene
 
     def begin(self, destination, scene, proposed=None, aim=None):

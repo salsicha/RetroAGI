@@ -16,8 +16,9 @@ A choice is a verb, the thing it is about and a coarse modifier:
   a hit is due, or at most ``frames``.
 
 Events: "landed", "stomped", "arrived", "waited", "infeasible", "hit",
-"blocked". The state each frame (State) is the scene's solids and enemies
-in world pixels, Mario's body and his motion: from vision and the
+"blocked", "threat" (a run meeting an enemy soon: meets_soon). The state
+each frame (State) is the scene's solids and enemies in world pixels,
+Mario's body and his motion: from vision and the
 executor's estimates in play (perceived), or from game memory to test the
 controller alone.
 """
@@ -37,6 +38,7 @@ from .smb_planner import (
     floor_behind,
     plan_flight,
     plan_jump,
+    screen_edge,
     solids_of,
 )
 
@@ -56,6 +58,18 @@ RUN_FRAMES = 240
 # walkers do, WALK pixels a frame toward Mario.
 MEASURED = 4
 WALK = 0.5
+# Mario's body as the game collides it, inside the sprite vision draws: this
+# wide about the drawn box's middle (pixels), its top this far below the
+# drawn top. The drawn 16-pixel width stood him on a 16-pixel step past its
+# edge, in the planner, while he slid off it.
+BODY_WIDTH = 10
+HEAD_ROOM = 4
+# An enemy ahead at Mario's level (feet within LEVEL pixels) meeting him
+# within this many frames at their closing speed ends a run ("threat"): a
+# jump's length, time to choose and make one. A run of 96 pixels blind to
+# enemies ran Mario at full speed into a pair of Goombas too close to jump.
+THREAT_FRAMES = 48
+LEVEL = 24
 
 
 @dataclass
@@ -86,7 +100,9 @@ def perceived(feedback, scene) -> Optional[State]:
     """The controller's state from what vision shows (``scene``) and the
     executor's estimates (``feedback``, smb_spatial_feedback.SpatialFeedback,
     already observing the scene): world pixels are screen pixels plus its
-    camera position; enemies are its tracks seen this frame, with their
+    camera position; Mario's body is his collision box inside the drawn one
+    (BODY_WIDTH, HEAD_ROOM); the solids are vision's (none inside Mario's
+    drawn box) and the screen's left edge, a wall; enemies are its tracks seen this frame, with their
     averaged velocities (seen for fewer than MEASURED frames: a walker's
     WALK pixels a frame toward Mario); Mario's motion is its estimate, ready
     once it has measured his speed; he stands when vision says so or when
@@ -97,7 +113,8 @@ def perceived(feedback, scene) -> Optional[State]:
         return None
     camera = feedback.camera_position
     box = scene.mario.box
-    body = (box[0] + camera, box[1], box[2] + camera, box[3])
+    middle = (box[0] + box[2]) / 2 + camera
+    body = (middle - BODY_WIDTH / 2, box[1] + HEAD_ROOM, middle + BODY_WIDTH / 2, box[3])
     enemies = []
     for t in feedback.tracks.tracks:
         if t.kind == "platform" or t.missed:
@@ -108,18 +125,40 @@ def perceived(feedback, scene) -> Optional[State]:
         else:
             vx, vy = (-WALK if world[0] > body[0] else WALK), 0.0
         enemies.append(Enemy(world, vx, vy, ("enemies", t.identity), stompable=t.kind == "walker"))
-    solids = floor_behind(solids_of(scene, camera), enemies)
+    # Nothing solid lies inside Mario's own drawn box: at the screen's left
+    # edge, parts of his cut-off sprite read as a 3-pixel pipe.
+    drawn = (box[0] + camera, box[1], box[2] + camera, box[3])
+    solids = [
+        s for s in floor_behind(solids_of(scene, camera), enemies)
+        if not (drawn[0] - 1 <= s.x0 and s.x1 <= drawn[2] + 1 and s.top < drawn[3] and drawn[1] < s.bottom)
+    ] + [screen_edge(camera)]
     resting = abs(feedback.feet_velocity) < 1 and any(
         s.x0 < body[2] and body[0] < s.x1 and abs(s.top - body[3]) <= 2 for s in solids
     )
+    motion = copy(feedback.motion)
+    motion.origin_y += HEAD_ROOM  # the jump's origin, measured at the drawn top
     return State(
         body=body,
-        motion=copy(feedback.motion),
+        motion=motion,
         grounded=(scene.mario.on_something and scene.mario.support != "air") or resting,
         solids=solids,
         enemies=enemies,
         ready=feedback.motion_ready,
     )
+
+
+def meets_soon(state: State, enemy: Enemy, frames: int = THREAT_FRAMES) -> bool:
+    """Whether ``enemy``, at Mario's level, meets him within ``frames`` at
+    their present closing speed."""
+    body = state.body
+    if abs(enemy.box[3] - body[3]) >= LEVEL:
+        return False
+    speed = state.motion.x_speed / 16
+    if (enemy.box[0] + enemy.box[2]) / 2 >= (body[0] + body[2]) / 2:
+        gap, closing = enemy.box[0] - body[2], speed - enemy.vx
+    else:
+        gap, closing = body[0] - enemy.box[2], enemy.vx - speed
+    return closing > 0 and max(gap, 0.0) <= closing * frames
 
 
 def stopping_distance(motion: NESPlayerMotion, direction: int) -> float:
@@ -241,6 +280,10 @@ class Controller:
         if blocked(x0 + direction * 2, x1 - x0, top, feet, state.solids):
             self.event = "blocked"
             return 0
+        ahead = [e for e in state.enemies if ((e.box[0] + e.box[2]) / 2 - middle) * direction > 0]
+        if any(meets_soon(state, e) for e in ahead):
+            self.event = "threat"
+            return BUTTON[direction, False] if choice.keep_speed else 0
         if not choice.keep_speed and left <= stopping_distance(state.motion, direction):
             return 0  # braking: released, Mario slides to the x
         return BUTTON[direction, False]

@@ -61,3 +61,21 @@ def test_a_pipes_end_is_jumped_down_from_not_run_off():
     state = State(body=(115, 160, 125, 176), motion=NESPlayerMotion(), grounded=True, solids=[left, pipe, right])
     choice = ScriptedChooser("speed_run").decide(state, None, None)
     assert choice.verb == "jump" and choice.goal.ref == right.ref
+
+
+def test_an_infeasible_pass_tries_a_jump_back_then_runs_away():
+    from retroagi.core.smb_planner import Enemy
+
+    goomba = Enemy((140, 194, 156, 208), -0.5, 0.0, ("slots", 0))
+    state = State(body=(115, 192, 125, 208), motion=NESPlayerMotion(), grounded=True,
+                  solids=[FLOOR], enemies=[goomba])
+    chooser = ScriptedChooser("speed_run")
+    back = chooser.decide(state, "infeasible", Choice("jump", Goal("pass", goomba.ref, side=1)))
+    assert back.verb == "jump" and back.goal.kind == "pass" and back.goal.side == -1
+    away = chooser.decide(state, "infeasible", back)
+    assert away.verb == "run" and away.x < 120
+    # One still far off is waited for.
+    far = Enemy((300, 194, 316, 208), -0.5, 0.0, ("slots", 1))
+    distant = State(body=(115, 192, 125, 208), motion=NESPlayerMotion(), grounded=True,
+                    solids=[FLOOR], enemies=[far])
+    assert chooser.decide(distant, "infeasible", Choice("jump", Goal("pass", far.ref, side=1))).verb == "wait"
