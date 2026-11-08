@@ -47,7 +47,7 @@ from retroagi.core.smb_controller import (
     perceived,
 )
 from retroagi.core.smb_physics import NESPlayerMotion
-from retroagi.core.smb_planner import Enemy, Goal, floor_behind, screen_edge, solids_of
+from retroagi.core.smb_planner import Enemy, Goal, Solid, floor_behind, screen_edge, solids_of
 from retroagi.core.smb_scene_labels import scene_from_labels
 
 from .pixel_labels import PLAYER_FLOAT_STATE, Unexplained, label_frame
@@ -160,6 +160,22 @@ def _middle(box) -> float:
     return (box[0] + box[2]) / 2
 
 
+def _floor_run(state: State, first):
+    """``first`` and the surfaces of its height side by side after it, as
+    one floor (a staircase's top two columns wide: by its first column
+    alone the floor went on, and Mario ran off the second into the pit)."""
+    end = first.x1
+    while True:
+        more = next((s for s in state.solids if s is not first and abs(s.x0 - end) <= 2
+                     and abs(s.top - first.top) <= 2 and s.x1 > end and s.kind != "block"), None)
+        if more is None:
+            break
+        end = more.x1
+    if end == first.x1:
+        return first
+    return Solid(first.x0, first.top, end, first.bottom, first.kind, first.ref)
+
+
 def _steps_down(state: State, under) -> bool:
     """Whether something as high or at most STEP_DOWN lower carries on right
     after the end of ``under`` (the floor going on, a staircase down):
@@ -220,7 +236,7 @@ class ScriptedChooser:
             (s for s in state.solids if s.x0 < body[2] and body[0] < s.x1 and abs(s.top - feet) <= 2),
             key=lambda s: not (s.x0 <= mx <= s.x1),
         )
-        under = standing[0] if standing else None
+        under = _floor_run(state, standing[0]) if standing else None
         # Where the floor ends at a pit (not a step down onto something
         # lower right after it), no run ends beyond it (a run 40 pixels short
         # of the far side's landing ran into the pit).

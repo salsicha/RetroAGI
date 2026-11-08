@@ -4,7 +4,8 @@ could still pass them").
 
 A level is a run of World 1-1's pieces, in pixels as the game draws them
 (16-pixel tiles, the floor's top at 208): pits 2 to 4 tiles wide, pipes 2 to
-4 tiles tall, staircases up and down with a valley or a pit between, rows of
+4 tiles tall, staircases up and down with a valley or a pit between (each
+top one or two columns wide), rows of
 bricks at the game's two heights (4 and 8 tiles above the floor, Goombas
 sometimes walking on the upper one), single Goombas and pairs, and a
 staircase before the flag, each separated by a few tiles of floor
@@ -45,6 +46,7 @@ PIECES = {"pipe": 3, "pit": 2, "goombas": 3, "bricks": 2, "stairs": 1}
 PIPE_TILES = (2, 3, 4)
 PIT_TILES = (2, 2, 3, 3, 4)
 STAIR_TILES = (3, 4)
+STAIR_TOPS = (1, 2)
 # Brick rows: their tops (pixels) and lengths (tiles).
 LOW_ROW, HIGH_ROW = FLOOR - 4 * TILE, FLOOR - 8 * TILE
 LOW_TILES, HIGH_TILES = (1, 5), (3, 8)
@@ -101,15 +103,18 @@ def random_level(seed: int, pieces: int = 12) -> dict:
             x = end
         else:  # stairs: up, a valley of floor or a pit, down
             height = rng.choice(STAIR_TILES)
-            for k in range(height):
-                column(x, k + 1)
+            # Each side's top one or two columns wide (1-1's second pair:
+            # two up, one down).
+            up_top, down_top = rng.choice(STAIR_TOPS), rng.choice(STAIR_TOPS)
+            for k in range(height + up_top - 1):
+                column(x, min(k + 1, height))
                 x += TILE
             gap = 2 * TILE
             if rng.random() < 0.5:
                 pits.append((x, x + gap))
             x += gap
-            for k in range(height):
-                column(x, height - k)
+            for k in range(height + down_top - 1):
+                column(x, min(height, height + down_top - 1 - k))
                 x += TILE
         x += rng.randint(*FLAT) * TILE
     # The closing staircase, then the flag on the floor beyond.
