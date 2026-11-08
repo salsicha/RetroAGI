@@ -1,6 +1,7 @@
 # Choose and control: the plan
 
-Approved by the user on 2026-11-07 ("Yes I agree, make it so"). This
+Approved by the user on 2026-11-07 ("Yes I agree, make it so"; the design
+below as revised the same day: "Yes, and go ahead and implement"). This
 replaces the layered agent's approach (docs/layered-agent.md), where networks
 predicted where actions end and how long waits last. The background, the
 evidence from this project and the design are in the report
@@ -8,39 +9,58 @@ evidence from this project and the design are in the report
 
 ## The design
 
-- **Perception** turns each frame into a short list of objects (the Full SMB
-  vision network; exact labels from game memory for tests).
-- **A model-based controller runs every frame** from that list. It
-  estimates each object's motion, plans with the game's real physics (the
-  NES motion model), re-plans, presses buttons, and reports events: arrived,
-  landed, a wait's condition met, a threat due, the goal infeasible. It is
-  arithmetic, about a millisecond a frame.
-- **A small decision network runs only at decision points** (an event from
-  the controller). It reads the object list and the strategy switch, and
-  outputs one choice: a mode, a verb (run, jump, wait), which object, and a
-  coarse modifier (stomp or pass; land near, middle or far; keep speed or
-  stop). It never outputs a distance, a frame count or a height.
-- **A faithful cheap simulator** (Block SMB) copies the real levels: their
-  geometry read from the game, the game's enemy wake-up rule (an enemy
-  appears when the screen reaches it), and physics checked against game
-  memory. Windows of the real levels are varied around the real geometry.
-- **A privileged teacher** in the simulator picks the best choice by trying
-  each candidate through the same controller, with full state. It labels
-  only decision points.
-- **Learning** copies the teacher, then rounds of the network playing in the
-  simulator with the teacher labelling the states it reaches (user,
-  2026-11-07: allowed in the simulator).
+User, 2026-11-07: "Learning a skill means 1 learning what is about to
+happen, and 2 learning what to do about it"; the fixed rules of SMB are
+"1. Don't die, 2. Progress to the right, 3. get coins and power-ups"; a
+general player "doesn't learn long-term consequences ... The levels could
+be randomly generated and I could still pass them."
+
+1. **The executor**, a fast recurrent adaptive controller, every frame. An
+   action is injected into it as parameters: jump onto an object (near,
+   middle, far), stomp or jump over an enemy, run to an object or a
+   distance (keeping speed or stopping), wait until a condition (an enemy
+   clear of a point, a jump due, at most N frames), retreat. It plans with
+   a model of the player's motion from fresh observations, carries the
+   action out, reports events (arrived, landed, a wait's condition met, a
+   threat, infeasible) and can override with a reflex. Its motion model is
+   the NES physics for now; for any game it will be learned online.
+2. **The outcome network**: from the current state and the action in
+   progress, one pass predicts the consequences of continuing and of every
+   alternative action at once (a head on each object's vector for the
+   actions aimed at it, a few general outputs for the rest): the chance of
+   dying within the action and a short window after it, progress to the
+   right and the frames it takes, coins and power-ups expected, the chance
+   of getting stuck. Trained on real outcomes: on randomly generated levels
+   faithful to the real game's rules, states are saved and every candidate
+   action is played from them by the same executor (no teacher, no level
+   memory, nothing learned on Full SMB).
+3. **The chooser**, the three rules on those predictions: the action in
+   progress is kept while its predicted death chance is under a threshold
+   and it still progresses (or is a needed wait or retreat); otherwise,
+   among the actions least likely to die, the most progress right per
+   frame, then coins and power-ups worth a little progress. Waiting and
+   retreating come out of the rules: when every forward action risks death,
+   a wait that does not wins, until a forward action is safe again. The
+   same pass runs every few frames on the action in progress, so a rising
+   risk picks again at once.
+
+Timing: the executor every frame (about a millisecond); the outcome network
+every few frames and at events (about a millisecond a pass); the next choice
+decided ahead while the current action runs, checked at its event.
 
 ## What is dropped
 
-- The world model as an outcome predictor (the controller computes outcomes).
-- The collision tracker networks (model rollouts from the state estimates).
-- The tactic memory network, unless a need shows.
-- The strategy, tactic and skill layers as separate networks: one network
-  with output heads.
-- Waits in 8-frame slices (waits become conditions the controller watches).
-- The long curriculum of hand-made lessons and 12-round recordings: windows
-  of real levels, plus a few generic lessons.
+- The old world model, which predicted where a whole action ends from
+  teacher labels: the outcome network predicts every action's consequences
+  from sampled real outcomes, and the executor computes motion.
+- The collision tracker networks (the executor's rollouts check contact).
+- The teacher and copying its choices (fragile: a mistake leads where it
+  never showed); value functions and long-term consequences; level memory.
+- The tactic memory network; the strategy, tactic and skill layers as
+  separate networks.
+- Waits in 8-frame slices (waits are conditions the executor watches).
+- The long curriculum of hand-made lessons and 12-round recordings: random
+  levels from the real game's pieces and rules.
 - Next-frame prediction and pretraining.
 
 Nothing learns on Full SMB (user, 2026-10-28). Reading the real game for
@@ -52,15 +72,12 @@ Each phase ends with a measurement that decides whether to go on.
 
 | Phase | Work | Done when |
 |---|---|---|
-| 0. Test bench | Saved game states just before each 1-1 obstacle (the first Goomba, each pipe, the pits, the brick rows, the stairs, the flag); success per obstacle | One command scores any agent on every obstacle in minutes |
-| 1. Controller first | Goal regions from the chosen object; a jump planner on perceived state (the teacher's jump search moved into play); waits as conditions; "infeasible" events. Tested in 1-1 with a scripted chooser that reads game memory | A correct chooser plus the controller passes most 1-1 obstacles |
-| 2. Faithful simulator | 1-1's layout imported into Block SMB; the enemy wake-up rule; jump arcs and run speed-up checked against game memory; varied windows of the level | The scripted chooser does as well in the simulator as in the real game |
-| 3. Teacher | The privileged chooser in the simulator, trying candidate choices through the shared controller, labelling decision points only | Wins nearly all windows, in seconds an episode |
-| 4. Learn | Copy the teacher, then rounds of the network playing and the teacher labelling its states | The network's choices match the teacher's on fresh windows |
-| 5. Real game | The obstacle bench and full 1-1 playthroughs; then windows of another level | 1-1 obstacles mostly pass; what transfers is known |
-
-Phase 1 comes before any learning: if a correct chooser and the controller
-cannot pass an obstacle, nothing learned on top will.
+| 0. Test bench | Saved game states just before each 1-1 obstacle; success per obstacle | One command scores any player on every obstacle in minutes (done) |
+| 1. Executor | Goal regions, the jump planner, waits, events; driven by a scripted chooser on game memory, then on perception | The scripted chooser passes most obstacles on perception as on game memory |
+| 2. Random levels | Block SMB levels generated from the real game's pieces and rules: its enemy wake-up and turning rules, its physics checked against game memory | The scripted chooser passes random levels as it passes 1-1 |
+| 3. Outcome sampling | The action set; at sampled states every candidate action played from a saved state by the executor, its outcome recorded | Millions of labelled (state, action, outcome) examples an hour |
+| 4. Outcome network and chooser | One pass scores every action; the three rules choose and monitor | On fresh random levels it plays as well as the scripted chooser; then the Full SMB bench and full 1-1 playthroughs, nothing learned on Full SMB |
+| 5. Decide ahead | The next choice computed while the current action runs | No frame waits for a decision |
 
 ## Progress
 
