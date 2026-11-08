@@ -61,4 +61,4 @@ def test_the_network_learns_a_handful_of_outcomes():
         optimizer.step()
     p = pick(model(mario, surfaces, enemies), kind, slot, modifier).detach()
     assert torch.sigmoid(p[1, 0]) > 0.8 and torch.sigmoid(p[0, 0]) < 0.2
-    assert abs(float(p[2, 3]) * 64 - 32) < 4
+    assert abs(float(p[2, PREDICTIONS.index("progress")]) * 64 - 32) < 4

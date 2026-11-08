@@ -8,7 +8,8 @@ flag) by cross-entropy, the amounts (progress, frames, points, at the
 network's SCALES) by a Huber loss on choices the executor could carry out.
 The measures, per kind of choice: how well the death chance ranks deaths
 first (the area under the ROC curve), its mean error, how often
-"infeasible" is called right, and the progress error in pixels.
+"infeasible" and "stuck" are called right, and the progress error in
+pixels.
 """
 
 import json
@@ -34,14 +35,15 @@ def targets(outcomes: np.ndarray) -> np.ndarray:
     """[N, PREDICTIONS] from the sampled OUTCOME_FIELDS: death (during or
     after), infeasible (the executor ended it before its first frame: found
     infeasible, or a run blocked at once; a blocked run counted as feasible
-    was picked again and again against a wall), finished, then progress,
-    frames and points at the network's SCALES."""
+    was picked again and again against a wall), finished, stuck, then
+    progress, frames and points at the network's SCALES."""
     f = {name: outcomes[:, k] for k, name in enumerate(OUTCOME_FIELDS)}
     nothing = (f["frames"] == 0) & (f["died"] == 0) & (f["finished"] == 0)
     return np.stack([
         np.maximum(f["died"], f["died_after"]),
         ((f["end"] == INFEASIBLE) | nothing).astype(np.float32),
         f["finished"],
+        f["stuck"],
         f["progress"] / SCALES[0],
         f["frames"] / SCALES[1],
         f["points"] / SCALES[2],
@@ -112,7 +114,8 @@ def measure(model, data: Data, batch: int = 8192) -> dict:
             "death_auc": _auc(chance[sel, 0], t[sel, 0]),
             "death_error": float(np.abs(chance[sel, 0] - t[sel, 0]).mean()),
             "infeasible_right": float(((chance[sel, 1] > 0.5) == (t[sel, 1] > 0.5)).mean()),
-            "progress_error_px": float(np.abs(p[feasible, 3] - t[feasible, 3]).mean() * SCALES[0]) if feasible.any() else None,
+            "stuck_right": float(((chance[sel, 3] > 0.5) == (t[sel, 3] > 0.5)).mean()),
+            "progress_error_px": float(np.abs(p[feasible, 4] - t[feasible, 4]).mean() * SCALES[0]) if feasible.any() else None,
         }
     return out
 
@@ -141,6 +144,7 @@ def train(data_folder: str, eval_folder: str, output: str, steps: int = STEPS, b
             a = measures["all"]
             print(f"step {step} loss {float(loss):.4f} fresh: death auc {a['death_auc']:.3f} "
                   f"error {a['death_error']:.3f} infeasible right {a['infeasible_right']:.3f} "
+                  f"stuck right {a['stuck_right']:.3f} "
                   f"progress {a['progress_error_px']:.1f} px", flush=True)
     torch.save({"config": config.__dict__, "model": model.state_dict(), "log": log}, f"{output}/outcome.pt")
     Path(f"{output}/measures.json").write_text(json.dumps(log[-1], indent=1))

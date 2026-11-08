@@ -4,11 +4,14 @@ network's training data, measured, not taught.
 At a decision point on a random level (game_levels.random_level) the
 simulator's state is saved and every candidate choice (candidates) is played
 from it by the same executor the agent uses (core/smb_controller.py), then
-the state is put back (the choices: core/smb_choices.py). Its outcome (outcome): how it ended (the controller's event), whether Mario
-died during it, or after it, buttons released, until he has stood WINDOW
-frames (the chooser's first rule: not dying soon after either), how far right it took
+the state is put back (the choices: core/smb_choices.py). Its outcome
+(outcome): how it ended (the controller's event), whether Mario died during
+it, or after it, buttons released, until he has stood WINDOW frames (the
+chooser's first rule: not dying soon after either), how far right it took
 him and in how many frames, the points it gained, whether he reached the
-flag.
+flag, and whether it left him stuck: no forward choice from there (probes)
+feasible, safe and getting him on (one choice at a time, the chooser
+walked into a valley between staircases and waited there).
 
 The states come from play on random levels by the scripted chooser
 (stages/full_smb/scripted_chooser.py), which takes a random candidate
@@ -24,8 +27,9 @@ from typing import Optional
 
 import numpy as np
 
-from retroagi.core.smb_choices import ENEMY_SLOTS, SURFACE_SLOTS, SURFACE_WIDTH, candidates, state_tokens
+from retroagi.core.smb_choices import ENEMY_SLOTS, RUN_LONG, SURFACE_SLOTS, SURFACE_WIDTH, candidates, state_tokens
 from retroagi.core.smb_controller import Choice, Controller
+from retroagi.core.smb_planner import Goal
 
 from .env_state import restore_env_state, snapshot_env_state
 from .game_levels import BlockTruthState, random_level
@@ -40,14 +44,40 @@ FALLING = 64
 LONGEST = 240
 # The share of decisions the player makes at random.
 EXPLORE = 0.3
+# After a choice, Mario is stuck when no forward probe (probes) from where
+# it left him is feasible, safe and takes him at least STUCK_PROGRESS pixels
+# right; PROBE_SURFACES of the surfaces ahead are probed.
+STUCK_PROGRESS = 16
+PROBE_SURFACES = 3
 ENDS = ("landed", "stomped", "arrived", "waited", "threat", "blocked", "infeasible", "timeout", "died", "finished")
-OUTCOME_FIELDS = ("died", "died_after", "frames", "progress", "points", "finished", "end")
+OUTCOME_FIELDS = ("died", "died_after", "frames", "progress", "points", "finished", "stuck", "end")
 
 
-def outcome(env, source: BlockTruthState, choice: Choice) -> tuple:
+def probes(state) -> list:
+    """The forward choices tried after a choice to see whether Mario can go
+    on: a long run, landing on each of the PROBE_SURFACES surfaces ahead
+    (the part ahead of him of the one he is on), passing and stomping the
+    nearest enemy ahead."""
+    body = state.body
+    mx = (body[0] + body[2]) / 2
+    out = [Choice("run", x=mx + RUN_LONG, keep_speed=True)]
+    ahead = sorted((s for s in state.solids if s.kind in ("ground", "pipe", "block", "moving")
+                    and s.x1 > mx + STUCK_PROGRESS + 8), key=lambda s: max(s.x0, mx))
+    for s in ahead[:PROBE_SURFACES]:
+        x0 = max(s.x0, mx + STUCK_PROGRESS)
+        out.append(Choice("jump", Goal("land", s.ref, x0, s.x1, top=s.top)))
+    coming = [e for e in state.enemies if (e.box[0] + e.box[2]) / 2 > mx]
+    if coming:
+        e = min(coming, key=lambda e: e.box[0])
+        out += [Choice("jump", Goal("pass", e.ref, side=1)), Choice("jump", Goal("stomp", e.ref))]
+    return out
+
+
+def outcome(env, source: BlockTruthState, choice: Choice, probe: bool = True) -> tuple:
     """``choice`` played by the controller from the simulator's present
-    state, then WINDOW frames standing: the OUTCOME_FIELDS. The simulator is
-    left where the play ended."""
+    state, then WINDOW frames standing: the OUTCOME_FIELDS (stuck only when
+    ``probe``; a death counts as stuck). The simulator is left where the
+    play ended."""
     state = source.read(env)
     x0, points0 = env.mario["x"], env.score
     controller = Controller()
@@ -81,8 +111,18 @@ def outcome(env, source: BlockTruthState, choice: Choice) -> tuple:
             standing = standing + 1 if env.mario["on_ground"] else 0
             if standing >= WINDOW:
                 break
+    stuck = died or died_after
+    if probe and not (stuck or finished):
+        stuck = True
+        snapshot = snapshot_env_state(env)
+        for option in probes(source.read(env)):
+            r = outcome(env, source, option, probe=False)
+            restore_env_state(env, snapshot)
+            if r[2] > 0 and ENDS[int(r[-1])] != "infeasible" and not (r[0] or r[1]) and r[3] >= STUCK_PROGRESS:
+                stuck = False
+                break
     return (float(died), float(died_after), float(frames), float(progress), float(env.score - points0),
-            float(finished), float(ENDS.index(end)))
+            float(finished), float(stuck), float(ENDS.index(end)))
 
 
 def sample_level(seed: int, mode: str, *, explore: float = EXPLORE, rng: Optional[random.Random] = None,

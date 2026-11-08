@@ -4,7 +4,8 @@ predictions."""
 import numpy as np
 
 from retroagi.core import outcome_chooser
-from retroagi.core.outcome_chooser import DEATH, FINISHED, FRAMES, INFEASIBLE, POINTS, PROGRESS, OutcomeChooser
+from retroagi.core.outcome_chooser import DEATH, FINISHED, FRAMES, INFEASIBLE, POINTS, PROGRESS, STUCK, OutcomeChooser
+from retroagi.core.outcome_network import PREDICTIONS
 from retroagi.core.smb_controller import State
 from retroagi.core.smb_physics import NESPlayerMotion
 from retroagi.core.smb_planner import Enemy, Solid
@@ -18,7 +19,7 @@ def choose(monkeypatch, mode, rows):
     """The chooser's pick when the network predicts ``rows`` {(kind,
     modifier): predictions}; every other choice infeasible."""
     def fake(model, tokens, choices, device):
-        p = np.zeros((len(choices), 6), np.float32)
+        p = np.zeros((len(choices), len(PREDICTIONS)), np.float32)
         p[:, INFEASIBLE] = 1.0
         for k, (kind, _, modifier) in enumerate(choices):
             if (kind, modifier) in rows:
@@ -32,9 +33,9 @@ def choose(monkeypatch, mode, rows):
     return options[best][1], options[best][3]
 
 
-def row(death=0.0, progress=0.0, frames=16.0, points=0.0, finished=0.0):
-    p = np.zeros(6, np.float32)
-    p[DEATH], p[PROGRESS], p[FRAMES], p[POINTS], p[FINISHED] = death, progress, frames, points, finished
+def row(death=0.0, progress=0.0, frames=16.0, points=0.0, finished=0.0, stuck=0.0):
+    p = np.zeros(len(PREDICTIONS), np.float32)
+    p[DEATH], p[PROGRESS], p[FRAMES], p[POINTS], p[FINISHED], p[STUCK] = death, progress, frames, points, finished, stuck
     return p
 
 
@@ -67,3 +68,10 @@ def test_a_choice_just_ended_at_once_is_not_taken_again(monkeypatch):
     last = chooser.decide(STATE)
     again = chooser.decide(STATE, "blocked", last)
     assert again != last
+
+
+def test_a_choice_leaving_mario_stuck_gives_way_to_one_that_does_not(monkeypatch):
+    # Down into a valley is quick progress but a dead end; back up the
+    # staircase is slower but leaves a way on.
+    rows = {(3, 1): row(progress=40, frames=20, stuck=0.9), (3, 2): row(progress=-30, frames=30)}
+    assert choose(monkeypatch, "speed_run", rows) == (3, 2)

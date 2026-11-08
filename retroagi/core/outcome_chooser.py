@@ -6,7 +6,9 @@ At a decision the outcome network predicts every candidate choice's outcome
 in one pass (smb_choices.candidates, outcome_network.predict). Then:
 1. don't die: of the choices the executor can carry out, keep those whose
    chance of death is at most SAFE, or within SLACK of the safest one when
-   none is that safe;
+   none is that safe; and of those, the ones not likely to leave Mario
+   stuck (from where no forward choice gets him on: a valley between
+   staircases, entered for its quick progress, held him there), if any;
 2. progress right: of those, the one bringing the most progress a frame
    (frames counted from MIN_FRAMES up, so a short wait is no free win);
 3. coins and power-ups: in max-points mode a point is worth POINT_VALUE
@@ -28,7 +30,7 @@ SAFE = 0.05
 SLACK = 0.02
 MIN_FRAMES = 8
 POINT_VALUE = {"speed_run": 0.0, "max_points": 0.2}
-DEATH, INFEASIBLE, FINISHED, PROGRESS, FRAMES, POINTS = range(len(PREDICTIONS))
+DEATH, INFEASIBLE, FINISHED, STUCK, PROGRESS, FRAMES, POINTS = range(len(PREDICTIONS))
 
 
 class OutcomeChooser:
@@ -50,6 +52,8 @@ class OutcomeChooser:
             feasible = np.ones(len(p), bool)
         risk = np.where(feasible, p[:, DEATH], np.inf)
         allowed = risk <= max(SAFE, risk.min() + SLACK)
+        if (allowed & (p[:, STUCK] < 0.5)).any():
+            allowed &= p[:, STUCK] < 0.5
         value = (p[:, PROGRESS] / np.maximum(p[:, FRAMES], MIN_FRAMES)
                  + POINT_VALUE[self.mode] * p[:, POINTS] + p[:, FINISHED] * 100.0)
         best = int(np.argmax(np.where(allowed, value, -np.inf)))

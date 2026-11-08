@@ -9,7 +9,8 @@ token its stomp and its two passes (beyond, back), and a head on Mario's
 token the choices about no thing (smb_choices.GENERAL: the three runs, the
 two waits). Each choice's outcome is PREDICTIONS: the chance Mario dies
 during it or soon after (outcome_sampling's window), the chance the
-executor finds it infeasible, the chance it reaches the flag, and the
+executor finds it infeasible, the chance it reaches the flag, the chance it
+leaves Mario stuck (no forward choice from there gets him on), and the
 progress right (pixels), frames and points it brings.
 """
 
@@ -21,10 +22,10 @@ from torch import nn
 
 from .smb_choices import ENEMY_SLOTS, ENEMY_WIDTH, GENERAL, MARIO_WIDTH, SURFACE_SLOTS, SURFACE_WIDTH
 
-PREDICTIONS = ("death", "infeasible", "finished", "progress", "frames", "points")
+PREDICTIONS = ("death", "infeasible", "finished", "stuck", "progress", "frames", "points")
 # The logits (chances) and the amounts, and the scale the amounts are
 # learned at (pixels, frames, points).
-CHANCES, AMOUNTS = (0, 1, 2), (3, 4, 5)
+CHANCES, AMOUNTS = (0, 1, 2, 3), (4, 5, 6)
 SCALES = (64.0, 64.0, 5.0)
 # Inputs are scaled to about one: x by the screen's width, y by its height,
 # speeds by 4 pixels a frame.
