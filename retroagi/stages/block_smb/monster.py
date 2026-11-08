@@ -61,7 +61,7 @@ def approach_action(env, seg, enemy):
             break
     line = min(seg.get("keep_behind", rect.right), rect.right)
     line = min(line, enemy["x"] - KEEP_DISTANCE)
-    future_camera = max(env.camera_x, peak - env.width // 3)
+    future_camera = max(env.camera_x, peak - env.scroll_x)
     retreat_edge = max(rect.left, future_camera + 1)
     if peak + m["w"] + APPROACH_MARGIN > line or peak - retreat_edge < RETREAT_ROOM:
         # Brake if momentum is already too large for neutral coasting. This

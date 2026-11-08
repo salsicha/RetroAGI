@@ -26,6 +26,28 @@ commit). How the parts work is described in the
   the training set"); the recorded failures are fixed in the teacher. A
   failed gate is fixed in the teacher or the policy, never bypassed.
 
+## 2026-11-08 — The controller plays from vision, and random levels of the game's pieces (user: "Yes, and go ahead and implement"; built, measured)
+
+The design was revised on 2026-11-07: the executor (a fast controller that
+takes a choice as parameters), an outcome network predicting every choice's
+consequences in one pass, and a chooser applying the game's three rules
+(don't die, progress right, coins and power-ups); training data from random
+levels faithful to the real game, no teacher, no level memory (user: "The
+levels could be randomly generated and I could still pass them").
+
+Built and measured with the scripted chooser standing in for the chooser
+(docs/choose-and-control-plan.md, progress):
+- the 1-1 obstacle bench now starts every obstacle truly at rest;
+- from game memory, 24/24 obstacles and 1-1 finished in both modes; from
+  vision alone, 0.98 of the obstacles and the speed run finished (35fb5d2,
+  43fb55f);
+- random Block SMB levels from 1-1's pieces (stages/block_smb/
+  game_levels.py): 99 of 100 finished in the speed run, 98 in max points;
+  the fixes they needed left 1-1 at 24/24 from game memory and 0.92 from
+  vision (max points at Goomba pairs).
+Not built yet: outcome sampling (phase 3) and the outcome network and its
+chooser (phase 4).
+
 ## 2026-11-07 — Choose and control: the controller finishes 1-1 with a scripted chooser (user decision; built, measured)
 
 User: "Yes I agree, make it so" to the rethink (docs/choose-and-control-plan.md):

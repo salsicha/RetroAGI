@@ -11,7 +11,7 @@ a pixel a frame, as 0 and 1 by turns: one frame's move says 0 or 1). ScriptedCho
 controller's events, looking ahead from Mario:
 - an enemy ahead within ENEMY_AHEAD, or coming from behind within
   BEHIND, or meeting Mario soon at their closing speed (the controller's
-  meets_soon, which also ends runs), with no raised thing between: stomp
+  meets_soon, which also ends runs), with no raised thing or pit between: stomp
   it (max points) or pass it (speed run), passing when a stomp is
   infeasible, jumping back (when it meets him soon) to land
   on Mario's side of it when passing is infeasible too, running from it
@@ -35,7 +35,17 @@ perceived): the difference is what perception costs the controller.
 
 from typing import Optional
 
-from retroagi.core.smb_controller import ARRIVE, MEASURED, WALK, Choice, Controller, State, meets_soon, perceived
+from retroagi.core.smb_controller import (
+    ARRIVE,
+    MEASURED,
+    WALK,
+    Choice,
+    Controller,
+    State,
+    meets_soon,
+    on_the_way,
+    perceived,
+)
 from retroagi.core.smb_physics import NESPlayerMotion
 from retroagi.core.smb_planner import Enemy, Goal, floor_behind, screen_edge, solids_of
 from retroagi.core.smb_scene_labels import scene_from_labels
@@ -67,7 +77,8 @@ RAISE = 4
 # A floor followed by something at most this much lower is a step down,
 # walked off (pixels: one block).
 STEP_DOWN = 16
-# Enemies whose feet are this close to Mario's feet's height are on his way.
+# A renumbered enemy is looked for among those whose feet are this close to
+# Mario's (_the_enemy; the enemies on his way: smb_controller.on_the_way).
 SAME_LEVEL = 24
 # The solids are labelled again once the camera has scrolled this far
 # (pixels) or this many frames have passed (blocks bumped, broken): they
@@ -150,13 +161,27 @@ def _middle(box) -> float:
 
 
 def _steps_down(state: State, under) -> bool:
-    """Whether something at most STEP_DOWN lower carries on right after the
-    end of ``under`` (a staircase down): walking off it is safe (a pipe's
-    end, with the floor far below, is jumped down from, its landing checked
-    against enemies)."""
+    """Whether something as high or at most STEP_DOWN lower carries on right
+    after the end of ``under`` (the floor going on, a staircase down):
+    walking off it is safe (a pipe's end, with the floor far below, is
+    jumped down from, its landing checked against enemies; two steps of one
+    height side by side were a pit to jump across, and the jump over the
+    seam was infeasible)."""
     after = under.x1 + 2
-    return any(s.x0 <= after < s.x1 and 0 < s.top - under.top <= STEP_DOWN and s.kind != "block"
-               for s in state.solids)
+    return any(s is not under and s.x0 <= after < s.x1 and 0 <= s.top - under.top <= STEP_DOWN
+               and s.kind != "block" for s in state.solids)
+
+
+def _steps_on(state: State, first) -> float:
+    """Where the staircase down that starts with ``first`` ends: each next
+    step adjacent and at most STEP_DOWN lower (``first``'s end if none)."""
+    end, top = first.x1, first.top
+    while True:
+        step = next((s for s in state.solids if abs(s.x0 - end) <= 2 and 0 < s.top - top <= STEP_DOWN
+                     and s.kind != "block"), None)
+        if step is None:
+            return end
+        end, top = step.x1, step.top
 
 
 def _the_enemy(state: State, ref, mx: float, feet: float):
@@ -226,13 +251,16 @@ class ScriptedChooser:
             return Choice("run", x=mx - STEP_BACK)
         ahead = [
             e for e in state.enemies
-            if abs(e.box[3] - feet) < SAME_LEVEL
+            if on_the_way(state, e)
             and (
                 0 < _middle(e.box) - mx < ENEMY_AHEAD
                 or (-BEHIND < _middle(e.box) - mx <= 0 and e.vx > 0)
                 or meets_soon(state, e)
             )
             and not _walled_off(state, mx, feet, e)
+            # one beyond the pit the floor ends at waits for the pit (Mario
+            # at full speed tried to pass a Goomba across a pit, and ran in)
+            and not (pit and mx < under.x1 < _middle(e.box))
         ]
         if ahead:
             enemy = min(ahead, key=lambda e: abs(_middle(e.box) - mx))
@@ -257,6 +285,11 @@ class ScriptedChooser:
             if beyond:
                 s = level[0] if level else beyond[0]
                 prefer = "near" if s.top >= feet - RAISE else "middle"
+                end = _steps_on(state, s)
+                if end > s.x1:
+                    # A staircase down: any of its steps will do (at full
+                    # speed its first, 16 pixels wide, was out of reach).
+                    return Choice("jump", Goal("land", s.ref, s.x0, end, prefer="near"))
                 return Choice("jump", Goal("land", s.ref, s.x0, s.x1, prefer=prefer, top=s.top))
         targets = [s.x0 for s in state.solids if s.x0 > mx + 8 and s.kind in ("pipe", "ground") and s.top < feet - RAISE]
         if under is not None:

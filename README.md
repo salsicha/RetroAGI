@@ -1,8 +1,53 @@
 # RetroAGI
 
-A vision-based hierarchical agent for Super Mario Bros.
+A vision-based agent for Super Mario Bros.
 
-The hierarchy is **strategy → tactic → skill → predictive executor**:
+## Current design: choose and control
+
+Since 2026-11-07 the agent is being rebuilt around sparse decisions and a
+fast controller ([the plan](docs/choose-and-control-plan.md)):
+
+1. **The executor** (`core/smb_controller.py`, `core/smb_planner.py`): a
+   model-based controller run every frame. It takes one choice at a time:
+   jump onto a thing, stomp or pass an enemy, run to a place, wait. It plans
+   the jump (run-up frames and how long the button is held) with the NES
+   motion model against what it sees, re-plans before takeoff and corrects
+   the flight in the air, and reports how the choice ended (landed,
+   stomped, arrived, a threat, infeasible).
+2. **The outcome network** (to be built): from the state, one pass predicts
+   the consequences of every candidate choice at once (the chance of dying,
+   progress right, coins and power-ups).
+3. **The chooser**: the game's three rules on those predictions, in order:
+   don't die, progress to the right, get coins and power-ups. Until the
+   outcome network exists, a scripted chooser
+   (`stages/full_smb/scripted_chooser.py`) stands in for it.
+
+Nothing learns on Full SMB: training data comes from random levels built
+in Block SMB from the real game's pieces and rules.
+
+Where it stands (2026-11-08), the scripted chooser and the executor:
+
+| | 1-1 obstacle bench (24 obstacles) | Full 1-1 | Random Block SMB levels (100) |
+|---|---|---|---|
+| Real game, game memory | 24/24 | max points finished; speed run died at x 1676 | |
+| Real game, vision only | 0.92 | both died near x 2020 | |
+| Block SMB, simulator state | | | 99 speed run, 98 max points |
+
+Full-level results shift from change to change: earlier on 2026-11-08 all
+four 1-1 playthroughs finished, and vision passed 0.98 of the bench.
+
+```bash
+# score a player on the 24 obstacles of 1-1
+python -m retroagi.stages.full_smb.obstacle_bench --bench data/full_smb_obstacles/Level1-1 --player scripted_vision
+# the scripted chooser on random levels of the real game's pieces
+python -m retroagi.stages.block_smb.game_levels --levels 100
+```
+
+## Earlier design: the layered agent
+
+This is the design the rebuild replaces; its code and trainers are still in
+the repository. The hierarchy is **strategy → tactic → skill → predictive
+executor**:
 
 1. **Strategy:** externally selected `speed_run` or `max_points` objective.
 2. **Tactic:** persistent option-critic choosing advance, retreat, climb or
@@ -86,15 +131,10 @@ Legacy spatial-skill checkpoints warm-start by discarding the action network
 and preserving skill, tactic, scene encoder, and memory weights. No action
 training or action checkpoint is required.
 
-The agent is being rebuilt around a small decision network and a model-based
-controller: see [the plan](docs/choose-and-control-plan.md) (2026-11-07).
-See [the architecture and training guide](docs/layered-agent.md) for exact
-inputs, outputs, timing, curriculum, qualification gates and known limits,
-and [design decisions](docs/design-decisions.md) for what was decided, why,
-and what is still to be built. A redesign is approved and being built: the
-skill chooses an action, a predictor gives its end state, a target tracker
-says where its target will be and an adaptive controller reaches it
-([plan](docs/action-predictor-controller.md)).
+See [the architecture and training guide](docs/layered-agent.md) for the
+layered agent's exact inputs, outputs, timing, curriculum, qualification
+gates and known limits, and [design decisions](docs/design-decisions.md)
+for what was decided, why, and what is still to be built.
 
 ## Project Layout
 
@@ -113,11 +153,15 @@ retroagi/
     smb_trajectory.py            # jump commands: hold-length search and flight correction
     smb_spatial_feedback.py      # tracks the command's target and reports its progress
     smb_physics.py               # Mario's NES motion, shared by both games
+    smb_planner.py               # the executor's jump planner (compiled)
+    smb_controller.py            # the executor: one choice at a time, every frame
   stages/
     block_smb/                   # the Block SMB game, layout families, teachers
-                                 # and the layer trainer (layered_train.py)
+                                 # and the layer trainer (layered_train.py);
+                                 # game_levels.py: random levels of the game's pieces
     full_smb/                    # emulator play, frame labels from game memory,
-                                 # and the Full SMB evaluation of trained layers
+                                 # the Full SMB evaluation of trained layers, the
+                                 # 1-1 obstacle bench and the scripted chooser
 scripts/
   vit/                           # train the two vision transformers
   vision/                        # measure the two vision transformers

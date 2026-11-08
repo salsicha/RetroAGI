@@ -64,12 +64,25 @@ WALK = 0.5
 # edge, in the planner, while he slid off it.
 BODY_WIDTH = 10
 HEAD_ROOM = 4
+# Enemies seen starting in this many columns at the screen's left edge are
+# left out: there vision read cut-off sprites as enemies walking toward
+# Mario, and he jumped back over a pit at them (the game hides the first 8
+# columns; a real enemy there is half gone and leaving).
+LEFT_COLUMNS = 16
+# Enemies seen narrower or shorter than this (pixels) are left out unless
+# the screen's right edge cuts them (from RIGHT_EDGE on): fragments 2 to 8
+# pixels wide in 1-1's second pit were read as enemies walking toward Mario
+# (a Goomba is 16 by 16, 8 tall when stomped flat).
+MIN_ENEMY = 6
+RIGHT_EDGE = 240
 # An enemy ahead at Mario's level (feet within LEVEL pixels) meeting him
 # within this many frames at their closing speed ends a run ("threat"): a
 # jump's length, time to choose and make one. A run of 96 pixels blind to
 # enemies ran Mario at full speed into a pair of Goombas too close to jump.
 THREAT_FRAMES = 48
 LEVEL = 24
+# A step down a staircase (pixels: a block).
+STEP = 16
 
 
 @dataclass
@@ -99,16 +112,20 @@ class State:
 def perceived(feedback, scene) -> Optional[State]:
     """The controller's state from what vision shows (``scene``) and the
     executor's estimates (``feedback``, smb_spatial_feedback.SpatialFeedback,
-    already observing the scene): world pixels are screen pixels plus its
-    camera position; Mario's body is his collision box inside the drawn one
-    (BODY_WIDTH, HEAD_ROOM); the solids are vision's (none inside Mario's
-    drawn box) and the screen's left edge, a wall; enemies are its tracks seen this frame, with their
-    averaged velocities (seen for fewer than MEASURED frames: a walker's
-    WALK pixels a frame toward Mario); Mario's motion is its estimate, ready
-    once it has measured his speed; he stands when vision says so or when
-    his feet rest still on a solid's top (vision's flag alone left him "in
-    the air" in a third of the frames beside 1-1's fourth pipe). None while
-    vision does not show Mario."""
+    already observing the scene), in world pixels (screen pixels plus its
+    camera position):
+    - Mario's body is his collision box inside the drawn one (BODY_WIDTH,
+      HEAD_ROOM); his motion is the estimate, ready once it has measured his
+      speed; he stands when vision says so or when his feet rest still on a
+      solid's top (vision's flag alone left him "in the air" in a third of
+      the frames beside 1-1's fourth pipe);
+    - the solids are vision's, none inside Mario's drawn box, floor gaps
+      hidden by enemies joined, and the screen's left edge, a wall;
+    - the enemies are its tracks seen this frame, none starting in the
+      LEFT_COLUMNS and none smaller than MIN_ENEMY away from the right edge,
+      with their averaged velocities (seen for fewer than
+      MEASURED frames: a walker's WALK pixels a frame toward Mario).
+    None while vision does not show Mario."""
     if scene.mario.box is None:
         return None
     camera = feedback.camera_position
@@ -117,7 +134,10 @@ def perceived(feedback, scene) -> Optional[State]:
     body = (middle - BODY_WIDTH / 2, box[1] + HEAD_ROOM, middle + BODY_WIDTH / 2, box[3])
     enemies = []
     for t in feedback.tracks.tracks:
-        if t.kind == "platform" or t.missed:
+        if t.kind == "platform" or t.missed or t.box[0] < LEFT_COLUMNS:
+            continue
+        small = min(t.box[2] - t.box[0], t.box[3] - t.box[1]) < MIN_ENEMY
+        if small and t.box[2] < RIGHT_EDGE:
             continue
         world = (t.box[0] + camera, t.box[1], t.box[2] + camera, t.box[3])
         if len(t.samples) >= MEASURED:
@@ -147,11 +167,32 @@ def perceived(feedback, scene) -> Optional[State]:
     )
 
 
+def on_the_way(state: State, enemy: Enemy) -> bool:
+    """Whether ``enemy`` is on Mario's way: its feet within LEVEL of his, or
+    of a floor he reaches walking toward it down steps (each next one
+    adjacent and at most STEP lower: Goombas at the foot of a staircase,
+    ignored while he ran down it, were met at full speed)."""
+    body, feet = state.body, state.body[3]
+    if abs(enemy.box[3] - feet) < LEVEL:
+        return True
+    if enemy.box[3] < feet:
+        return False
+    toward = 1 if (enemy.box[0] + enemy.box[2]) / 2 >= (body[0] + body[2]) / 2 else -1
+    floor = next((s for s in state.solids if s.x0 < body[2] and body[0] < s.x1 and abs(s.top - feet) <= 2), None)
+    while floor is not None:
+        if abs(enemy.box[3] - floor.top) < LEVEL:
+            return True
+        edge = floor.x1 + 2 if toward > 0 else floor.x0 - 2
+        floor = next((s for s in state.solids if s.x0 <= edge < s.x1 and 0 < s.top - floor.top <= STEP
+                      and s.kind not in ("block", "edge")), None)
+    return False
+
+
 def meets_soon(state: State, enemy: Enemy, frames: int = THREAT_FRAMES) -> bool:
-    """Whether ``enemy``, at Mario's level, meets him within ``frames`` at
-    their present closing speed."""
+    """Whether ``enemy``, on Mario's way (on_the_way), meets him within
+    ``frames`` at their present closing speed."""
     body = state.body
-    if abs(enemy.box[3] - body[3]) >= LEVEL:
+    if not on_the_way(state, enemy):
         return False
     speed = state.motion.x_speed / 16
     if (enemy.box[0] + enemy.box[2]) / 2 >= (body[0] + body[2]) / 2:

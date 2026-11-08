@@ -154,4 +154,41 @@ Each phase ends with a measurement that decides whether to go on.
     found by place.
   Left: 11_enemies_1682 stalls in half its runs; max points on perception
   over the whole level. Next: phase 2, random levels in Block SMB.
+- **Phase 2, 2026-11-08: random levels of the game's pieces.**
+  retroagi/stages/block_smb/game_levels.py builds a level from a seed out
+  of 1-1's pieces, in the game's pixels (16-pixel tiles, the floor at 208):
+  pits 2 to 4 tiles, pipes 2 to 4 tiles tall, staircases up and down with a
+  valley or a pit between, brick rows at the game's two heights (Goombas
+  sometimes on the upper one), single Goombas and pairs, a closing staircase
+  and the flag. Goombas follow the game's rules (wake on screen, walk left
+  at half a pixel a frame, turn at walls, fall off ledges) and the camera
+  keeps Mario where the real game does (his left side at 115 on screen, a
+  new level setting `scroll_x`; other layouts keep 85). BlockTruthState
+  gives the controller what is on screen, as game memory does in the real
+  game; `python -m retroagi.stages.block_smb.game_levels --levels 100`
+  plays the scripted chooser through them (0.5 ms a frame). On 100 levels
+  it finished 99 speed runs and 98 max-points runs (from 92 and 98 at
+  first). What the levels showed:
+  - the simulator counted a head reaching a block's bottom edge as a bump,
+    one pixel early (the game and the planner do not);
+  - two steps of one height side by side are floor, not a pit;
+  - an enemy beyond the pit the floor ends at waits for the pit;
+  - a jump across a pit may land anywhere on a staircase down beyond it (a
+    land goal over the steps, with no single height);
+  - enemies on Mario's way include those at the foot of a staircase he is
+    going down (smb_controller.on_the_way), for the chooser and for runs;
+  - predicted walkers fall off ledges (a Goomba off a brick row) and walk
+    off the screen's edge; standing ones report no fall speed.
+  - a gap in the floor two Goombas wide, under a pair, is floor too; vision
+    tracks smaller than 6 pixels (fragments in a pit) and ones starting in
+    the screen's first 16 columns are not enemies.
+  Effect on 1-1: game memory 24/24 obstacles; vision 0.92 (was 0.98; max
+  points fails half its runs at the Goomba pairs of 05, 06, 10, 11). Full
+  1-1 shifted with these changes: one run all four playthroughs finished,
+  on the final code only game memory's max points did (the others died
+  between x 1676 and 2020).
+  Left: Goombas waking at the screen's right edge while Mario is in the air
+  at full speed (seed 43), the kind of risk the outcome network is to learn;
+  max points on vision at Goomba pairs. Next: phase 3, outcome sampling
+  from saved states on these levels.
 

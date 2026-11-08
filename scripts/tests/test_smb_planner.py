@@ -6,7 +6,18 @@ from copy import copy
 
 from retroagi.core.smb_controller import Choice, Controller, State, meets_soon, stopping_distance
 from retroagi.core.smb_physics import NESPlayerMotion
-from retroagi.core.smb_planner import INSET, Enemy, Goal, Solid, floor_behind, plan_flight, plan_jump, rollout
+from retroagi.core.smb_planner import (
+    INSET,
+    Enemy,
+    Goal,
+    Solid,
+    enemy_paths,
+    floor_behind,
+    plan_flight,
+    plan_jump,
+    rollout,
+    screen_edge,
+)
 
 FLOOR = Solid(0, 208, 4000, 240, "ground", ("surfaces", 0))
 STANDING = (100.0, 192.0, 112.0, 208.0)  # Mario's body on the floor
@@ -151,6 +162,11 @@ def test_a_floor_gap_an_enemy_stands_in_is_floor():
     # As vision boxes it: drawn, its last row one below the floor's top.
     seen = Enemy((697.0, 193.0, 713.0, 209.0), -0.5, 0.0, ("enemies", 4))
     assert len(floor_behind([left, right], [seen])) == 1
+    # Two side by side hide a gap two of them wide.
+    wide = Solid(737, 208, 900, 240, "ground", ("surfaces", 1))
+    pair = [goomba, Enemy((723.0, 198.0, 733.0, 204.0), -0.5, 0.0, ("slots", 1))]
+    assert len(floor_behind([left, wide], pair)) == 1
+    assert len(floor_behind([left, wide], [goomba])) == 2
     # A real pit, or an enemy elsewhere, keeps the gap.
     assert len(floor_behind([left, right], [])) == 2
     falling = Enemy((700.0, 220.0, 710.0, 226.0), -0.5, 1.0, ("slots", 0))
@@ -183,3 +199,18 @@ def test_a_run_ends_when_an_enemy_will_meet_mario_soon():
     controller.start(Choice("run", x=600, keep_speed=True), clear)
     controller.press(clear)
     assert controller.event is None
+
+
+def test_a_walker_falls_off_a_ledge_and_walks_off_the_screen():
+    # A Goomba on a brick row (its box 4 above its feet) walking left off
+    # its end falls to the floor and walks on, past the screen's edge.
+    row = Solid(100, 80, 148, 96, "block", ("blocks", 0))
+    goomba = Enemy((104.0, 70.0, 114.0, 76.0), -0.5, 0.0, ("slots", 0))
+    enemy_paths([goomba], [FLOOR, row, screen_edge(40.0)], 240)
+    assert goomba.at(4)[3] == 76.0  # still on the row
+    assert goomba.at(120)[3] == 204.0  # on the floor
+    assert goomba.at(240)[0] < 40.0  # walked on past the edge
+    # One already in the air keeps its own motion.
+    flying = Enemy((200.0, 100.0, 210.0, 106.0), -0.5, 0.0, ("slots", 1))
+    enemy_paths([flying], [FLOOR], 20)
+    assert flying.at(20)[1] == 100.0

@@ -47,6 +47,12 @@ STAND = 1
 # hit is checked (pixels): the game's boxes include their last pixel, and
 # estimates are not exact. A stomp needs the box itself.
 ENEMY_MARGIN = 2
+# Walkers: their feet up to this far below their boxes (pixels: a Goomba's
+# collision box ends 4 above its feet), and how they fall off a ledge
+# (pixels a frame, gained each frame and at most), as the simulator's do.
+FEET_BELOW = 4
+ENEMY_GRAVITY = 0.5
+ENEMY_FALL = 4.5
 # A stomp bounces Mario up at this vertical speed (the game's $FC).
 STOMP_BOUNCE = -4
 # A stomp needs this much sideways overlap with the enemy (pixels): in 1-1 a
@@ -125,12 +131,14 @@ def _straight(e: Enemy, frames: int) -> np.ndarray:
 def enemy_paths(enemies: Sequence[Enemy], solids: Sequence[Solid], frames: int) -> None:
     """Each enemy's box every frame for ``frames`` frames (Enemy.path): moving
     at its velocity, turned back when it walks into a wall (a solid rising
-    above its feet), as the game turns walkers at pipes and steps."""
+    above its feet), as the game turns walkers at pipes and steps, and
+    falling once it walks off what it stands on (a Goomba off a brick row)."""
     if not enemies:
         return
     boxes = np.array([e.box for e in enemies], np.float64)
     velocities = np.array([(e.vx, e.vy) for e in enemies], np.float64)
-    paths = _paths(boxes, velocities, _solid_array(solids), frames)
+    # (the screen's edge stops Mario only: walkers walk off the screen)
+    paths = _paths(boxes, velocities, _solid_array([s for s in solids if s.kind != "edge"]), frames)
     for e, path in zip(enemies, paths):
         e.path = path
 
@@ -139,7 +147,8 @@ def enemy_paths(enemies: Sequence[Enemy], solids: Sequence[Solid], frames: int) 
 class Goal:
     """What the chooser asked for: "land" on the thing ``ref`` whose top is
     ``top``, inside x0..x1 by INSET (matched by where it is: the slots
-    renumber as the camera scrolls), "stomp" the enemy ``ref``, or "pass" it
+    renumber as the camera scrolls; ``top`` None: on whatever lies there,
+    a staircase's steps), "stomp" the enemy ``ref``, or "pass" it
     (land on its ``side``, 1 right of it, -1 left, PASS_GAP clear of where
     it is at the landing, without touching it: a walker coming at Mario can
     pass under a jump). ``prefer``: where on a landing, "near", "middle" or
@@ -213,18 +222,20 @@ def screen_edge(camera: float) -> Solid:
 
 
 def floor_behind(solids: Sequence[Solid], enemies: Sequence[Enemy]) -> list:
-    """``solids`` with each gap in the floor that an enemy standing in it
-    hides (no wider than HIDDEN_GAP, the enemy's middle inside it, its feet
-    at the floor's height) joined: in 1-1 a Goomba drawn over the ground
-    split it, a pit to the chooser."""
+    """``solids`` with each gap in the floor that enemies standing in it
+    hide (no wider than HIDDEN_GAP for each, their middles inside it, their
+    feet at the floor's height) joined: in 1-1 a Goomba drawn over the ground
+    split it, a pit to the chooser (and a pair of them, side by side, a pit
+    two Goombas wide)."""
     grounds = sorted((s for s in solids if s.kind == "ground"), key=lambda s: s.x0)
     joined = []
     for s in grounds:
         last = joined[-1] if joined else None
-        if last is not None and abs(last.top - s.top) <= 2 and 0 < s.x0 - last.x1 <= HIDDEN_GAP and any(
+        hiding = 0 if last is None else sum(
             last.x1 <= (e.box[0] + e.box[2]) / 2 <= s.x0 and -2 <= last.top - e.box[3] <= HIDDEN_FEET
             for e in enemies
-        ):
+        )
+        if hiding and abs(last.top - s.top) <= 2 and 0 < s.x0 - last.x1 <= HIDDEN_GAP * hiding:
             joined[-1] = Solid(last.x0, last.top, s.x1, last.bottom, "ground", last.ref)
         else:
             joined.append(s)
@@ -330,12 +341,31 @@ def _blocked(x, width, top, feet, solids):
 
 
 @njit(cache=True)
+def _floor_under(x0, x1, feet, solids):
+    """The top of a solid under x0..x1 that ``feet`` stand on; -1 if none."""
+    for i in range(solids.shape[0]):
+        if x0 < solids[i, 2] and solids[i, 0] < x1 and abs(solids[i, 1] - feet) <= 0.5:
+            return solids[i, 1]
+    return -1.0
+
+
+@njit(cache=True)
 def _paths(boxes, velocities, solids, frames):
     out = np.empty((boxes.shape[0], frames + 1, 4))
     for e in range(boxes.shape[0]):
         x0, y0, x1, y1 = boxes[e, 0], boxes[e, 1], boxes[e, 2], boxes[e, 3]
         vx, vy = velocities[e, 0], velocities[e, 1]
         out[e, 0] = (x0, y0, x1, y1)
+        # A walker standing on something (its feet up to FEET_BELOW under its
+        # box) falls once it walks off it; one already in the air keeps its
+        # own motion.
+        offset = -3.0
+        for i in range(solids.shape[0]):
+            if (x0 < solids[i, 2] and solids[i, 0] < x1
+                    and -2.0 <= solids[i, 1] - y1 <= FEET_BELOW + 2.0):
+                offset = solids[i, 1] - y1
+                vy = 0.0
+                break
         for k in range(1, frames + 1):
             nx0, nx1 = x0 + vx, x1 + vx
             if vx != 0.0:
@@ -345,7 +375,22 @@ def _paths(boxes, velocities, solids, frames):
                         vx = -vx
                         nx0, nx1 = x0 + vx, x1 + vx
                         break
-            x0, x1, y0, y1 = nx0, nx1, y0 + vy, y1 + vy
+            if offset >= -2.0 and _floor_under(nx0, nx1, y1 + offset, solids) < 0:
+                vy = min(vy + ENEMY_GRAVITY, ENEMY_FALL)
+                feet, landed = y1 + offset + vy, -1.0
+                for i in range(solids.shape[0]):
+                    if (nx0 < solids[i, 2] and solids[i, 0] < nx1
+                            and y1 + offset <= solids[i, 1] <= feet):
+                        landed = solids[i, 1]
+                        break
+                dy = vy if landed < 0 else landed - (y1 + offset)
+                if landed >= 0:
+                    vy = 0.0
+            elif offset >= -2.0:
+                dy = 0.0
+            else:
+                dy = vy
+            x0, x1, y0, y1 = nx0, nx1, y0 + dy, y1 + dy
             out[e, k] = (x0, y0, x1, y1)
     return out
 
@@ -509,8 +554,8 @@ def _meets(goal: Goal, outcome: Outcome, enemies: Sequence[Enemy] = ()) -> Optio
             return None
         return min(beyond, 64.0)
     solid = outcome.solid
-    if (outcome.end != "landed" or abs(solid.top - goal.top) > STAND + 1
-            or not _overlap(solid.x0, solid.x1, goal.x0, goal.x1)):
+    if (outcome.end != "landed" or not _overlap(solid.x0, solid.x1, goal.x0, goal.x1)
+            or (goal.top is not None and abs(solid.top - goal.top) > STAND + 1)):
         return None
     inset = min(INSET, max(NARROW_KEEP, (goal.x1 - goal.x0) / 2 - NARROW_KEEP))
     left, right = goal.x0 + inset, goal.x1 - inset

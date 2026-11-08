@@ -309,6 +309,7 @@ class MarioScenarioEnv:
         self.watched_labels = []  # ... and their true labels, for teachers only
         self.watched_truth = []  # ... and the simulator's state then (true_frame)
         self.camera_x = 0.0
+        self.scroll_x = width // 3
         self.score = 0
         self.steps = 0
         self.max_steps = 1000
@@ -355,6 +356,9 @@ class MarioScenarioEnv:
             }
 
         self.world_width = scenario.get("world_width", self.width)
+        # Where on screen the camera keeps Mario's left side as it scrolls
+        # (the real game's is about 115: stages/block_smb/game_levels.py).
+        self.scroll_x = int(scenario.get("scroll_x", self.width // 3))
         # Long composed layouts state how many frames their route may take.
         self.frame_budget = int(scenario.get("frame_budget", 320))
         self.max_steps = max(1000, self.frame_budget)
@@ -511,7 +515,7 @@ class MarioScenarioEnv:
         # The initial observation must use the same camera placement as step().
         # Otherwise the first stationary frame appears to move Mario sideways.
         self.camera_x = max(
-            0.0, min(self.mario["x"] - self.width // 3, self.world_width - self.width)
+            0.0, min(self.mario["x"] - self.scroll_x, self.world_width - self.width)
         )
         obs = self.render()
         # Pre-episode frames (scenario "watch_frames"): the world runs while
@@ -691,10 +695,12 @@ class MarioScenarioEnv:
                 and horizontal_overlap
                 and previous_bottom <= r.top <= current_bottom
             )
+            # A head reaching a block's bottom edge has not hit it (the block
+            # fills the rows above it, as in the game and the planner).
             hit_ceiling = (
                 self.mario["vy"] < 0
                 and horizontal_overlap
-                and previous_y >= r.bottom >= self.mario["y"]
+                and previous_y >= r.bottom > self.mario["y"]
             )
             if mario_rect.colliderect(r) or landed_on_top or hit_ceiling:
                 if self.mario["vy"] >= 0:  # falling / level
@@ -732,7 +738,7 @@ class MarioScenarioEnv:
             self._airborne_started_with_jump = False
 
         # ── 10. Camera (right-only scroll, clamped) ───────────────────────────
-        target_cam = self.mario["x"] - self.width // 3
+        target_cam = self.mario["x"] - self.scroll_x
         if target_cam > self.camera_x:
             self.camera_x = target_cam
         self.camera_x = max(0.0, min(self.camera_x, self.world_width - self.width))
