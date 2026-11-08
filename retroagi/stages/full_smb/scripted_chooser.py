@@ -327,17 +327,19 @@ class PerceivedState:
 
 
 class ScriptedPlayer:
-    """The scripted chooser and the controller as an obstacle bench player,
-    on game memory, or on perception with ``vision`` (a Full SMB vision
-    model)."""
+    """A chooser (``make_chooser(mode)``: the scripted chooser by default,
+    or core/outcome_chooser's) and the controller as an obstacle bench
+    player, on game memory, or on perception with ``vision`` (a Full SMB
+    vision model)."""
 
-    def __init__(self, level: str = "Level1-1", vision=None):
+    def __init__(self, level: str = "Level1-1", vision=None, make_chooser=None):
         self.source = TruthState(level) if vision is None else PerceivedState(vision)
         self.controller = Controller()
+        self.make_chooser = make_chooser or ScriptedChooser
 
     def reset(self, seed: int, mode: str) -> None:
         self.source.reset()
-        self.chooser = ScriptedChooser(mode)
+        self.chooser = self.make_chooser(mode)
         self.controller = Controller()
         self.last_event, self.last_choice = None, None
 

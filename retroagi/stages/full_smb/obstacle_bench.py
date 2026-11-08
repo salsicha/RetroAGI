@@ -15,7 +15,9 @@ play it.
 ``--player scripted``: the hand-written chooser reading game memory with the
 choose-and-control controller (scripted_chooser), testing the controller
 alone; ``--player scripted_vision``: the same on what the Full SMB vision
-shows and the executor estimates.
+shows and the executor estimates. With ``--model OUTCOME.pt`` the chooser is
+instead the three rules on that outcome network's predictions
+(core/outcome_chooser.py; trained in Block SMB only).
 """
 
 import argparse
@@ -122,6 +124,7 @@ def main(argv=None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     parser.add_argument("--bench", type=Path, required=True)
     parser.add_argument("--player", choices=("layered", "scripted", "scripted_vision"), default="layered")
+    parser.add_argument("--model", help="an outcome network: choose by the three rules on its predictions")
     parser.add_argument("--checkpoint")
     parser.add_argument("--tracker")
     parser.add_argument("--runs", type=int, default=4)
@@ -137,7 +140,14 @@ def main(argv=None) -> int:
             from .vision import load_full_vit_checkpoint
 
             vision = load_full_vit_checkpoint("data/full_vit/full_vit_scene.pth", device="cuda").model.eval()
-        make_player = lambda: ScriptedPlayer(level, vision)  # noqa: E731
+        make_chooser = None
+        if args.model:
+            from retroagi.core.outcome_chooser import OutcomeChooser
+            from retroagi.stages.block_smb.outcome_train import load_model
+
+            model = load_model(args.model, "cuda")
+            make_chooser = lambda mode: OutcomeChooser(model, mode, "cuda")  # noqa: E731
+        make_player = lambda: ScriptedPlayer(level, vision, make_chooser)  # noqa: E731
     else:
         if not (args.checkpoint and args.tracker):
             parser.error("the layered player needs --checkpoint and --tracker")

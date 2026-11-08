@@ -17,7 +17,8 @@ in one pass (smb_choices.candidates, outcome_network.predict). Then:
 Waiting and retreating come out of the rules: when every forward choice
 risks death, a wait or a step back that does not is the one kept. A choice
 the executor has just ended at once (blocked, infeasible) is not taken again
-from the same place.
+from the same place, and with nothing on screen moving a wait is not
+followed by another.
 """
 
 import numpy as np
@@ -48,6 +49,10 @@ class OutcomeChooser:
             # The choice that just ended at once is not taken again from the
             # same place (a blocked run was taken 6,000 times at a wall).
             feasible &= np.array([choice != last for choice, _, _, _ in options])
+        if last_event == "waited" and not state.enemies:
+            # Nothing on screen moves: waiting again changes nothing (Mario
+            # waited 689 times on a staircase).
+            feasible &= np.array([choice.verb != "wait" for choice, _, _, _ in options])
         if not feasible.any():
             feasible = np.ones(len(p), bool)
         risk = np.where(feasible, p[:, DEATH], np.inf)

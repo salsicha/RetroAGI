@@ -9,8 +9,8 @@ the state is put back (the choices: core/smb_choices.py). Its outcome
 it, or after it, buttons released, until he has stood WINDOW frames (the
 chooser's first rule: not dying soon after either), how far right it took
 him and in how many frames, the points it gained, whether he reached the
-flag, and whether it left him stuck: no forward choice from there (probes)
-feasible, safe and getting him on (one choice at a time, the chooser
+flag, and whether it left him stuck: no forward choice from where it ended
+(probes, Mario's speed kept) feasible, safe and getting him on (one choice at a time, the chooser
 walked into a valley between staircases and waited there).
 
 The states come from play on random levels by the scripted chooser
@@ -99,6 +99,7 @@ def outcome(env, source: BlockTruthState, choice: Choice, probe: bool = True) ->
             break
         state = source.read(env)
     progress = env.mario["x"] - x0
+    ended = snapshot_env_state(env) if probe else None  # where the probes start, Mario's speed kept
     died_after = False
     if not (died or finished):
         standing = 0
@@ -113,11 +114,14 @@ def outcome(env, source: BlockTruthState, choice: Choice, probe: bool = True) ->
                 break
     stuck = died or died_after
     if probe and not (stuck or finished):
+        # Probed from where the choice ended, not after the window: standing
+        # there first, Mario slid to rest, and a landing on a step at speed,
+        # a jump across ready, was taken for a dead end.
         stuck = True
-        snapshot = snapshot_env_state(env)
+        restore_env_state(env, ended)
         for option in probes(source.read(env)):
             r = outcome(env, source, option, probe=False)
-            restore_env_state(env, snapshot)
+            restore_env_state(env, ended)
             if r[2] > 0 and ENDS[int(r[-1])] != "infeasible" and not (r[0] or r[1]) and r[3] >= STUCK_PROGRESS:
                 stuck = False
                 break

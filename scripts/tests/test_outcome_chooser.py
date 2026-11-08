@@ -75,3 +75,15 @@ def test_a_choice_leaving_mario_stuck_gives_way_to_one_that_does_not(monkeypatch
     # staircase is slower but leaves a way on.
     rows = {(3, 1): row(progress=40, frames=20, stuck=0.9), (3, 2): row(progress=-30, frames=30)}
     assert choose(monkeypatch, "speed_run", rows) == (3, 2)
+
+
+def test_with_nothing_moving_a_wait_is_not_followed_by_another(monkeypatch):
+    rows = {(4, 0): row(progress=1, frames=8), (3, 2): row(progress=-30, frames=30)}
+    still = State(body=STATE.body, motion=STATE.motion, grounded=True, solids=[FLOOR], enemies=[])
+    monkeypatch.setattr(outcome_chooser, "predict", lambda model, tokens, choices, device: np.array(
+        [rows.get((k, m), row()) if (k, m) in rows else np.array([0, 1, 0, 0, 0, 16, 0], np.float32)
+         for k, _, m in choices], np.float32))
+    chooser = OutcomeChooser(None, "speed_run")
+    first = chooser.decide(still)
+    assert first.verb == "wait"
+    assert chooser.decide(still, "waited", first).verb == "run"
