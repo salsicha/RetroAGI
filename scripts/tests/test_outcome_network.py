@@ -49,6 +49,7 @@ def test_the_network_learns_a_handful_of_outcomes():
     slot = torch.tensor([0, 1, -1, -1, -1, -1])
     modifier = torch.tensor([1, 1, 0, 2, 0, 1])
     outcomes = np.zeros((6, len(OUTCOME_FIELDS)), np.float32)
+    outcomes[:, OUTCOME_FIELDS.index("frames")] = 20.0  # (none ended at once: all feasible)
     outcomes[1, OUTCOME_FIELDS.index("died")] = 1.0  # the second landing kills
     outcomes[2, OUTCOME_FIELDS.index("progress")] = 32.0
     target = torch.as_tensor(targets(outcomes))
