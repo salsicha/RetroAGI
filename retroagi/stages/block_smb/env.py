@@ -229,6 +229,9 @@ class MarioScenarioEnv:
     enemies       : list of [x, y, patrol_min, patrol_max] or
                     [x, y, patrol_min, patrol_max, speed] or
                     dict with keys x,y,patrol_min,patrol_max,speed,edge_aware;
+                    a dict with "game_rules": True follows the real game's
+                    rules instead (no patrol: it wakes when on screen, walks
+                    at 0.5 px a frame, turns at walls, falls off ledges);
                     a piranha_plant uses kind,x,pipe_top and optional cycle durations
                     (it stays down while Mario is near it: piranha.WAITS_NEAR);
                     kind "monster" is a large walker that cannot be stomped
@@ -1339,8 +1342,9 @@ class MarioScenarioEnv:
                 enemy["plant_tick"] += 1
             position_plant(enemy)
             return
-        if enemy.get("kind") == "monster" and not enemy.get("awake"):
-            # Like NES enemies, a monster starts moving once it is on screen.
+        if (enemy.get("kind") == "monster" or enemy.get("game_rules")) and not enemy.get("awake"):
+            # Like NES enemies, a monster (and any enemy under the game's
+            # rules) starts moving once it is on screen.
             if enemy["x"] >= self.camera_x + self.width:
                 return
             enemy["awake"] = True
@@ -1363,6 +1367,13 @@ class MarioScenarioEnv:
                 step_x = enemy["speed"] * enemy["direction"]
 
         enemy["x"] += step_x
+        if enemy.get("game_rules") and step_x:
+            # The game's walkers turn back when they walk into a wall (a pipe,
+            # a step): its side, above their feet.
+            body = pygame.Rect(enemy["x"], enemy["y"], enemy["w"], enemy["h"])
+            if any(body.colliderect(r) and r.top < body.bottom - 2 for r in platform_rects):
+                enemy["x"] -= step_x
+                enemy["direction"] *= -1
 
         # Clamp to explicit patrol bounds (still respected when edge_aware=True)
         if enemy["x"] <= enemy["patrol_min"]:
@@ -1458,12 +1469,16 @@ class MarioScenarioEnv:
         kind = e.get("kind") if isinstance(e, dict) else None
         if kind not in (None, "monster"):
             raise ValueError(f"unknown enemy kind {kind!r}")
+        game_rules = isinstance(e, dict) and bool(e.get("game_rules", False))
         if isinstance(e, dict):
             x, y = float(e["x"]), float(e["y"])
-            pmin, pmax = float(e["patrol_min"]), float(e["patrol_max"])
-            speed = float(e.get("speed", 1.5))
+            # Under the game's rules there is no patrol: walls turn the
+            # walker and ledges let it fall.
+            pmin = float(e.get("patrol_min", -1e9 if game_rules else x))
+            pmax = float(e.get("patrol_max", 1e9 if game_rules else x))
+            speed = float(e.get("speed", 0.5 if game_rules else 1.5))
             edge_aware = bool(e.get("edge_aware", False))
-            direction = int(e.get("direction", 1))
+            direction = int(e.get("direction", -1 if game_rules else 1))
         else:
             x, y = float(e[0]), float(e[1])
             pmin, pmax = float(e[2]), float(e[3])
@@ -1488,6 +1503,7 @@ class MarioScenarioEnv:
             "edge_aware": edge_aware,
             "on_ground": False,
             "dead": False,
+            **({"game_rules": True} if game_rules else {}),
         }
 
     # ── Procedural level generator ────────────────────────────────────────────
