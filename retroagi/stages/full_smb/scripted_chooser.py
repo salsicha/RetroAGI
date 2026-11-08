@@ -10,15 +10,18 @@ velocities averaged over their last SPEED_FRAMES frames (a Goomba walks half
 a pixel a frame, as 0 and 1 by turns: one frame's move says 0 or 1). ScriptedChooser decides at each of the
 controller's events, looking ahead from Mario:
 - an enemy ahead within ENEMY_AHEAD, or coming from behind within
-  BEHIND: stomp it (max points) or pass it (speed run), passing when a
-  stomp is infeasible, waiting a moment when neither is feasible;
+  BEHIND, with no raised thing between: stomp it (max points) or pass it
+  (speed run), passing when a stomp is infeasible, waiting a moment when
+  neither is feasible;
 - a raised thing ahead within RAISED_AHEAD (a pipe, a step): land on it;
 - the floor ending within PIT_AHEAD at a pit: land beyond it, across at
-  the same height within ACROSS before down into what lies between;
+  the same height within ACROSS before down into what lies between (a
+  floor followed at once by something lower is a step down, run off);
 - standing on something raised whose end is near: land on what follows;
 - else run on toward the next of these, keeping speed into a jump.
 A jump found infeasible is followed by a run closer to its target, or, at
-a thing Mario touches, a step back (STEP_BACK) for room.
+a thing Mario touches, a step back (STEP_BACK) for room. No run ends past
+the end of the floor Mario stands on (EDGE before it).
 ScriptedPlayer plays it through the controller for the obstacle bench,
 deciding only while Mario stands (a plan made in the air would start from
 a standing jump), on game memory (TruthState) or, with ``vision``, on what
@@ -28,9 +31,9 @@ perceived): the difference is what perception costs the controller.
 
 from typing import Optional
 
-from retroagi.core.smb_controller import MEASURED, WALK, Choice, Controller, State, perceived
+from retroagi.core.smb_controller import ARRIVE, MEASURED, WALK, Choice, Controller, State, perceived
 from retroagi.core.smb_physics import NESPlayerMotion
-from retroagi.core.smb_planner import Enemy, Goal, solids_of
+from retroagi.core.smb_planner import Enemy, Goal, floor_behind, solids_of
 from retroagi.core.smb_scene_labels import scene_from_labels
 
 from .pixel_labels import PLAYER_FLOAT_STATE, Unexplained, label_frame
@@ -48,10 +51,16 @@ PIT_AHEAD = 48
 ACROSS = 64
 # How far before a target an infeasible jump's run stops (pixels).
 CLOSER = 40
+# A run on a floor ending at a pit stops with Mario's middle this far
+# before the floor's end (pixels): his front foot stays on it.
+EDGE = 8
 # The longest stretch a plain run covers before deciding again (pixels).
 RUN_STRETCH = 96
 # A raised thing: its top this far above Mario's feet or more.
 RAISE = 4
+# A floor followed by something at most this much lower is a step down,
+# walked off (pixels: one block).
+STEP_DOWN = 16
 # Enemies whose feet are this close to Mario's feet's height are on his way.
 SAME_LEVEL = 24
 # The solids are labelled again once the camera has scrolled this far
@@ -91,13 +100,12 @@ class TruthState:
             or abs(truth["camera"] - camera) >= LABEL_SCROLL
             or self.frame - then >= LABEL_FRAMES
         )
-        if self.previous_state is not None and due:
+        labelling = self.previous_state is not None and due
+        if labelling:
             try:
                 labelled = label_frame(game.raw, self.previous_state, now, family=self.level)
-                self.solids = solids_of(scene_from_labels(labelled.scene), truth["camera"])
-                self.labelled_at = (truth["camera"], self.frame)
             except Unexplained:
-                pass
+                labelling = False
         self.previous_state = now
         self.frame += 1
         enemies = []
@@ -118,9 +126,13 @@ class TruthState:
             else:
                 vx, vy = (-WALK if box[0] > truth["mario"][0] else WALK), 0.0
             enemies.append(Enemy(tuple(float(v) for v in box), vx, vy, ("slots", k), slot["stompable"]))
+        if labelling:
+            # The enemies drawn in the labelled frame hide the floor under them.
+            self.solids = floor_behind(solids_of(scene_from_labels(labelled.scene), truth["camera"]), enemies)
+            self.labelled_at = (truth["camera"], self.frame - 1)
         return State(
             body=tuple(float(v) for v in truth["mario"]),
-            motion=NESPlayerMotion.from_ram(ram),
+            motion=NESPlayerMotion.from_ram(ram, top=truth["mario"][1]),
             grounded=int(ram[PLAYER_FLOAT_STATE]) == 0,
             solids=list(self.solids),
             enemies=enemies,
@@ -129,6 +141,25 @@ class TruthState:
 
 def _middle(box) -> float:
     return (box[0] + box[2]) / 2
+
+
+def _steps_down(state: State, under) -> bool:
+    """Whether something at most STEP_DOWN lower carries on right after the
+    end of ``under`` (a staircase down): walking off it is safe (a pipe's
+    end, with the floor far below, is jumped down from, its landing checked
+    against enemies)."""
+    after = under.x1 + 2
+    return any(s.x0 <= after < s.x1 and 0 < s.top - under.top <= STEP_DOWN and s.kind != "block"
+               for s in state.solids)
+
+
+def _walled_off(state: State, mx: float, feet: float, enemy) -> bool:
+    """Whether a raised thing (a pipe, a step) stands between Mario and
+    ``enemy``: the thing comes first (and turns a walker back)."""
+    x = _middle(enemy.box)
+    lo, hi = min(mx, x), max(mx, x)
+    return any(s.kind in ("pipe", "ground") and s.top < feet - RAISE and s.x0 < hi and lo < s.x1
+               for s in state.solids)
 
 
 class ScriptedChooser:
@@ -140,6 +171,13 @@ class ScriptedChooser:
     def decide(self, state: State, last_event: Optional[str], last: Optional[Choice]) -> Choice:
         body = state.body
         mx, feet = _middle(body), body[3]
+        standing = [s for s in state.solids if s.x0 <= mx <= s.x1 and abs(s.top - feet) <= 2]
+        under = standing[0] if standing else None
+        # Where the floor ends at a pit (not a step down onto something
+        # lower right after it), no run ends beyond it (a run 40 pixels short
+        # of the far side's landing ran into the pit).
+        pit = under is not None and not _steps_down(state, under)
+        edge = under.x1 - EDGE if pit else float("inf")
         if last_event == "infeasible" and last is not None and last.goal is not None:
             if last.goal.kind == "stomp":
                 enemy = next((e for e in state.enemies if e.ref == last.goal.ref), None)
@@ -148,9 +186,9 @@ class ScriptedChooser:
                     return Choice("jump", Goal("pass", enemy.ref, side=side))
             if last.goal.kind == "pass":
                 return Choice("wait", frames=8)
-            target = last.goal.x0
-            if target - mx > CLOSER:
-                return Choice("run", x=target - CLOSER, keep_speed=True)
+            closer = min(last.goal.x0 - CLOSER, edge)
+            if closer - mx > ARRIVE:
+                return Choice("run", x=closer, keep_speed=True)
             return Choice("run", x=mx - STEP_BACK)
         ahead = [
             e for e in state.enemies
@@ -159,6 +197,7 @@ class ScriptedChooser:
                 0 < _middle(e.box) - mx < ENEMY_AHEAD
                 or (-BEHIND < _middle(e.box) - mx <= 0 and e.vx > 0)
             )
+            and not _walled_off(state, mx, feet, e)
         ]
         if ahead:
             enemy = min(ahead, key=lambda e: abs(_middle(e.box) - mx))
@@ -166,8 +205,6 @@ class ScriptedChooser:
                 return Choice("jump", Goal("stomp", enemy.ref))
             # Beyond it: ahead of Mario over it forward, from behind backward.
             return Choice("jump", Goal("pass", enemy.ref, side=1 if _middle(enemy.box) >= mx else -1))
-        standing = [s for s in state.solids if s.x0 <= mx <= s.x1 and abs(s.top - feet) <= 2]
-        under = standing[0] if standing else None
         raised = sorted(
             (s for s in state.solids
              if s.kind in ("pipe", "ground") and s.top < feet - RAISE and -4 < s.x0 - mx < RAISED_AHEAD),
@@ -175,8 +212,8 @@ class ScriptedChooser:
         )
         if raised:
             s = raised[0]
-            return Choice("jump", Goal("land", s.ref, s.x0, s.x1))
-        if under is not None and under.x1 - mx < PIT_AHEAD:
+            return Choice("jump", Goal("land", s.ref, s.x0, s.x1, top=s.top))
+        if pit and under.x1 - mx < PIT_AHEAD:
             beyond = sorted((s for s in state.solids if s.x0 >= under.x1 - 2 and s.kind != "block"),
                             key=lambda s: s.x0)
             # Across at the same height (from one staircase to the next)
@@ -185,13 +222,15 @@ class ScriptedChooser:
             if beyond:
                 s = level[0] if level else beyond[0]
                 prefer = "near" if s.top >= feet - RAISE else "middle"
-                return Choice("jump", Goal("land", s.ref, s.x0, s.x1, prefer=prefer))
+                return Choice("jump", Goal("land", s.ref, s.x0, s.x1, prefer=prefer, top=s.top))
         targets = [s.x0 for s in state.solids if s.x0 > mx + 8 and s.kind in ("pipe", "ground") and s.top < feet - RAISE]
         if under is not None:
             targets.append(under.x1)
         target = min([t for t in targets if t > mx + 8] + [mx + RUN_STRETCH])
-        return Choice("run", x=min(target - CLOSER, mx + RUN_STRETCH) if target - CLOSER > mx + 8 else mx + 16,
-                      keep_speed=True)
+        x = min(target - CLOSER, mx + RUN_STRETCH) if target - CLOSER > mx + 8 else mx + 16
+        if min(x, edge) - mx <= ARRIVE:
+            return Choice("wait", frames=8)  # at a floor's end, its far side not yet seen
+        return Choice("run", x=min(x, edge), keep_speed=True)
 
 
 class PerceivedState:

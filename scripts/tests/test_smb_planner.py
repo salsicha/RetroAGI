@@ -2,9 +2,11 @@
 1): rollouts with the NES motion model checked against the scene, the jump
 planner's goals and its "infeasible" answer, and the controller's runs."""
 
+from copy import copy
+
 from retroagi.core.smb_controller import Choice, Controller, State, stopping_distance
 from retroagi.core.smb_physics import NESPlayerMotion
-from retroagi.core.smb_planner import INSET, Enemy, Goal, Solid, plan_jump, rollout
+from retroagi.core.smb_planner import INSET, Enemy, Goal, Solid, floor_behind, plan_flight, plan_jump, rollout
 
 FLOOR = Solid(0, 208, 4000, 240, "ground", ("surfaces", 0))
 STANDING = (100.0, 192.0, 112.0, 208.0)  # Mario's body on the floor
@@ -33,17 +35,20 @@ def test_a_rollout_lands_hits_walls_and_bumps_blocks():
 
 def test_the_planner_lands_on_a_pipe_inside_its_ends():
     solids = [FLOOR, pipe(150, 176)]
-    plan = plan_jump(Goal("land", ("pipes", 0), 150, 182), NESPlayerMotion(), STANDING, solids, [], 1)
+    plan = plan_jump(Goal("land", ("pipes", 0), 150, 182, top=176), NESPlayerMotion(), STANDING, solids, [], 1)
     assert plan is not None and plan.outcome.end == "landed"
     middle = (plan.outcome.body[0] + plan.outcome.body[2]) / 2
     assert 150 + INSET <= middle <= 182 - INSET
     assert plan.outcome.body[3] == 176
     assert len(plan.buttons) == plan.outcome.frame + 1
+    # The same pipe in another slot (relabelled after a scroll) is the same goal.
+    renumbered = [FLOOR, pipe(150, 176, slot=3)]
+    assert plan_jump(Goal("land", ("pipes", 0), 150, 182, top=176), NESPlayerMotion(), STANDING, renumbered, [], 1)
 
 
 def test_too_far_is_infeasible():
     solids = [FLOOR, pipe(900, 144)]
-    assert plan_jump(Goal("land", ("pipes", 0), 900, 932), NESPlayerMotion(), STANDING, solids, [], 1) is None
+    assert plan_jump(Goal("land", ("pipes", 0), 900, 932, top=144), NESPlayerMotion(), STANDING, solids, [], 1) is None
 
 
 def test_stomping_and_passing_a_walker():
@@ -107,3 +112,43 @@ def test_the_compiled_motion_matches_the_motion_model():
             assert [int(getattr(motion, f)) for f in _MOTION_FIELDS] == list(array)
             y += expected[1]
             grounded = rng.random() < 0.5
+
+
+def test_a_flight_is_corrected_when_an_enemy_wakes_where_it_lands():
+    walker = Enemy((170.0, 194.0, 186.0, 208.0), -0.5, 0.0, ("slots", 0))
+    goal = Goal("pass", ("slots", 0), side=1)
+    plan = plan_jump(goal, NESPlayerMotion(), STANDING, [FLOOR], [walker], 1)
+    # Played to the middle of the flight.
+    motion, (x0, y0, x1, y1), airborne = NESPlayerMotion(), STANDING, False
+    for button in plan.buttons[: plan.pre_run + 12]:
+        dx, dy, jumped = motion.advance(direction=1, jump=button in (2, 4, 5), grounded=not airborne, y=y0, run=True)
+        airborne = airborne or jumped
+        x0, x1, y0, y1 = x0 + dx, x1 + dx, y0 + (dy if airborne else 0), y1 + (dy if airborne else 0)
+    body, frame = (x0, y0, x1, y1), plan.pre_run + 12
+    walker_now = Enemy(walker.at(frame), -0.5, 0.0, ("slots", 0))
+    rest = plan.buttons[frame:]
+    hold_left = next((k for k, b in enumerate(rest) if b not in (2, 4, 5)), len(rest))
+    # Nothing new: the jump goes on as planned.
+    aim = (plan.outcome.body[0] + plan.outcome.body[2]) / 2
+    same = plan_flight(goal, copy(motion), body, [FLOOR], [walker_now], 1, hold_left, aim)
+    assert same.buttons == rest[: len(same.buttons)]
+    # Something that cannot be stomped woken where Mario comes down: the
+    # correction lands clear of it.
+    landing = (plan.outcome.body[0] + plan.outcome.body[2]) / 2
+    woken = Enemy((landing - 8, 194.0, landing + 8, 208.0), 0.0, 0.0, ("slots", 1), stompable=False)
+    as_planned = rollout(copy(motion), body, 0, hold_left, 1, [FLOOR], [walker_now, woken], airborne=True)
+    assert as_planned.end == "hit"
+    corrected = plan_flight(goal, copy(motion), body, [FLOOR], [walker_now, woken], 1, hold_left, aim)
+    assert corrected is not None and corrected.outcome.end == "landed"
+    assert corrected.buttons != rest[: len(corrected.buttons)]
+
+
+def test_a_floor_gap_an_enemy_stands_in_is_floor():
+    left, right = Solid(500, 208, 697, 240, "ground", ("surfaces", 0)), Solid(713, 208, 900, 240, "ground", ("surfaces", 1))
+    goomba = Enemy((700.0, 198.0, 710.0, 204.0), -0.5, 0.0, ("slots", 0))
+    floor = [s for s in floor_behind([left, right], [goomba]) if s.kind == "ground"]
+    assert [(s.x0, s.x1, s.ref) for s in floor] == [(500, 900, ("surfaces", 0))]
+    # A real pit, or an enemy elsewhere, keeps the gap.
+    assert len(floor_behind([left, right], [])) == 2
+    falling = Enemy((700.0, 220.0, 710.0, 226.0), -0.5, 1.0, ("slots", 0))
+    assert len(floor_behind([left, right], [falling])) == 2

@@ -33,11 +33,19 @@ class NESPlayerMotion:
     running_timer: int = 0
 
     @classmethod
-    def from_ram(cls, ram):
+    def from_ram(cls, ram, top=None):
+        """The motion in game memory. In the air its jump origin and whether
+        A was held last frame decide the gravity; the origin is kept in the
+        units of the ``y`` advance is given, so ``top`` (the y advance will
+        be given now; default the game's own Player_Y_Position) places it."""
+
         def signed(n):
             return int(n) if n < 128 else int(n) - 256
 
+        y = int(ram[0xCE])
         return cls(
+            origin_y=int(ram[0x708]) - y + (y if top is None else int(top)),
+            previous_jump=bool(ram[0x0D] & 0x80),
             x_speed=signed(ram[0x57]),
             x_accumulator=int(ram[0x705]),
             x_fraction=int(ram[0x400]),

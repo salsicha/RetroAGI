@@ -20,7 +20,9 @@ woken together, each run of steps, and the flag. Each starts from the kept
 state at its approach point: APPROACH pixels before a pipe, a pit, steps or
 the flag; for enemies, just before Mario's scroll wakes the first of them.
 A start is usable (usable) when Mario stands through STILL_FRAMES frames of
-standing still and no enemy is within CLEAR pixels of him; otherwise the
+standing still, no enemy is within CLEAR pixels of him and he is at least
+SCREEN_LEFT pixels from the screen's left edge (where the player had walked
+back to it, vision misread the cut-off things beside him); otherwise the
 nearest usable kept state before it is taken (memory can read "standing" a
 frame before a fall, and the enemies of one group are still about at the
 next one's start).
@@ -63,6 +65,7 @@ SCREEN_WIDTH, SCREEN_HEIGHT = 256, 240
 # A start's check: frames of standing still, and how near an enemy may be.
 STILL_FRAMES = 8
 CLEAR = 64
+SCREEN_LEFT = 40
 
 
 @dataclass
@@ -129,7 +132,7 @@ def sweep(level: str, *, seed: int = 1, frames: int = 60_000, every: int = 4):
         bucket = truth["level_x"] // BUCKET
         resting = int(ram[PLAYER_FLOAT_STATE]) == 0 and int(ram[PLAYER_X_SPEED]) == 0
         if bucket not in states and resting and not _dying(ram):
-            states[bucket] = before
+            states[bucket] = after  # the state whose memory was just read
         camera = truth["camera"]
         for k, slot in enumerate(truth["slots"]):
             if slot["active"] and not awake[k]:
@@ -235,8 +238,9 @@ def obstacles_of(level_map: LevelMap) -> list:
 
 
 def usable(level: str, state: bytes) -> bool:
-    """Whether Mario, started from ``state``, stands still for STILL_FRAMES
-    frames alive and standing, with no enemy within CLEAR pixels."""
+    """Whether Mario, started from ``state`` at rest, stands still for
+    STILL_FRAMES frames alive and standing, at least SCREEN_LEFT pixels from
+    the screen's left edge, with no enemy within CLEAR pixels."""
     from .play import FullSMBGame
 
     game = FullSMBGame(level, state)
@@ -247,6 +251,10 @@ def usable(level: str, state: bytes) -> bool:
             truth = true_frame(ram, game.start)
             mario = truth["mario"]
             if _dying(ram) or int(ram[PLAYER_FLOAT_STATE]) != 0 or mario[3] > FLOOR_TOP:
+                return False
+            if frame == 0 and int(ram[PLAYER_X_SPEED]) != 0:
+                return False
+            if mario[0] - truth["camera"] < SCREEN_LEFT:
                 return False
             for slot in truth["slots"]:
                 box = slot["box"]

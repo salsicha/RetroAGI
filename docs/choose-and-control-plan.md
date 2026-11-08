@@ -95,4 +95,34 @@ Each phase ends with a measurement that decides whether to go on.
   stomp rule, the bounce, walking off ledges, narrow steps, the bench's
   starts). Next: the same chooser on perceived state (vision and the
   executor's estimates), then phase 2.
+- **Phase 1, 2026-11-08: truly resting starts and the fixes they showed.**
+  The bench had saved the game state from the frame *before* the one whose
+  memory said "at rest", so some starts were moving (1528's at half a
+  pixel a frame, which perception, starting from zero, could not know);
+  starts are now the checked frame's state, at rest, at least 40 pixels
+  from the screen's left edge (where vision drew cut-off things as a 3-pixel
+  pipe and an enemy). From those starts the game-memory player first
+  passed 71%; the fixes:
+  - a floor followed at once by something at most a block lower is a step
+    down, run off (jumping onto 16-pixel steps from rest slid off them),
+    while a pipe's end is still jumped down from with its landing checked;
+  - no run ends past the end of a floor at a pit (a "run closer" after an
+    infeasible jump aimed 40 pixels short of the far side: in the pit);
+  - an enemy with a pipe or step between it and Mario waits for the pipe
+    (Mario stood against 1-1's third pipe for 250 frames trying to pass a
+    Goomba beyond it);
+  - a gap in the floor labels exactly where an enemy stands is floor (the
+    Goomba drawn over the ground split it: a fake pit);
+  - in the air the controller checks its plan every 4 frames and corrects
+    it (held shorter, released or braking a few frames) when the landing no
+    longer meets the goal: Goombas woken by the scroll after takeoff waited
+    where Mario came down (smb_planner.plan_flight);
+  - game memory's motion now includes the jump's origin height and whether
+    A was held (0x708, bit 0x80 of 0x0D): without them a mid-air roll-out
+    kept the low gravity after A was released;
+  - land goals match their target by its top and place, not its slot (the
+    slots renumber as the camera scrolls; a mid-flight check took another
+    step for the target).
+  Result: all 24 obstacles in both modes, and 1-1 finished from its start:
+  speed run 2,017 frames, max points 2,109 frames (score 500).
 

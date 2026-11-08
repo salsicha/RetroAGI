@@ -7,7 +7,9 @@ A choice is a verb, the thing it is about and a coarse modifier:
 - "jump" to land on a still thing (``prefer``: near, middle or far), to
   stomp an enemy, or to pass it: planned by smb_planner (takeoff after some
   running, the jump-button hold) and played frame by frame, re-planned
-  while Mario is still on the ground, done when he stands again;
+  while Mario is still on the ground, checked every REPLAN_EVERY frames in
+  the air and corrected when its landing no longer meets the goal
+  (smb_planner.plan_flight), done when he stands again;
 - "run" to a level x: running there and braking so as to stop at it (the
   motion model's stopping distance), or keeping speed (``keep_speed``);
 - "wait": standing until an enemy is clear of a level x (``until_clear``),
@@ -25,12 +27,24 @@ from dataclasses import dataclass, field
 from typing import Optional
 
 from .smb_physics import NESPlayerMotion
-from .smb_planner import BUTTON, HORIZON, Enemy, Goal, Plan, blocked, plan_jump, solids_of
+from .smb_planner import (
+    BUTTON,
+    HORIZON,
+    Enemy,
+    Goal,
+    Plan,
+    blocked,
+    floor_behind,
+    plan_flight,
+    plan_jump,
+    solids_of,
+)
 
 # Frames of a planned jump after which the chooser decides again even if
 # Mario has not landed (a plan gone wrong).
 PLAN_SLACK = 24
-# Re-plan before takeoff every this many frames (the scene moves on).
+# Re-plan before takeoff, and check the flight after it, every this many
+# frames (the scene moves on).
 REPLAN_EVERY = 4
 # A run ends this close to its x (pixels).
 ARRIVE = 2
@@ -94,7 +108,7 @@ def perceived(feedback, scene) -> Optional[State]:
         else:
             vx, vy = (-WALK if world[0] > body[0] else WALK), 0.0
         enemies.append(Enemy(world, vx, vy, ("enemies", t.identity), stompable=t.kind == "walker"))
-    solids = solids_of(scene, camera)
+    solids = floor_behind(solids_of(scene, camera), enemies)
     resting = abs(feedback.feet_velocity) < 1 and any(
         s.x0 < body[2] and body[0] < s.x1 and abs(s.top - body[3]) <= 2 for s in solids
     )
@@ -177,6 +191,8 @@ class Controller:
             if self.event:
                 return 0
             plan, step = self.plan, self.frame - 1 - self.plan_frame
+        if taken_off and not state.grounded and (step - plan.pre_run) % REPLAN_EVERY == 0:
+            plan, step = self._check_flight(state, plan, step)
         if taken_off and state.grounded and step > plan.pre_run + 1:
             # Landed (or stomped and landed): the choice is done, whatever
             # buttons the plan had left.
@@ -191,6 +207,27 @@ class Controller:
                 return 0
             return BUTTON[plan.direction, False]
         return plan.buttons[step]
+
+    def _check_flight(self, state: State, plan: Plan, step: int) -> tuple:
+        """(plan, step) after checking the rest of the flight against the
+        state: the same when its landing still meets the goal, else the
+        correction (an enemy woken after takeoff waits where Mario comes
+        down). A goal whose enemy is gone (stomped, or off the screen)
+        becomes any safe landing."""
+        goal = self.choice.goal
+        if goal.kind != "land" and not any(e.ref == goal.ref for e in state.enemies):
+            goal = None
+        rest = plan.buttons[step:]
+        hold_left = next((k for k, b in enumerate(rest) if b not in (2, 4, 5)), len(rest))
+        aim = (plan.outcome.body[0] + plan.outcome.body[2]) / 2
+        flight = plan_flight(goal, state.motion, state.body, state.solids, state.enemies, plan.direction,
+                             hold_left, aim)
+        if flight is None or flight.buttons == rest[:len(flight.buttons)]:
+            return plan, step
+        if flight.outcome.stomped is None:
+            flight.outcome.stomped = plan.outcome.stomped  # a stomp already made counts
+        self.plan, self.plan_frame = flight, self.frame - 1
+        return flight, 0
 
     def _run(self, state: State) -> int:
         choice = self.choice
