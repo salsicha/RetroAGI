@@ -88,14 +88,18 @@ def outcome(env, source: BlockTruthState, choice: Choice, probe: bool = True) ->
             end = "timeout"
             break
         button = controller.press(state)
-        if controller.event is not None:
-            end = controller.event
-            break
+        # The frame on which the choice ends is played too, with the button it
+        # gives, as in play (game_levels.play): a run's "blocked" comes 2
+        # pixels short of the wall, and that frame stops Mario against it.
         _, _, terminated, truncated, info = env.step(button)
-        frames += 1
+        if controller.event is None or terminated:
+            frames += 1
         if terminated or truncated:
             died, finished = bool(info["death"]), bool(env._goal_credited)
             end = "died" if died else "finished" if finished else "timeout"
+            break
+        if controller.event is not None:
+            end = controller.event
             break
         state = source.read(env)
     progress = env.mario["x"] - x0
