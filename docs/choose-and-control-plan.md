@@ -191,4 +191,21 @@ Each phase ends with a measurement that decides whether to go on.
   at full speed (seed 43), the kind of risk the outcome network is to learn;
   max points on vision at Goomba pairs. Next: phase 3, outcome sampling
   from saved states on these levels.
+- **Phase 3, 2026-11-08: outcome sampling.** The choices
+  (retroagi/core/smb_choices.py): land near, middle or far on each of the
+  8 nearest surfaces, stomp each of the 4 nearest enemies or pass it
+  beyond or back, run 32 or 96 pixels forward keeping speed or 48 back,
+  wait 8 or 24 frames (about 20 to 35 at a decision). At every decision
+  point on a random level, retroagi/stages/block_smb/outcome_sampling.py
+  saves the simulator's state and plays every candidate from it through
+  the executor, then puts the state back, recording: how the choice ended,
+  death during it or after it (buttons released, until Mario has stood 16
+  frames, waiting up to 64 for him to come down), progress right, frames,
+  points, reaching the flag. The states come from the scripted chooser's
+  play, a random candidate instead 30% of the time. The simulator no
+  longer draws pictures when nothing looks at them (drawing was 88% of a
+  step). 2,000 levels in both modes: 180,214 states, 3.75 million choices
+  in 32 minutes on 14 processes (6.9 million an hour), 36 MB
+  (data/datasets/block_smb/outcomes_20261108); 100 fresh levels for
+  measuring (outcomes_fresh_20261108, seeds from 100000).
 

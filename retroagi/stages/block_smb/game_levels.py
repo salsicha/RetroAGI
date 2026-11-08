@@ -188,6 +188,7 @@ def play(scenario: dict, chooser, frames: Optional[int] = None) -> dict:
     from .env import MarioScenarioEnv
 
     env = MarioScenarioEnv(world_width=scenario["world_width"])
+    env.draws = False
     env.reset(scenario=scenario)
     source, controller = BlockTruthState(), Controller()
     last_event, last_choice, end = None, None, "timeout"
@@ -209,16 +210,18 @@ def play(scenario: dict, chooser, frames: Optional[int] = None) -> dict:
     return {"end": end, "frames": frame + 1, "x": env._max_x_reached, "score": env.score}
 
 
-def run_levels(seeds, modes=("speed_run", "max_points"), pieces: int = 12) -> list:
-    """play() the scripted chooser through random_level(seed) for each seed
-    and mode: one row per run (seed, mode and play's result)."""
-    from retroagi.stages.full_smb.scripted_chooser import ScriptedChooser
+def run_levels(seeds, modes=("speed_run", "max_points"), pieces: int = 12, make_chooser=None) -> list:
+    """play() a chooser (``make_chooser(mode)``; the scripted chooser by
+    default) through random_level(seed) for each seed and mode: one row per
+    run (seed, mode and play's result)."""
+    if make_chooser is None:
+        from retroagi.stages.full_smb.scripted_chooser import ScriptedChooser as make_chooser
 
     rows = []
     for seed in seeds:
         level = random_level(seed, pieces)
         for mode in modes:
-            rows.append({"seed": seed, "mode": mode, **play(level, ScriptedChooser(mode))})
+            rows.append({"seed": seed, "mode": mode, **play(level, make_chooser(mode))})
     return rows
 
 
@@ -227,13 +230,30 @@ def main(argv=None) -> int:
     import json
     from collections import Counter
 
-    parser = argparse.ArgumentParser(description="The scripted chooser on random levels of the game's pieces")
+    parser = argparse.ArgumentParser(description="A chooser on random levels of the game's pieces")
+    parser.add_argument("--model", default=None,
+                        help="an outcome network (outcome_train.py) to choose by the three rules; "
+                             "the scripted chooser if not given")
     parser.add_argument("--levels", type=int, default=100)
     parser.add_argument("--first-seed", type=int, default=0)
     parser.add_argument("--pieces", type=int, default=12)
     parser.add_argument("--output", default=None)
     args = parser.parse_args(argv)
-    rows = run_levels(range(args.first_seed, args.first_seed + args.levels), pieces=args.pieces)
+    make_chooser = None
+    if args.model:
+        from retroagi.core.devices import select_device
+        from retroagi.core.outcome_chooser import OutcomeChooser
+
+        from .outcome_train import load_model
+
+        device = select_device("auto")
+        model = load_model(args.model, device)
+
+        def make_chooser(mode):
+            return OutcomeChooser(model, mode, device)
+
+    rows = run_levels(range(args.first_seed, args.first_seed + args.levels), pieces=args.pieces,
+                      make_chooser=make_chooser)
     for mode in sorted({r["mode"] for r in rows}):
         runs = [r for r in rows if r["mode"] == mode]
         ends = Counter(r["end"] for r in runs)

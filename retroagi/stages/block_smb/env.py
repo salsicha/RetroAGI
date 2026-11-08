@@ -310,6 +310,9 @@ class MarioScenarioEnv:
         self.watched_truth = []  # ... and the simulator's state then (true_frame)
         self.camera_x = 0.0
         self.scroll_x = width // 3
+        # Whether step and reset draw the picture (sampling outcomes from the
+        # simulator's state needs none: drawing was 88% of a step's time).
+        self.draws = True
         self.score = 0
         self.steps = 0
         self.max_steps = 1000
@@ -517,7 +520,7 @@ class MarioScenarioEnv:
         self.camera_x = max(
             0.0, min(self.mario["x"] - self.scroll_x, self.world_width - self.width)
         )
-        obs = self.render()
+        obs = self.render() if self.draws else None
         # Pre-episode frames (scenario "watch_frames"): the world runs while
         # Mario stands, and their pictures are kept for the agent to watch
         # (prefilled history), so its first decision has seen how things move.
@@ -953,7 +956,7 @@ class MarioScenarioEnv:
             reward_terms[term] *= scale
         reward, reward_terms = self._finalize_reward_terms(reward_terms)
 
-        obs = self.render()
+        obs = self.render() if self.draws else None
         info = self._build_info(
             reward_terms=reward_terms,
             death=death,

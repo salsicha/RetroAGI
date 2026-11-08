@@ -333,7 +333,7 @@ class Controller:
         choice = self.choice
         middle = (state.body[0] + state.body[2]) / 2
         coming = [e for e in state.enemies if abs((e.box[0] + e.box[2]) / 2 - middle) < TOO_CLOSE]
-        if coming or self.frame >= choice.frames:
+        if coming or self.frame > choice.frames:  # (frames waited, the frame it ends not among them)
             self.event = "waited"
             return 0
         if choice.until_clear is not None:
