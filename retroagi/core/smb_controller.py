@@ -126,8 +126,9 @@ def perceived(feedback, scene) -> Optional[State]:
     - the solids are vision's, none inside Mario's drawn box, floor gaps
       hidden by enemies joined, and the screen's left edge, a wall;
     - the enemies are its tracks seen this frame, none starting in the
-      LEFT_COLUMNS and none smaller than MIN_ENEMY away from the right edge,
-      with their averaged velocities (seen for fewer than
+      LEFT_COLUMNS, none smaller than MIN_ENEMY away from the right edge and
+      none mostly inside Mario's drawn box (vision read big Mario's top half
+      as an enemy on his head), with their averaged velocities (seen for fewer than
       MEASURED frames: a walker's WALK pixels a frame toward Mario).
     None while vision does not show Mario."""
     if scene.mario.box is None:
@@ -135,6 +136,7 @@ def perceived(feedback, scene) -> Optional[State]:
     camera = feedback.camera_position
     box = scene.mario.box
     middle = (box[0] + box[2]) / 2 + camera
+    drawn_on_screen = box
     body = (middle - BODY_WIDTH / 2, box[1] + HEAD_ROOM, middle + BODY_WIDTH / 2, box[3])
     enemies = []
     for t in feedback.tracks.tracks:
@@ -143,6 +145,8 @@ def perceived(feedback, scene) -> Optional[State]:
         small = min(t.box[2] - t.box[0], t.box[3] - t.box[1]) < MIN_ENEMY
         if small and t.box[2] < RIGHT_EDGE:
             continue
+        if _inside(t.box, drawn_on_screen):
+            continue  # part of Mario's own sprite (big Mario's top half read as an enemy)
         world = (t.box[0] + camera, t.box[1], t.box[2] + camera, t.box[3])
         if len(t.samples) >= MEASURED:
             vx, vy = t.velocity
@@ -169,6 +173,14 @@ def perceived(feedback, scene) -> Optional[State]:
         enemies=enemies,
         ready=feedback.motion_ready,
     )
+
+
+def _inside(box, outer) -> bool:
+    """Whether at least half of ``box`` lies inside ``outer``."""
+    w = max(0.0, min(box[2], outer[2]) - max(box[0], outer[0]))
+    h = max(0.0, min(box[3], outer[3]) - max(box[1], outer[1]))
+    area = (box[2] - box[0]) * (box[3] - box[1])
+    return area > 0 and w * h >= area / 2
 
 
 def on_the_way(state: State, enemy: Enemy) -> bool:
