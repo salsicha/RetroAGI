@@ -63,6 +63,8 @@ STOMP_OVERLAP = 4
 # and jump again): dropping off 1-1's second pipe and sliding toward a
 # Goomba left no room to jump it.
 SAFE_AFTER = 12
+# _reached's answer for a landing Mario slides off into a pit.
+SLID_OFF = -2
 # In the air with no landing that safe, one no enemy reaches within this
 # many frames is taken (plan_flight): Mario can jump again as he lands.
 LAST_RESORT_SAFE = 4
@@ -402,16 +404,30 @@ def _paths(boxes, velocities, solids, frames):
 
 
 @njit(cache=True)
-def _reached(x0, y0, x1, y1, m0, paths, stomped, frame, safe_after):
+def _reached(x0, y0, x1, y1, m0, paths, stomped, frame, safe_after, solids):
     """The enemy reaching Mario, landed at the box at ``frame`` and sliding
     on (buttons released), within ``safe_after`` frames (with ENEMY_MARGIN),
-    those in the bit mask ``stomped`` aside; -1 if none does."""
+    those in the bit mask ``stomped`` aside; -1 if none does, SLID_OFF if
+    he slides off what he landed on with nothing below to catch him (a
+    landing on the last pixels before a pit at speed: he was falling before
+    anything could be chosen)."""
     m = m0.copy()
     last = paths.shape[1] - 1
     for k in range(1, safe_after + 1):
         dx, _, _ = _advance(m, 0, False, True, y0, False)
         x0 += dx
         x1 += dx
+        supported, below = False, False
+        for i in range(solids.shape[0]):
+            if x0 < solids[i, 2] and solids[i, 0] < x1:
+                if abs(solids[i, 1] - y1) <= STAND:
+                    supported = True
+                elif solids[i, 1] > y1:
+                    below = True
+        if not supported:
+            if not below:
+                return SLID_OFF
+            break  # off onto something lower: no longer sliding here
         for e in range(paths.shape[0]):
             if (stomped >> e) & 1:
                 continue
@@ -484,7 +500,10 @@ def _rollout(m0, x, y, x1, y1, pre_run, hold, direction, solids, paths, stompabl
                     if nx < solids[i, 2] and solids[i, 0] < nx + width and feet <= solids[i, 1] <= ny + height:
                         top = solids[i, 1]
                         got = _touch(nx, top - height, nx + width, top, items, frame, got)
-                        threat = _reached(nx, top - height, nx + width, top, m, paths, down, frame, safe_after)
+                        threat = _reached(nx, top - height, nx + width, top, m, paths, down, frame, safe_after,
+                                          solids)
+                        if threat == SLID_OFF:
+                            return _FELL, frame, nx, top - height, nx + width, top, -1, -1, stomped, got
                         if threat >= 0:
                             return _HIT, frame, nx, top - height, nx + width, top, -1, threat, stomped, got
                         return _LANDED, frame, nx, top - height, nx + width, top, i, -1, stomped, got

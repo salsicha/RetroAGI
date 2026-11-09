@@ -227,3 +227,15 @@ def test_the_planner_bumps_a_block_and_collects_an_item():
     mushroom = Enemy((150.0, 192.0, 166.0, 208.0), 1.0, 0.0, ("items", 0), stompable=False)
     plan = plan_jump(Goal("collect", mushroom.ref), NESPlayerMotion(), STANDING, [FLOOR], [], 1, items=[mushroom])
     assert plan is not None and plan.outcome.collected is mushroom
+
+
+def test_a_landing_mario_would_slide_off_into_a_pit_is_no_landing():
+    # Running fast at a pit: no plan lands on the last pixels before it (he
+    # would slide off before anything could be chosen); the far side is fine.
+    near = Solid(0, 208, 160, 240, "ground", ("surfaces", 0))
+    far = Solid(208, 208, 600, 240, "ground", ("surfaces", 1))
+    fast = NESPlayerMotion(x_speed=40, moving=1)
+    o = rollout(fast, (140.0, 192.0, 150.0, 208.0), 0, 1, 1, [near, far], [])
+    assert o.end == "fell"
+    plan = plan_jump(Goal("land", far.ref, far.x0, far.x1, top=208), fast, (100.0, 192.0, 110.0, 208.0), [near, far], [], 1)
+    assert plan is not None and plan.outcome.solid is far
