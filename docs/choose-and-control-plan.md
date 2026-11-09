@@ -259,4 +259,22 @@ Each phase ends with a measurement that decides whether to go on.
   power-ups are not in Block SMB. On game memory the bench's misses are
   two-step traps (passing back off a pipe into a valley with Goombas) that
   one choice's outcome and the stuck probe do not see.
+- **Power-ups, 2026-11-09.** Block SMB now has the game's question blocks
+  (hit from below: a coin, or a mushroom), mushrooms (moving at a pixel a
+  frame, turned by walls, falling off ledges), big Mario (12 by 24; a hit
+  shrinks him, then 120 frames unhurt; he breaks bricks) and points in the
+  game's proportions. Random levels put question blocks among the bricks
+  and over the floor (a mushroom in 35% of them; Mario starts big in 30% of
+  levels, both above the game's so the network sees them). The planner
+  gained "bump" and "collect" goals, the network bump and collect outputs
+  and item tokens; sampling play bumps question blocks and collects items
+  half the time it can. 4.24 million choices from 2,000 levels
+  (data/datasets/block_smb/outcomes_20261109); the network
+  (data/outcome/outcome_20261109.pt) ranks deaths at 0.991 on fresh levels.
+  On 100 fresh levels with power-ups: 98 speed runs and 97 max-points runs
+  finished (the scripted chooser 97 and 96); in max points it scores 59.9 a
+  level (the scripted chooser, which ignores blocks, 7.7) for 6% more
+  frames. In the real game's state question blocks are told from bricks,
+  the power-up slot (game memory) or power-ups seen (vision) are items, and
+  big Mario has his own collision box.
 
