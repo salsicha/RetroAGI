@@ -44,13 +44,14 @@ from retroagi.core.smb_controller import (
     State,
     meets_soon,
     on_the_way,
+    ItemTracker,
     perceived,
 )
 from retroagi.core.smb_physics import NESPlayerMotion
 from retroagi.core.smb_planner import BLOCK_KINDS, Enemy, Goal, Solid, floor_behind, screen_edge, solids_of
 from retroagi.core.smb_scene_labels import scene_from_labels
 
-from .pixel_labels import PLAYER_FLOAT_STATE, Unexplained, label_frame
+from .pixel_labels import ENEMY_KIND_TYPES, PLAYER_FLOAT_STATE, Unexplained, label_frame
 from .truth import true_frame
 
 ENEMY_AHEAD = 112
@@ -125,10 +126,11 @@ class TruthState:
                 labelling = False
         self.previous_state = now
         self.frame += 1
-        enemies = []
+        enemies, items = [], []
         for k, slot in enumerate(truth["slots"]):
             box = slot["box"]
-            if not (slot["active"] and slot["enemy"] and box and not slot["defeated"] and box[2] > box[0]):
+            item = ENEMY_KIND_TYPES.get(slot["kind"]) == "power_up"
+            if not (slot["active"] and (slot["enemy"] or item) and box and not slot["defeated"] and box[2] > box[0]):
                 self.seen.pop(k, None)
                 continue
             places = self.seen.setdefault(k, [])
@@ -140,8 +142,13 @@ class TruthState:
             frames = self.frame - first[0]
             if frames >= MEASURED:
                 vx, vy = (box[0] - first[1]) / frames, (box[1] - first[2]) / frames
+            elif item:
+                vx, vy = ItemTracker.MUSHROOM_SPEED, 0.0
             else:
                 vx, vy = (-WALK if box[0] > truth["mario"][0] else WALK), 0.0
+            if item:
+                items.append(Enemy(tuple(float(v) for v in box), vx, vy, ("slots", k), stompable=False))
+                continue
             enemies.append(Enemy(tuple(float(v) for v in box), vx, vy, ("slots", k), slot["stompable"]))
         if labelling:
             # The enemies drawn in the labelled frame hide the floor under them.
@@ -153,6 +160,7 @@ class TruthState:
             grounded=int(ram[PLAYER_FLOAT_STATE]) == 0,
             solids=list(self.solids) + [screen_edge(truth["camera"])],
             enemies=enemies,
+            items=items,
         )
 
 
@@ -327,7 +335,7 @@ class PerceivedState:
     def reset(self):
         from retroagi.core.smb_spatial_feedback import SpatialFeedback
 
-        self.feedback, self.scene = SpatialFeedback(), None
+        self.feedback, self.scene, self.items = SpatialFeedback(), None, ItemTracker()
 
     def read(self, screen) -> Optional[State]:
         import torch
@@ -335,7 +343,9 @@ class PerceivedState:
         with torch.no_grad():
             self.scene = self.vision.scene([screen])[0]
         self.feedback.observe(self.scene)
-        return perceived(self.feedback, self.scene)
+        camera = self.feedback.camera_position
+        self.items.observe([(b[0] + camera, b[1], b[2] + camera, b[3]) for b in self.scene.power_ups])
+        return perceived(self.feedback, self.scene, self.items)
 
     def pressed(self, button: int) -> None:
         if self.scene is not None:

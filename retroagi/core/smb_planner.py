@@ -207,11 +207,12 @@ def solids_of(scene, camera: float) -> list:
         out.append(Solid(p[0] + camera, p[1], p[2] + camera, SCREEN_BOTTOM, "pipe", ("pipes", slot)))
     for slot, b in enumerate(lists.get("blocks", ())):
         x0, y0, x1, y1 = b.box
-        out.append(Solid(x0 + camera, y0, x1 + camera, y1, "block", ("blocks", slot)))
+        kind = "question" if getattr(b, "kind", "") == "question_block" else "block"
+        out.append(Solid(x0 + camera, y0, x1 + camera, y1, kind, ("blocks", slot)))
     for slot, s in enumerate(lists.get("surfaces", ())):
         x0, x1 = s.x0 + camera, s.x1 + camera
         covered = any(
-            _overlap(x0, x1, o.x0, o.x1) and abs(o.top - s.top) <= 2 for o in out if o.kind in ("pipe", "block")
+            _overlap(x0, x1, o.x0, o.x1) and abs(o.top - s.top) <= 2 for o in out if o.kind in ("pipe", *BLOCK_KINDS)
         )
         if covered:
             continue

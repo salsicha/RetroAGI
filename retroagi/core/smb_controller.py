@@ -69,6 +69,9 @@ WALK = 0.5
 # edge, in the planner, while he slid off it.
 BODY_WIDTH = 10
 HEAD_ROOM = 4
+# Big Mario (after a mushroom: drawn taller than BIG_DRAWN pixels) collides
+# BIG_BODY_WIDTH wide, his top BIG_HEAD_ROOM below the drawn top.
+BIG_DRAWN, BIG_BODY_WIDTH, BIG_HEAD_ROOM = 20, 12, 8
 # Enemies seen starting in this many columns at the screen's left edge are
 # left out: there vision read cut-off sprites as enemies walking toward
 # Mario, and he jumped back over a pit at them (the game hides the first 8
@@ -117,13 +120,48 @@ class State:
     items: list = field(default_factory=list)
 
 
-def perceived(feedback, scene) -> Optional[State]:
+class ItemTracker:
+    """Items vision shows (power-ups), followed frame to frame in world
+    pixels, each with its velocity over its last SAMPLES moves (a new one
+    taken to move as a mushroom comes out, MUSHROOM_SPEED to the right)."""
+
+    SAMPLES = 8
+    MUSHROOM_SPEED = 1.0
+
+    def __init__(self):
+        self.items, self.next_identity = [], 1  # [box, [(dx, dy)], identity]
+
+    def observe(self, boxes) -> None:
+        kept = []
+        for box in boxes:
+            old = min(self.items, key=lambda i: abs(i[0][0] - box[0]) + abs(i[0][1] - box[1]), default=None)
+            if old is not None and abs(old[0][0] - box[0]) <= 8 and abs(old[0][1] - box[1]) <= 8:
+                self.items.remove(old)
+                kept.append([box, (old[1] + [(box[0] - old[0][0], box[1] - old[0][1])])[-self.SAMPLES:], old[2]])
+            else:
+                kept.append([box, [], self.next_identity])
+                self.next_identity += 1
+        self.items = kept
+
+    def seen(self) -> list:
+        out = []
+        for box, samples, identity in self.items:
+            if samples:
+                vx = sum(d[0] for d in samples) / len(samples)
+                vy = sum(d[1] for d in samples) / len(samples)
+            else:
+                vx, vy = self.MUSHROOM_SPEED, 0.0
+            out.append(Enemy(tuple(box), vx, vy, ("items", identity), stompable=False))
+        return out
+
+
+def perceived(feedback, scene, items: Optional[ItemTracker] = None) -> Optional[State]:
     """The controller's state from what vision shows (``scene``) and the
     executor's estimates (``feedback``, smb_spatial_feedback.SpatialFeedback,
     already observing the scene), in world pixels (screen pixels plus its
     camera position):
     - Mario's body is his collision box inside the drawn one (BODY_WIDTH,
-      HEAD_ROOM); his motion is the estimate, ready once it has measured his
+      HEAD_ROOM; big Mario's BIG_BODY_WIDTH, BIG_HEAD_ROOM); his motion is the estimate, ready once it has measured his
       speed; he stands when vision says so or when his feet rest still on a
       solid's top (vision's flag alone left him "in the air" in a third of
       the frames beside 1-1's fourth pipe);
@@ -133,7 +171,9 @@ def perceived(feedback, scene) -> Optional[State]:
       LEFT_COLUMNS, none smaller than MIN_ENEMY away from the right edge and
       none mostly inside Mario's drawn box (vision read big Mario's top half
       as an enemy on his head), with their averaged velocities (seen for fewer than
-      MEASURED frames: a walker's WALK pixels a frame toward Mario).
+      MEASURED frames: a walker's WALK pixels a frame toward Mario);
+    - the items are ``items``' (an ItemTracker the caller feeds vision's
+      power-ups), none if not given.
     None while vision does not show Mario."""
     if scene.mario.box is None:
         return None
@@ -141,7 +181,9 @@ def perceived(feedback, scene) -> Optional[State]:
     box = scene.mario.box
     middle = (box[0] + box[2]) / 2 + camera
     drawn_on_screen = box
-    body = (middle - BODY_WIDTH / 2, box[1] + HEAD_ROOM, middle + BODY_WIDTH / 2, box[3])
+    big = box[3] - box[1] > BIG_DRAWN
+    width, head = (BIG_BODY_WIDTH, BIG_HEAD_ROOM) if big else (BODY_WIDTH, HEAD_ROOM)
+    body = (middle - width / 2, box[1] + head, middle + width / 2, box[3])
     enemies = []
     for t in feedback.tracks.tracks:
         if t.kind == "platform" or t.missed or t.box[0] < LEFT_COLUMNS:
@@ -168,7 +210,7 @@ def perceived(feedback, scene) -> Optional[State]:
         s.x0 < body[2] and body[0] < s.x1 and abs(s.top - body[3]) <= 2 for s in solids
     )
     motion = copy(feedback.motion)
-    motion.origin_y += HEAD_ROOM  # the jump's origin, measured at the drawn top
+    motion.origin_y += head  # the jump's origin, measured at the drawn top
     return State(
         body=body,
         motion=motion,
@@ -176,6 +218,7 @@ def perceived(feedback, scene) -> Optional[State]:
         solids=solids,
         enemies=enemies,
         ready=feedback.motion_ready,
+        items=items.seen() if items is not None else [],
     )
 
 
