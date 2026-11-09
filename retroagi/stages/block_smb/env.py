@@ -92,6 +92,14 @@ COIN_POINTS, MUSHROOM_POINTS = 10, 50
 MUSHROOM_SPEED = 1.0
 SMALL_W, SMALL_H, BIG_W, BIG_H = 10, 12, 12, 24
 HURT_FRAMES = 120
+# Koopa Troopas: a 12 by 12 body 3 pixels above its feet (1-1's, game
+# memory); a stomp leaves a still shell, touched it is kicked away at
+# SHELL_SPEED pixels a frame (Mario unhurt by it for KICK_GRACE frames), a
+# moving shell kills the enemies it meets and hurts Mario unless stomped
+# (which stops it).
+KOOPA_W, KOOPA_H, KOOPA_FEET = 12, 12, 3
+SHELL_SPEED = 3.0
+KICK_GRACE = 8
 # Pre-episode frames ("watch_frames") end with Mario standing: up to this many
 # more are watched while one who starts above the floor drops onto it.
 LANDING_WATCH = 64
@@ -456,6 +464,9 @@ class MarioScenarioEnv:
             enemy = self._parse_enemy(e)
             if enemy.get("kind") == "monster":
                 enemy.update(w=MONSTER_W, h=MONSTER_H, foot_offset=0, stompable=False)
+            elif enemy.get("kind") == "koopa":
+                # (its feet where a Goomba's would be: 14 below the y given)
+                enemy.update(w=KOOPA_W, h=KOOPA_H, foot_offset=KOOPA_FEET, y=enemy["y"] + 14 - KOOPA_FEET - KOOPA_H)
             elif enemy.get("kind") != "piranha_plant":
                 # NES Goomba damage body is 10x6, four pixels above its
                 # physical feet. Background support is a separate probe.
@@ -815,6 +826,7 @@ class MarioScenarioEnv:
             if enemy["dead"]:
                 continue
             self._update_enemy(enemy, rects)
+        self._shells_hit(reward_terms)
         self._track_goal_to_enemy()
 
         # ── 15. Enemy collision ───────────────────────────────────────────────
@@ -827,6 +839,8 @@ class MarioScenarioEnv:
                 stomp_geometry = geometry
             if not mario_rect.colliderect(er):
                 continue
+            if enemy.get("kind") == "koopa" and self._touch_koopa(enemy, geometry, mario_rect, reward_terms):
+                continue  # stomped into a shell, a shell stopped or kicked: no harm
             if geometry["stomp"] and enemy.get("stompable", True):
                 # Stomp!
                 self.stomped = True
@@ -1382,6 +1396,44 @@ class MarioScenarioEnv:
 
     # ── Enemy helpers ─────────────────────────────────────────────────────────
 
+    def _touch_koopa(self, enemy: dict, geometry: dict, mario_rect, reward_terms: dict) -> bool:
+        """Mario touching a Koopa: stomped, it becomes a still shell (a
+        moving shell stops); a still shell is kicked away from him; a shell
+        just kicked does not hurt. False when the touch hurts him."""
+        shell = enemy.get("shell")
+        if geometry["stomp"] and shell != "still":
+            if shell is None:
+                self.score += 5
+                reward_terms["enemy_stomp"] += self.reward_config.enemy_stomp
+                self.stomped = True
+            enemy.update(shell="still", speed=0.0)
+        elif shell == "still":
+            middle = enemy["x"] + enemy["w"] / 2
+            away = 1 if middle >= mario_rect.centerx else -1
+            enemy.update(shell="moving", speed=SHELL_SPEED, direction=away, kick_grace=KICK_GRACE)
+        elif not enemy.get("kick_grace"):
+            return False
+        if geometry["stomp"]:
+            self.motion.bounce()
+            self.mario["vy"] = self.motion.y_speed
+            self.mario["on_ground"] = False
+        return True
+
+    def _shells_hit(self, reward_terms: dict) -> None:
+        """Moving shells kill the enemies they meet."""
+        for shell in self.enemies:
+            if shell.get("shell") != "moving" or shell["dead"]:
+                continue
+            shell["kick_grace"] = max(0, shell.get("kick_grace", 0) - 1)
+            body = pygame.Rect(shell["x"], shell["y"], shell["w"], shell["h"])
+            for other in self.enemies:
+                if other is shell or other["dead"] or other.get("kind") == "piranha_plant":
+                    continue
+                if body.colliderect(pygame.Rect(other["x"], other["y"], other["w"], other["h"])):
+                    other["dead"] = True
+                    self.score += 5
+                    reward_terms["enemy_stomp"] += self.reward_config.enemy_stomp
+
     def _bump(self, plat: dict, reward_terms: dict) -> None:
         """Mario's head hit ``plat`` from below: a question block gives its
         coin or lets out its mushroom (once); big Mario breaks a brick."""
@@ -1558,7 +1610,7 @@ class MarioScenarioEnv:
 
             return parse_plant(e)
         kind = e.get("kind") if isinstance(e, dict) else None
-        if kind not in (None, "monster"):
+        if kind not in (None, "monster", "koopa"):
             raise ValueError(f"unknown enemy kind {kind!r}")
         game_rules = isinstance(e, dict) and bool(e.get("game_rules", False))
         if isinstance(e, dict):

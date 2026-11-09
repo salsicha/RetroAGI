@@ -62,3 +62,55 @@ def test_big_mario_survives_a_hit_shrinking_and_breaks_bricks():
         if not env.mario["big"] or terminated:
             break
     assert not info["death"] and not env.mario["big"] and env.mario["safe"] == HURT_FRAMES - 1
+
+
+def koopa_scene(enemies, mario=(100, FLOOR - 12)):
+    env = MarioScenarioEnv(world_width=1024)
+    env.draws = False
+    env.reset(scenario={
+        "world_width": 1024,
+        "mario": list(mario),
+        "platforms": [[0, FLOOR, 1024, 32]],
+        "enemies": enemies,
+        "task": {"family": "game_level"},
+    })
+    return env
+
+
+def test_a_koopa_stomped_leaves_a_shell_that_a_touch_kicks_and_that_kills():
+    # Mario dropping onto a Koopa.
+    env = koopa_scene([{"x": 150, "y": FLOOR - 14, "game_rules": True, "kind": "koopa"}], mario=(146, 140))
+    koopa = env.enemies[0]
+    assert (koopa["w"], koopa["h"]) == (12, 12) and koopa["y"] + koopa["h"] + koopa["foot_offset"] == FLOOR
+    # Stomped: a still shell, and points.
+    for k in range(60):
+        env.step(0)
+        if koopa.get("shell"):
+            break
+    assert koopa["shell"] == "still" and env.score == 5 and not koopa["dead"]
+    # Once he has landed, walk into it: kicked away, him unhurt.
+    for _ in range(40):
+        env.step(0)
+    toward = 3 if koopa["x"] < env.mario["x"] else 1
+    for _ in range(60):
+        _, _, terminated, _, info = env.step(toward)
+        if koopa["shell"] == "moving" or terminated:
+            break
+    assert koopa["shell"] == "moving" and not info["death"]
+    # A moving shell kills the Goomba it meets.
+    env = koopa_scene([{"x": 200, "y": FLOOR - 14, "game_rules": True, "kind": "koopa"},
+                       {"x": 140, "y": FLOOR - 14, "game_rules": True}], mario=(20, FLOOR - 12))
+    env.enemies[0].update(shell="moving", speed=3.0, direction=-1, awake=True)
+    for _ in range(40):
+        env.step(0)
+    assert env.enemies[1]["dead"]
+
+
+def test_a_moving_shell_hurts_mario():
+    env = koopa_scene([{"x": 200, "y": FLOOR - 14, "game_rules": True, "kind": "koopa"}])
+    env.enemies[0].update(shell="moving", speed=3.0, direction=-1, awake=True)
+    for _ in range(60):
+        _, _, terminated, _, info = env.step(0)
+        if terminated:
+            break
+    assert info["death"]

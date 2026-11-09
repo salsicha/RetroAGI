@@ -9,7 +9,7 @@ top one or two columns wide), rows of bricks and question blocks at the
 game's two heights (4 and 8 tiles above the floor, Goombas sometimes walking
 on the upper one; a question block holds a coin or a mushroom, big Mario
 breaks bricks), question blocks over the floor, single Goombas and pairs,
-and a
+Koopa Troopas (a stomp leaves a shell that a touch kicks), and a
 staircase before the flag, each separated by a few tiles of floor
 (random_level). The floor is cut where a pipe or a step stands, as the game
 draws it. Goombas follow the game's rules (env.py "game_rules": they wake as
@@ -62,8 +62,10 @@ MUSHROOM_SHARE = 0.35
 # shares are above the game's so the outcome network sees mushrooms and big
 # Mario often enough (at the game's, sampled states almost never had one).
 BIG_START = 0.3
-# Two Goombas walk this far apart (pixels), as in 1-1.
+# Two Goombas walk this far apart (pixels), as in 1-1; an enemy piece is a
+# Koopa Troopa this share of the time.
 PAIR_GAP = 24
+KOOPA_SHARE = 0.25
 # A Goomba's body as the simulator places it: its feet this far below the
 # y it is given.
 GOOMBA_FEET = 14
@@ -71,8 +73,11 @@ GOOMBA_FEET = 14
 FRAMES_PER_PIXEL = 3
 
 
-def _goomba(x: float, top: float) -> dict:
-    return {"x": float(x), "y": float(top - GOOMBA_FEET), "game_rules": True}
+def _goomba(x: float, top: float, kind: Optional[str] = None) -> dict:
+    out = {"x": float(x), "y": float(top - GOOMBA_FEET), "game_rules": True}
+    if kind:
+        out["kind"] = kind
+    return out
 
 
 def random_level(seed: int, pieces: int = 12) -> dict:
@@ -107,9 +112,12 @@ def random_level(seed: int, pieces: int = 12) -> dict:
             pits.append((x, x + width))
             x += width
         elif kind == "goombas":
-            enemies.append(_goomba(x, FLOOR))
-            if rng.random() < 0.5:
-                enemies.append(_goomba(x + PAIR_GAP, FLOOR))
+            if rng.random() < KOOPA_SHARE:
+                enemies.append(_goomba(x, FLOOR, "koopa"))
+            else:
+                enemies.append(_goomba(x, FLOOR))
+                if rng.random() < 0.5:
+                    enemies.append(_goomba(x + PAIR_GAP, FLOOR))
             x += 3 * TILE
         elif kind == "questions":
             for k in range(rng.randint(1, 3)):
