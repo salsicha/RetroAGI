@@ -14,33 +14,43 @@ fast controller ([the plan](docs/choose-and-control-plan.md)):
    motion model against what it sees, re-plans before takeoff and corrects
    the flight in the air, and reports how the choice ended (landed,
    stomped, arrived, a threat, infeasible).
-2. **The outcome network** (to be built): from the state, one pass predicts
-   the consequences of every candidate choice at once (the chance of dying,
-   progress right, coins and power-ups).
-3. **The chooser**: the game's three rules on those predictions, in order:
-   don't die, progress to the right, get coins and power-ups. Until the
-   outcome network exists, a scripted chooser
-   (`stages/full_smb/scripted_chooser.py`) stands in for it.
+2. **The outcome network** (`core/outcome_network.py`): from the state,
+   one pass predicts the outcome of every candidate choice at once (the
+   chance of dying, of being infeasible, of leaving Mario stuck, of
+   reaching the flag, and the progress, frames and points). It learns from
+   outcomes measured, not taught: on random Block SMB levels every
+   candidate is played from saved states by the executor
+   (`stages/block_smb/outcome_sampling.py`).
+3. **The chooser** (`core/outcome_chooser.py`): the game's three rules on
+   those predictions, in order: don't die, progress to the right, get coins
+   and power-ups. A hand-written scripted chooser
+   (`stages/full_smb/scripted_chooser.py`) is kept to compare against.
 
 Nothing learns on Full SMB: training data comes from random levels built
 in Block SMB from the real game's pieces and rules.
 
-Where it stands (2026-11-08), the scripted chooser and the executor:
+Where it stands (2026-11-08):
 
-| | 1-1 obstacle bench (24 obstacles) | Full 1-1 | Random Block SMB levels (100) |
+| Chooser, state | 1-1 obstacle bench (24) | Full 1-1 | 100 fresh random levels |
 |---|---|---|---|
-| Real game, game memory | 24/24 | max points finished; speed run died at x 1676 | |
-| Real game, vision only | 0.92 | both died near x 2020 | |
-| Block SMB, simulator state | | | 99 speed run, 98 max points |
+| Outcome network, game memory | 0.85 | finished both modes (speed run 1,895 frames) | |
+| Outcome network, vision only | 0.81 | max points finished; speed run died at x 1686 | |
+| Outcome network, simulator state | | | 100 speed run, 100 max points |
+| Scripted, game memory | 24/24 | max points finished; speed run died at x 1676 | |
+| Scripted, vision only | 0.92 | both died near x 2020 | |
+| Scripted, simulator state | | | 100 speed run, 99 max points |
 
-Full-level results shift from change to change: earlier on 2026-11-08 all
-four 1-1 playthroughs finished, and vision passed 0.98 of the bench.
+The outcome network was trained only on Block SMB random levels; nothing
+learns on the real game. Full-level results shift from change to change.
 
 ```bash
 # score a player on the 24 obstacles of 1-1
 python -m retroagi.stages.full_smb.obstacle_bench --bench data/full_smb_obstacles/Level1-1 --player scripted_vision
-# the scripted chooser on random levels of the real game's pieces
-python -m retroagi.stages.block_smb.game_levels --levels 100
+# the scripted chooser, or the outcome network's, on fresh random levels
+python -m retroagi.stages.block_smb.game_levels --levels 100 --first-seed 100000 [--model data/outcome/outcome_20261108.pt]
+# sample outcomes, then train the outcome network
+python -m retroagi.stages.block_smb.outcome_sampling --levels 2000 --workers 14 --output data/datasets/block_smb/outcomes_NEW
+python -m retroagi.stages.block_smb.outcome_train --data data/datasets/block_smb/outcomes_NEW --fresh data/datasets/block_smb/outcomes_fresh_20261108 --output artifacts/block_smb/outcome_NEW
 ```
 
 ## Earlier design: the layered agent
@@ -155,10 +165,14 @@ retroagi/
     smb_physics.py               # Mario's NES motion, shared by both games
     smb_planner.py               # the executor's jump planner (compiled)
     smb_controller.py            # the executor: one choice at a time, every frame
+    smb_choices.py               # the candidate choices and the state's tokens
+    outcome_network.py           # predicts every choice's outcome in one pass
+    outcome_chooser.py           # the three rules on those predictions
   stages/
     block_smb/                   # the Block SMB game, layout families, teachers
                                  # and the layer trainer (layered_train.py);
-                                 # game_levels.py: random levels of the game's pieces
+                                 # game_levels.py: random levels of the game's pieces;
+                                 # outcome_sampling.py, outcome_train.py
     full_smb/                    # emulator play, frame labels from game memory,
                                  # the Full SMB evaluation of trained layers, the
                                  # 1-1 obstacle bench and the scripted chooser

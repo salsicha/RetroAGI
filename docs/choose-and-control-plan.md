@@ -208,4 +208,55 @@ Each phase ends with a measurement that decides whether to go on.
   in 32 minutes on 14 processes (6.9 million an hour), 36 MB
   (data/datasets/block_smb/outcomes_20261108); 100 fresh levels for
   measuring (outcomes_fresh_20261108, seeds from 100000).
+  Later the same day the outcomes gained "stuck" (below), the sampler ends
+  a choice exactly as play does (the frame it ends on is played: a run's
+  "blocked" comes 2 pixels short of the wall), and a choice that ends
+  before its first frame counts as infeasible. The final set: 181,233
+  states, 3.77 million choices from 2,000 levels with staircase tops one
+  or two columns wide (2.7 million an hour with the stuck probes), packed
+  in 8 parts.
+- **Phase 4, 2026-11-08: the outcome network and the three-rule chooser.**
+  retroagi/core/outcome_network.py: a small transformer over the state's
+  tokens (Mario, 24 surfaces, 8 enemies, x relative to Mario); a head on
+  each surface's token gives its three landings, a head on each enemy's
+  its stomp and two passes, a head on Mario's the runs and waits; each
+  choice: the chance of death (during or soon after), of being infeasible,
+  of reaching the flag, of leaving Mario stuck, and its progress, frames
+  and points. Trained in 9 minutes on the V100
+  (stages/block_smb/outcome_train.py; data/outcome/outcome_20261108.pt).
+  On 190,661 choices sampled on 100 fresh levels: deaths ranked at 0.989
+  (ROC area), infeasible called right 98.3%, stuck 95.2%, progress within
+  3.4 pixels. retroagi/core/outcome_chooser.py applies the rules: keep
+  feasible choices with death chance at most 5% (or within 2 points of the
+  safest), then those not likely to leave Mario stuck, then the most
+  progress a frame (in max points a point is worth 0.2 pixels a frame). It
+  remembers the choices taken from each spot until Mario reaches new
+  ground. Playing 100 fresh random levels: **100 finished in both modes,
+  no deaths** (the scripted chooser: 100 and 99). On 1-1, nothing learned
+  there, from game memory: full 1-1 **finished in both modes** (speed run
+  1,895 frames, faster than the scripted chooser's 2,017; max points
+  2,116), the obstacle bench 0.85 (the earlier model, without two-column
+  staircase tops: 0.94 and both modes finished too). From vision alone:
+  the bench 0.81 and full 1-1 **finished in max points** (3,047 frames,
+  score 800; the speed run died at x 1686).
+  What it took, each found by a stall on the fresh levels:
+  - "stuck": one choice at a time the chooser walked into a valley between
+    staircases (quick progress) and waited there; now after each sampled
+    choice a few forward choices are tried from where it ended (Mario's
+    speed kept) and the choice counts as leaving him stuck if none is
+    feasible, safe and gains 16 pixels;
+  - a run blocked at once counted as feasible and was taken 6,000 times
+    at a wall;
+  - the stuck probes first ran after Mario had stood and slid to rest, and
+    before the frame a run ends on (which stops him against the wall);
+  - a short memory of what was tried at each spot (two failing landings
+    taken by turns; a staircase gone round and round);
+  - staircase tops two columns wide in the random levels (1-1's second
+    pair), else the network learned that a staircase top before a pit is a
+    dead end and refused 1-1's.
+  Left: on vision, big Mario (after a mushroom) confuses perception (his
+  box changes height; his top half was read as an enemy, now dropped);
+  power-ups are not in Block SMB. On game memory the bench's misses are
+  two-step traps (passing back off a pipe into a valley with Goombas) that
+  one choice's outcome and the stuck probe do not see.
 

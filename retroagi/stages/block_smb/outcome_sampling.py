@@ -210,7 +210,7 @@ def load(folder: str) -> dict:
     global."""
     from pathlib import Path
 
-    shards = [dict(np.load(p)) for p in sorted(Path(folder).glob("level_*.npz"))]
+    shards = [dict(np.load(p)) for p in sorted(Path(folder).glob("*.npz"))]
     offset, choices = 0, []
     for shard in shards:
         c = shard["choices"].copy()
@@ -220,6 +220,30 @@ def load(folder: str) -> dict:
     out = {k: np.concatenate([s[k] for s in shards]) for k in shards[0] if k != "choices"}
     out["choices"] = np.concatenate(choices)
     return out
+
+
+def pack(folder: str, parts: int = 8) -> None:
+    """The shard files in ``folder`` joined into ``parts`` larger ones
+    (part_NN.npz; fewer files to keep), the shards removed."""
+    from pathlib import Path
+
+    files = sorted(Path(folder).glob("level_*.npz"))
+    for k in range(parts):
+        group = files[k::parts]
+        if not group:
+            continue
+        shards = [dict(np.load(p)) for p in group]
+        offset, choices = 0, []
+        for shard in shards:
+            c = shard["choices"].copy()
+            c[:, 0] += offset
+            choices.append(c)
+            offset += len(shard["mario"])
+        joined = {key: np.concatenate([sh[key] for sh in shards]) for key in shards[0] if key != "choices"}
+        joined["choices"] = np.concatenate(choices)
+        np.savez_compressed(Path(folder) / f"part_{k:02d}.npz", **joined)
+        for p in group:
+            p.unlink()
 
 
 def main(argv=None) -> int:
@@ -234,6 +258,7 @@ def main(argv=None) -> int:
     args = parser.parse_args(argv)
     start = time.time()
     rows = collect(range(args.first_seed, args.first_seed + args.levels), args.output, args.workers)
+    pack(args.output)
     seconds = time.time() - start
     states, choices = sum(r[2] for r in rows), sum(r[3] for r in rows)
     print(f"{len(rows)} plays: {states} states, {choices} choices in {seconds:.0f} s"

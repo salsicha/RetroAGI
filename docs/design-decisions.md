@@ -26,6 +26,18 @@ commit). How the parts work is described in the
   the training set"); the recorded failures are fixed in the teacher. A
   failed gate is fixed in the teacher or the policy, never bypassed.
 
+## 2026-11-08 — The outcome network and the three-rule chooser play 1-1, trained only on random levels (built, measured)
+
+Phases 3 and 4 of docs/choose-and-control-plan.md: every candidate choice
+is played from saved states on random Block SMB levels by the executor and
+its outcome recorded (3.77 million choices); a small transformer predicts
+all of a state's outcomes in one pass; the chooser applies don't die, then
+not stuck, then progress, then points. On 100 fresh random levels it
+finished every run in both modes; on 1-1, never trained on, it finished
+the level in both modes from game memory and in max points from vision
+alone. No teacher, no value function, no level memory (a short memory of
+what was tried at each spot, forgotten on new ground).
+
 ## 2026-11-08 — The controller plays from vision, and random levels of the game's pieces (user: "Yes, and go ahead and implement"; built, measured)
 
 The design was revised on 2026-11-07: the executor (a fast controller that
