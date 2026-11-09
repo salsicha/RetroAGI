@@ -60,8 +60,10 @@ TOO_CLOSE = 24
 # Frames a run may last before the chooser decides again.
 RUN_FRAMES = 240
 # Perceived enemies seen for fewer frames than this are taken to walk as
-# walkers do, WALK pixels a frame toward Mario.
-MEASURED = 4
+# walkers do, WALK pixels a frame toward Mario (a track found again gave a
+# Goomba walking at him +1.2 pixels a frame from 5 whole-pixel moves, and
+# Mario walked off 1-1's third pipe into it).
+MEASURED = 8
 WALK = 0.5
 # Mario's body as the game collides it, inside the sprite vision draws: this
 # wide about the drawn box's middle (pixels), its top this far below the
