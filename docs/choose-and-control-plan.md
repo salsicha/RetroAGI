@@ -277,4 +277,17 @@ Each phase ends with a measurement that decides whether to go on.
   frames. In the real game's state question blocks are told from bricks,
   the power-up slot (game memory) or power-ups seen (vision) are items, and
   big Mario has his own collision box.
+  On 1-1 that model looped at the second staircase again: it took landing
+  on the two-column top for deadly. Tried on the real game from that state,
+  every jump across from the top was safe; the label was wrong. In the
+  window after a sampled choice Mario stands, buttons released, and landing
+  at speed on that top he slid off into the pit. A death in the window now
+  counts only when no probe from where the choice ended (the forward ones,
+  or a brake back) survives. Retrained on 4.24 million choices
+  (data/datasets/block_smb/outcomes_20261109b;
+  data/outcome/outcome_20261109b.pt): fresh random levels 97 speed runs and
+  94 max-points runs (more deaths than before: 3 and 6); on 1-1 from game
+  memory the bench **0.90** (the staircases pass; deaths at the second
+  pit and the 1965 Goombas), full 1-1 in max points finished with score
+  1,600 (the speed run died at the second pit).
 
