@@ -47,7 +47,7 @@ from retroagi.core.smb_controller import (
     perceived,
 )
 from retroagi.core.smb_physics import NESPlayerMotion
-from retroagi.core.smb_planner import Enemy, Goal, Solid, floor_behind, screen_edge, solids_of
+from retroagi.core.smb_planner import BLOCK_KINDS, Enemy, Goal, Solid, floor_behind, screen_edge, solids_of
 from retroagi.core.smb_scene_labels import scene_from_labels
 
 from .pixel_labels import PLAYER_FLOAT_STATE, Unexplained, label_frame
@@ -167,7 +167,7 @@ def _floor_run(state: State, first):
     end = first.x1
     while True:
         more = next((s for s in state.solids if s is not first and abs(s.x0 - end) <= 2
-                     and abs(s.top - first.top) <= 2 and s.x1 > end and s.kind != "block"), None)
+                     and abs(s.top - first.top) <= 2 and s.x1 > end and s.kind not in BLOCK_KINDS), None)
         if more is None:
             break
         end = more.x1
@@ -185,7 +185,7 @@ def _steps_down(state: State, under) -> bool:
     seam was infeasible)."""
     after = under.x1 + 2
     return any(s is not under and s.x0 <= after < s.x1 and 0 <= s.top - under.top <= STEP_DOWN
-               and s.kind != "block" for s in state.solids)
+               and s.kind not in BLOCK_KINDS for s in state.solids)
 
 
 def _steps_on(state: State, first) -> float:
@@ -194,7 +194,7 @@ def _steps_on(state: State, first) -> float:
     end, top = first.x1, first.top
     while True:
         step = next((s for s in state.solids if abs(s.x0 - end) <= 2 and 0 < s.top - top <= STEP_DOWN
-                     and s.kind != "block"), None)
+                     and s.kind not in BLOCK_KINDS), None)
         if step is None:
             return end
         end, top = step.x1, step.top
@@ -293,7 +293,7 @@ class ScriptedChooser:
             s = raised[0]
             return Choice("jump", Goal("land", s.ref, s.x0, s.x1, top=s.top))
         if pit and under.x1 - mx < PIT_AHEAD:
-            beyond = sorted((s for s in state.solids if s.x0 >= under.x1 - 2 and s.kind != "block"),
+            beyond = sorted((s for s in state.solids if s.x0 >= under.x1 - 2 and s.kind not in BLOCK_KINDS),
                             key=lambda s: s.x0)
             # Across at the same height (from one staircase to the next)
             # before down into what lies between.

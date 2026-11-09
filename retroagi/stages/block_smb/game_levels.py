@@ -5,9 +5,11 @@ could still pass them").
 A level is a run of World 1-1's pieces, in pixels as the game draws them
 (16-pixel tiles, the floor's top at 208): pits 2 to 4 tiles wide, pipes 2 to
 4 tiles tall, staircases up and down with a valley or a pit between (each
-top one or two columns wide), rows of
-bricks at the game's two heights (4 and 8 tiles above the floor, Goombas
-sometimes walking on the upper one), single Goombas and pairs, and a
+top one or two columns wide), rows of bricks and question blocks at the
+game's two heights (4 and 8 tiles above the floor, Goombas sometimes walking
+on the upper one; a question block holds a coin or a mushroom, big Mario
+breaks bricks), question blocks over the floor, single Goombas and pairs,
+and a
 staircase before the flag, each separated by a few tiles of floor
 (random_level). The floor is cut where a pipe or a step stands, as the game
 draws it. Goombas follow the game's rules (env.py "game_rules": they wake as
@@ -16,8 +18,9 @@ off ledges), and the camera keeps Mario where the real game does
 (SCROLL_X).
 
 BlockTruthState gives the controller its state from the simulator as
-TruthState does from the real game's memory: what is on screen, the screen's
-left edge a wall. play() runs a chooser (stages/full_smb/scripted_chooser.py)
+TruthState does from the real game's memory: what is on screen (question
+blocks not yet hit as their own kind, mushrooms as items), the screen's left
+edge a wall. play() runs a chooser (stages/full_smb/scripted_chooser.py)
 and the controller (core/smb_controller.py) through a level.
 """
 
@@ -42,7 +45,7 @@ START_FLAT = 10
 FLAT = (3, 8)
 END_FLAT = 10
 # The pieces and how often each comes.
-PIECES = {"pipe": 3, "pit": 2, "goombas": 3, "bricks": 2, "stairs": 1}
+PIECES = {"pipe": 3, "pit": 2, "goombas": 3, "bricks": 2, "stairs": 1, "questions": 1}
 PIPE_TILES = (2, 3, 4)
 PIT_TILES = (2, 2, 3, 3, 4)
 STAIR_TILES = (3, 4)
@@ -50,6 +53,15 @@ STAIR_TOPS = (1, 2)
 # Brick rows: their tops (pixels) and lengths (tiles).
 LOW_ROW, HIGH_ROW = FLOOR - 4 * TILE, FLOOR - 8 * TILE
 LOW_TILES, HIGH_TILES = (1, 5), (3, 8)
+# In a brick row this share of tiles are question blocks; a question block
+# holds a mushroom MUSHROOM_SHARE of the time, else a coin. The "questions"
+# piece is 1 to 3 question blocks over the floor (1-1's first).
+QUESTION_SHARE = 0.3
+MUSHROOM_SHARE = 0.35
+# The share of levels Mario starts big (as after 1-1's first mushroom). Both
+# shares are above the game's so the outcome network sees mushrooms and big
+# Mario often enough (at the game's, sampled states almost never had one).
+BIG_START = 0.3
 # Two Goombas walk this far apart (pixels), as in 1-1.
 PAIR_GAP = 24
 # A Goomba's body as the simulator places it: its feet this far below the
@@ -69,10 +81,20 @@ def random_level(seed: int, pieces: int = 12) -> dict:
     rng = random.Random(seed)
     x = START_FLAT * TILE
     pits, solids, enemies = [], [], []  # pits (x0, x1); solids [x, y, w, h, kind]
+    contents = {}  # index in solids -> "coin" or "mushroom"
 
     def column(x0, tiles):
         top = FLOOR - tiles * TILE
         solids.append([x0, top, TILE, BOTTOM - top, "ground"])
+
+    def block(x0, top, question):
+        if question:
+            contents[len(solids)] = "mushroom" if rng.random() < MUSHROOM_SHARE else "coin"
+        solids.append([x0, top, TILE, TILE, "question_block" if question else "brick"])
+
+    def row(x0, top, tiles):
+        for k in range(tiles):
+            block(x0 + k * TILE, top, rng.random() < QUESTION_SHARE)
 
     for _ in range(pieces):
         kind = rng.choices(list(PIECES), weights=list(PIECES.values()))[0]
@@ -89,14 +111,18 @@ def random_level(seed: int, pieces: int = 12) -> dict:
             if rng.random() < 0.5:
                 enemies.append(_goomba(x + PAIR_GAP, FLOOR))
             x += 3 * TILE
+        elif kind == "questions":
+            for k in range(rng.randint(1, 3)):
+                block(x + 2 * k * TILE, LOW_ROW, True)
+            x += 5 * TILE
         elif kind == "bricks":
             low = rng.randint(*LOW_TILES)
-            solids.append([x, LOW_ROW, low * TILE, TILE, "brick"])
+            row(x, LOW_ROW, low)
             end = x + low * TILE
             if rng.random() < 0.5:
                 start = x + rng.randint(1, 2) * TILE
                 high = rng.randint(*HIGH_TILES)
-                solids.append([start, HIGH_ROW, high * TILE, TILE, "brick"])
+                row(start, HIGH_ROW, high)
                 if rng.random() < 0.5:
                     enemies.append(_goomba(start + (high - 1) * TILE, HIGH_ROW))
                 end = max(end, start + high * TILE)
@@ -136,7 +162,10 @@ def random_level(seed: int, pieces: int = 12) -> dict:
         start = max(start, x1)
     floor.append([start, FLOOR, width - start, BOTTOM - FLOOR, "ground"])
     platforms = floor + solids
+    big = rng.random() < BIG_START
     return {
+        "mario_big": big,
+        "block_contents": {len(floor) + k: c for k, c in contents.items()},
         "task": {"family": "game_level"},
         "world_width": width,
         "scroll_x": SCROLL_X,
@@ -151,6 +180,8 @@ def random_level(seed: int, pieces: int = 12) -> dict:
 
 
 _KINDS = {"ground": "ground", "pipe": "pipe", "brick": "block", "question_block": "block", "moving_platform": "moving"}
+# A question block not yet hit (the game draws it with its question mark).
+QUESTION = "question"
 
 
 class BlockTruthState:
@@ -162,10 +193,10 @@ class BlockTruthState:
         solids = []
         for k, (p, kind) in enumerate(zip(env.platforms, env.platform_kinds)):
             r = p["rect"]
-            if r.right <= left or r.left >= right:
+            if r.width == 0 or r.right <= left or r.left >= right:
                 continue
-            solids.append(Solid(max(r.left, left), r.top, min(r.right, right), r.bottom,
-                                _KINDS.get(kind, "block"), ("platforms", k)))
+            seen = QUESTION if p.get("contents") and not p.get("used") else _KINDS.get(kind, "block")
+            solids.append(Solid(max(r.left, left), r.top, min(r.right, right), r.bottom, seen, ("platforms", k)))
         enemies = []
         for k, e in enumerate(env.enemies):
             awake = e.get("awake", not e.get("game_rules"))
@@ -176,6 +207,9 @@ class BlockTruthState:
             vy = 0.0 if e["on_ground"] else e["vy"]
             enemies.append(Enemy(box, e["speed"] * e["direction"], vy, ("enemies", k),
                                  stompable=bool(e.get("stompable", True))))
+        items = [Enemy((i["x"], i["y"], i["x"] + i["w"], i["y"] + i["h"]), i["vx"], i["vy"], ("items", k),
+                       stompable=False)
+                 for k, i in enumerate(env.items) if i["x"] + i["w"] > left and i["x"] < right]
         m = env.mario
         return State(
             body=(m["x"], m["y"], m["x"] + m["w"], m["y"] + m["h"]),
@@ -183,6 +217,7 @@ class BlockTruthState:
             grounded=bool(m["on_ground"]),
             solids=solids + [screen_edge(left)],
             enemies=enemies,
+            items=items,
         )
 
 

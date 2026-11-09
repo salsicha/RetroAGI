@@ -83,6 +83,15 @@ MONSTER_W, MONSTER_H = 16, 20
 MARIO, MARIO_SKIDDING, EYE = (255, 0, 0), (255, 220, 0), (255, 255, 255)
 POWER_UP_CAP, POWER_UP_SPOT, POWER_UP_STEM = (232, 48, 24), (252, 252, 252), (252, 216, 168)
 POWER_UP_SIZE = 16
+# Question blocks, mushrooms and big Mario (levels that give block contents,
+# stages/block_smb/game_levels.py), as the game has them: points in its
+# proportions (a stomp 100, a coin 200, a mushroom 1000, here 5, 10, 50), a
+# mushroom moving MUSHROOM_SPEED pixels a frame, big Mario's body BIG_W by
+# BIG_H, and the frames he cannot be hurt after shrinking from a hit.
+COIN_POINTS, MUSHROOM_POINTS = 10, 50
+MUSHROOM_SPEED = 1.0
+SMALL_W, SMALL_H, BIG_W, BIG_H = 10, 12, 12, 24
+HURT_FRAMES = 120
 # Pre-episode frames ("watch_frames") end with Mario standing: up to this many
 # more are watched while one who starts above the floor drops onto it.
 LANDING_WATCH = 64
@@ -285,6 +294,7 @@ class MarioScenarioEnv:
         self.platform_kinds = []  # drawn kind of each platform
         self.coins = []
         self.power_ups = []
+        self.items = []  # mushrooms out of question blocks
         self.stomped = False
         self.enemies = []
         self.goal = None
@@ -379,6 +389,8 @@ class MarioScenarioEnv:
             "facing": 1,  # 1 = right, -1 = left
             "skidding": False,
             "jump_held": False,  # was jump action present last frame?
+            "big": False,  # grown by a mushroom
+            "safe": 0,  # frames left in which enemies cannot hurt him
         }
         if "mario_velocity" in scenario:
             vx, vy = scenario["mario_velocity"]
@@ -397,6 +409,13 @@ class MarioScenarioEnv:
         for p in scenario.get("platforms", []):
             self.platforms.append(self._parse_platform(p))
         self.platform_kinds = self._platform_kinds(scenario.get("platform_kinds"))
+        if scenario.get("mario_big"):
+            self._resize(big=True)  # (standing where small Mario would)
+        # What each question block holds ({platform index: "coin" or
+        # "mushroom"}); the mushrooms out and moving (items).
+        for index, content in (scenario.get("block_contents") or {}).items():
+            self.platforms[int(index)]["contents"] = content
+        self.items = []
 
         # Settle the spawn: scenarios place Mario a few pixels above his
         # surface, which used to leave him airborne for the first frames.
@@ -712,6 +731,7 @@ class MarioScenarioEnv:
                     self.mario["_platform"] = plat
                 elif self.mario["vy"] < 0:  # hitting ceiling
                     mario_rect.top = r.bottom
+                    self._bump(plat, reward_terms)
                 self.mario["y"] = mario_rect.y
                 self.mario["vy"] = 0
                 self.motion.vertical_contact()
@@ -823,10 +843,30 @@ class MarioScenarioEnv:
                     terminated = True
                     reward_terms["goal"] += self.reward_config.goal
                     self._goal_credited = True
+            elif self.mario["safe"] > 0:
+                pass  # just hurt: enemies pass through him
+            elif self.mario["big"]:
+                self._resize(big=False)  # hurt: he shrinks
+                self.mario["safe"] = HURT_FRAMES
+                mario_rect = pygame.Rect(self.mario["x"], self.mario["y"], self.mario["w"], self.mario["h"])
             else:
                 terminated = True
                 death = True
                 reward_terms["enemy_hit"] += self.reward_config.enemy_hit
+        self.mario["safe"] = max(0, self.mario["safe"] - 1)
+
+        # ── 15b. Mushrooms out of question blocks ────────────────────────────
+        for item in list(self.items):
+            self._update_item(item, rects)
+            if item["y"] > self.height:
+                self.items.remove(item)
+            elif mario_rect.colliderect(pygame.Rect(item["x"], item["y"], item["w"], item["h"])):
+                self.items.remove(item)
+                self.score += MUSHROOM_POINTS
+                reward_terms["power_up"] += self.reward_config.power_up
+                if not self.mario["big"]:
+                    self._resize(big=True)
+                    mario_rect = pygame.Rect(self.mario["x"], self.mario["y"], self.mario["w"], self.mario["h"])
 
         # ── 16. Coin collection ───────────────────────────────────────────────
         for coin in self.coins:
@@ -1341,6 +1381,48 @@ class MarioScenarioEnv:
         }
 
     # ── Enemy helpers ─────────────────────────────────────────────────────────
+
+    def _bump(self, plat: dict, reward_terms: dict) -> None:
+        """Mario's head hit ``plat`` from below: a question block gives its
+        coin or lets out its mushroom (once); big Mario breaks a brick."""
+        if plat.get("contents") and not plat.get("used"):
+            plat["used"] = True
+            if plat["contents"] == "coin":
+                self.score += COIN_POINTS
+                reward_terms["coin"] += self.reward_config.coin
+            else:
+                r = plat["rect"]
+                self.items.append({"kind": plat["contents"], "x": float(r.x), "y": float(r.top - POWER_UP_SIZE),
+                                   "w": POWER_UP_SIZE, "h": POWER_UP_SIZE, "vx": MUSHROOM_SPEED, "vy": 0.0})
+            return
+        index = self.platforms.index(plat)
+        if self.mario["big"] and self.platform_kinds[index] == "brick" and not plat.get("contents"):
+            plat["rect"] = pygame.Rect(-10_000, -10_000, 0, 0)  # broken: gone, its index kept
+
+    def _resize(self, big: bool) -> None:
+        """Mario grown by a mushroom or shrunk by a hit, his feet and middle
+        where they were."""
+        m = self.mario
+        w, h = (BIG_W, BIG_H) if big else (SMALL_W, SMALL_H)
+        m["x"] += (m["w"] - w) / 2
+        m["y"] += m["h"] - h
+        m["w"], m["h"], m["big"] = w, h, big
+
+    def _update_item(self, item: dict, platform_rects: list) -> None:
+        """A mushroom moves on as a walker does (turned by walls, falling
+        off ledges), at its own speed."""
+        item["vy"] = min(item["vy"] + ENEMY_GRAVITY, self.max_fall_speed)
+        item["x"] += item["vx"]
+        body = pygame.Rect(item["x"], item["y"], item["w"], item["h"])
+        if any(body.colliderect(r) and r.top < body.bottom - 2 for r in platform_rects):
+            item["x"] -= item["vx"]
+            item["vx"] = -item["vx"]
+        item["y"] += item["vy"]
+        body = pygame.Rect(item["x"], item["y"], item["w"], item["h"])
+        for r in platform_rects:
+            if body.colliderect(r) and item["vy"] >= 0:
+                item["y"] = float(r.top - item["h"])
+                item["vy"] = 0.0
 
     def _update_enemy(self, enemy: dict, platform_rects: list):
         """Move enemy, apply gravity, resolve platform collisions, patrol logic."""

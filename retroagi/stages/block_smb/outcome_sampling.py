@@ -15,7 +15,9 @@ walked into a valley between staircases and waited there).
 
 The states come from play on random levels by the scripted chooser
 (stages/full_smb/scripted_chooser.py), which takes a random candidate
-instead EXPLORE of the time so that the states include what a careful
+(a kind of choice at random, then one of that kind) instead EXPLORE of the
+time, and bumps a question block in reach or collects an item on screen
+TRY_POWER_UPS of the time so that the states include what a careful
 player would not get into. Every decision point is kept: the state as
 tokens relative to Mario (state_tokens: Mario; the surfaces and enemies on
 screen), each candidate as (kind, the slot of its thing, modifier), each
@@ -27,7 +29,17 @@ from typing import Optional
 
 import numpy as np
 
-from retroagi.core.smb_choices import ENEMY_SLOTS, RUN_LONG, SURFACE_SLOTS, SURFACE_WIDTH, candidates, state_tokens
+from retroagi.core.smb_choices import (
+    ENEMY_SLOTS,
+    ITEM_SLOTS,
+    ITEM_WIDTH,
+    KINDS,
+    RUN_LONG,
+    SURFACE_SLOTS,
+    SURFACE_WIDTH,
+    candidates,
+    state_tokens,
+)
 from retroagi.core.smb_controller import Choice, Controller
 from retroagi.core.smb_planner import Goal
 
@@ -42,8 +54,11 @@ WINDOW = 16
 FALLING = 64
 # A choice lasts at most this many frames.
 LONGEST = 240
-# The share of decisions the player makes at random.
+# The share of decisions the player makes at random; and how often it bumps
+# a question block in reach, or collects an item on screen (so that states
+# with a mushroom out, and big Mario, are common enough to learn from).
 EXPLORE = 0.3
+TRY_POWER_UPS = 0.5
 # After a choice, Mario is stuck when no forward probe (probes) from where
 # it left him is feasible, safe and takes him at least STUCK_PROGRESS pixels
 # right; PROBE_SURFACES of the surfaces ahead are probed.
@@ -61,7 +76,7 @@ def probes(state) -> list:
     body = state.body
     mx = (body[0] + body[2]) / 2
     out = [Choice("run", x=mx + RUN_LONG, keep_speed=True)]
-    ahead = sorted((s for s in state.solids if s.kind in ("ground", "pipe", "block", "moving")
+    ahead = sorted((s for s in state.solids if s.kind in ("ground", "pipe", "block", "question", "moving")
                     and s.x1 > mx + STUCK_PROGRESS + 8), key=lambda s: max(s.x0, mx))
     for s in ahead[:PROBE_SURFACES]:
         x0 = max(s.x0, mx + STUCK_PROGRESS)
@@ -71,6 +86,11 @@ def probes(state) -> list:
         e = min(coming, key=lambda e: e.box[0])
         out += [Choice("jump", Goal("pass", e.ref, side=1)), Choice("jump", Goal("stomp", e.ref))]
     return out
+
+
+def question_refs(state) -> set:
+    """The refs of the question blocks not yet hit on screen."""
+    return {s.ref for s in state.solids if s.kind == "question"}
 
 
 def outcome(env, source: BlockTruthState, choice: Choice, probe: bool = True) -> tuple:
@@ -148,24 +168,35 @@ def sample_level(seed: int, mode: str, *, explore: float = EXPLORE, rng: Optiona
     env.reset(scenario=level)
     source, controller, chooser = BlockTruthState(), Controller(), ScriptedChooser(mode)
     last_event, last_choice = None, None
-    marios, surfaces, enemies, rows, outcomes = [], [], [], [], []
+    marios, surfaces, enemies, items, rows, outcomes = [], [], [], [], [], []
     for _ in range(level["frame_budget"]):
         state = source.read(env)
         if (controller.choice is None or controller.event is not None) and state.grounded:
-            mario, surface, enemy, slots = state_tokens(state)
+            mario, surface, enemy, item, slots = state_tokens(state)
             snapshot = snapshot_env_state(env)
             options = candidates(state)
             index = len(marios)
             marios.append(mario)
             surfaces.append(surface)
             enemies.append(enemy)
+            items.append(item)
             for choice, kind, ref, modifier in options:
                 outcomes.append(outcome(env, source, choice))
                 rows.append((index, kind, slots.get(ref, -1) if ref is not None else -1, modifier))
                 restore_env_state(env, snapshot)
             last_event = controller.event
-            if rng.random() < explore:
-                last_choice = rng.choice(options)[0]
+            questions = [o for o in options if o[1] == KINDS.index("bump") and o[0].goal.ref in question_refs(state)]
+            items_out = [o for o in options if o[1] == KINDS.index("collect")]
+            if items_out and rng.random() < TRY_POWER_UPS:
+                last_choice = rng.choice(items_out)[0]
+            elif questions and rng.random() < TRY_POWER_UPS:
+                last_choice = rng.choice(questions)[0]
+            elif rng.random() < explore:
+                # a kind of choice at random, then one of that kind: bumps and
+                # collects, a few among thirty landings, were almost never
+                # tried, and no state had a mushroom out or Mario big
+                kind = rng.choice(sorted({k for _, k, _, _ in options}))
+                last_choice = rng.choice([o for o in options if o[1] == kind])[0]
             else:
                 last_choice = chooser.decide(state, last_event, last_choice)
             controller = Controller()
@@ -178,6 +209,7 @@ def sample_level(seed: int, mode: str, *, explore: float = EXPLORE, rng: Optiona
         "mario": np.array(marios, np.float32).reshape(-1, 7),
         "surfaces": np.array(surfaces, np.float32).reshape(-1, SURFACE_SLOTS, SURFACE_WIDTH),
         "enemies": np.array(enemies, np.float32).reshape(-1, ENEMY_SLOTS, 7),
+        "items": np.array(items, np.float32).reshape(-1, ITEM_SLOTS, ITEM_WIDTH),
         "choices": np.array(rows, np.int32).reshape(-1, 4),  # state, kind, slot, modifier
         "outcomes": np.array(outcomes, np.float32).reshape(-1, len(OUTCOME_FIELDS)),
         "seed": np.full(len(marios), seed, np.int32),

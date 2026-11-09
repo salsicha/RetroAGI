@@ -85,6 +85,8 @@ FLIGHT_HOLDS = (0, 2, 4, 8, 12, 16, 24, 32)
 # (floor_behind).
 HIDDEN_GAP = 20
 HIDDEN_FEET = 8
+# The kinds of solid that are blocks (a question block not yet hit is one).
+BLOCK_KINDS = ("block", "question")
 # Buttons: SMBAction RIGHT 1, LEFT 3, RIGHT_JUMP 2, LEFT_JUMP 4, NOOP 0, JUMP 5.
 BUTTON = {(1, False): 1, (-1, False): 3, (0, False): 0, (1, True): 2, (-1, True): 4, (0, True): 5}
 
@@ -148,7 +150,8 @@ class Goal:
     """What the chooser asked for: "land" on the thing ``ref`` whose top is
     ``top``, inside x0..x1 by INSET (matched by where it is: the slots
     renumber as the camera scrolls; ``top`` None: on whatever lies there,
-    a staircase's steps), "stomp" the enemy ``ref``, or "pass" it
+    a staircase's steps), "bump" the block over x0..x1 whose bottom is
+    ``top`` from below, "collect" the item ``ref``, "stomp" the enemy ``ref``, or "pass" it
     (land on its ``side``, 1 right of it, -1 left, PASS_GAP clear of where
     it is at the landing, without touching it: a walker coming at Mario can
     pass under a jump). ``prefer``: where on a landing, "near", "middle" or
@@ -167,8 +170,9 @@ class Goal:
 class Outcome:
     """How a rollout ends: "landed" (on ``solid``), "hit" (``enemy``; also a
     landing an enemy reaches within SAFE_AFTER frames), "bonk" (a block from
-    below), "fell", "timeout"; at ``frame``, Mario's body then. A stomp on the way bounces Mario and the rollout goes on to
-    his landing; ``stomped`` is the enemy stomped."""
+    below), "fell", "timeout"; at ``frame``, Mario's body then. A stomp on
+    the way bounces Mario and the rollout goes on to his landing; ``stomped``
+    is the enemy stomped, ``collected`` the item he touched."""
 
     end: str
     frame: int
@@ -176,6 +180,7 @@ class Outcome:
     solid: Optional[Solid] = None
     enemy: Optional[Enemy] = None
     stomped: Optional[Enemy] = None
+    collected: Optional[Enemy] = None
 
 
 @dataclass
@@ -417,16 +422,32 @@ def _reached(x0, y0, x1, y1, m0, paths, stomped, frame, safe_after):
 
 
 @njit(cache=True)
+def _touch(x0, y0, x1, y1, items, frame, got):
+    """``got``, or the first of ``items`` (paths) the body touches at
+    ``frame`` if none yet."""
+    if got >= 0:
+        return got
+    last = items.shape[1] - 1
+    for k in range(items.shape[0]):
+        b = items[k, min(frame + 1, last)]
+        if x0 < b[2] and b[0] < x1 and y0 < b[3] and b[1] < y1:
+            return k
+    return -1
+
+
+@njit(cache=True)
 def _rollout(m0, x, y, x1, y1, pre_run, hold, direction, solids, paths, stompable, horizon,
-             airborne, steer, steer_direction, safe_after):
+             airborne, steer, steer_direction, safe_after, items):
     """rollout on arrays (from the air when ``airborne``, steering
     ``steer_direction`` the first ``steer`` frames): (end, frame, body x0,
-    y0, x1, y1, solid, enemy, stomped), indexes -1 where none; ``stomped``
-    is the first enemy stomped (a bounce can stomp the next one too: the
-    ones stomped are a bit mask, ``down``)."""
+    y0, x1, y1, solid, enemy, stomped, got), indexes -1 where none;
+    ``stomped`` is the first enemy stomped (a bounce can stomp the next one
+    too: the ones stomped are a bit mask, ``down``); ``got`` the first of
+    ``items`` (paths, as enemies') Mario touched."""
     m = m0.copy()
     width, height = x1 - x, y1 - y
     stomped = -1
+    got = -1
     down = 0
     last = paths.shape[1] - 1
     for frame in range(horizon):
@@ -441,6 +462,7 @@ def _rollout(m0, x, y, x1, y1, pre_run, hold, direction, solids, paths, stompabl
             m[0] = 0
             m[1] = 0
             m[2] = 0
+        got = _touch(nx, y, nx + width, y + height, items, frame, got)
         if not airborne:
             ny = y
             supported = False
@@ -455,15 +477,17 @@ def _rollout(m0, x, y, x1, y1, pre_run, hold, direction, solids, paths, stompabl
             if dy < 0:
                 for i in range(solids.shape[0]):
                     if nx < solids[i, 2] and solids[i, 0] < nx + width and ny < solids[i, 3] <= y:
-                        return _BONK, frame, nx, ny, nx + width, ny + height, i, -1, stomped
+                        return _BONK, frame, nx, ny, nx + width, ny + height, i, -1, stomped, got
             else:
                 for i in range(solids.shape[0]):
                     if nx < solids[i, 2] and solids[i, 0] < nx + width and feet <= solids[i, 1] <= ny + height:
                         top = solids[i, 1]
+                        got = _touch(nx, top - height, nx + width, top, items, frame, got)
                         threat = _reached(nx, top - height, nx + width, top, m, paths, down, frame, safe_after)
                         if threat >= 0:
-                            return _HIT, frame, nx, top - height, nx + width, top, -1, threat, stomped
-                        return _LANDED, frame, nx, top - height, nx + width, top, i, -1, stomped
+                            return _HIT, frame, nx, top - height, nx + width, top, -1, threat, stomped, got
+                        return _LANDED, frame, nx, top - height, nx + width, top, i, -1, stomped, got
+        got = _touch(nx, ny, nx + width, ny + height, items, frame, got)
         hit = -1
         for e in range(paths.shape[0]):
             if (down >> e) & 1:
@@ -487,11 +511,11 @@ def _rollout(m0, x, y, x1, y1, pre_run, hold, direction, solids, paths, stompabl
             hit = e
             break
         if hit >= 0:
-            return _HIT, frame, nx, ny, nx + width, ny + height, -1, hit, stomped
+            return _HIT, frame, nx, ny, nx + width, ny + height, -1, hit, stomped, got
         if ny > SCREEN_BOTTOM:
-            return _FELL, frame, nx, ny, nx + width, ny + height, -1, -1, stomped
+            return _FELL, frame, nx, ny, nx + width, ny + height, -1, -1, stomped, got
         x, y = nx, ny
-    return _TIMEOUT, horizon, x, y, x + width, y + height, -1, -1, stomped
+    return _TIMEOUT, horizon, x, y, x + width, y + height, -1, -1, stomped, got
 
 
 def blocked(x: float, width: float, top: float, feet: float, solids: Sequence[Solid]) -> bool:
@@ -512,19 +536,28 @@ def _packed(enemies: Sequence[Enemy], frames: int) -> tuple:
     return paths, np.array([e.stompable for e in enemies], np.bool_)
 
 
-def _outcome(raw, solids: Sequence[Solid], enemies: Sequence[Enemy]) -> Outcome:
-    end, frame, x0, y0, x1, y1, solid, enemy, stomped = raw
+def _outcome(raw, solids: Sequence[Solid], enemies: Sequence[Enemy], items: Sequence[Enemy] = ()) -> Outcome:
+    end, frame, x0, y0, x1, y1, solid, enemy, stomped, got = raw
     return Outcome(
         ENDS[end], int(frame), (float(x0), float(y0), float(x1), float(y1)),
         solid=solids[solid] if solid >= 0 else None,
         enemy=enemies[enemy] if enemy >= 0 else None,
         stomped=enemies[stomped] if stomped >= 0 else None,
+        collected=items[got] if got >= 0 else None,
     )
+
+
+def _item_paths(items: Sequence[Enemy], solids: Sequence[Solid], frames: int) -> np.ndarray:
+    """The items' predicted paths (they move as walkers do) for the compiled
+    core."""
+    enemy_paths(items, solids, frames)
+    return _packed(items, frames)[0]
 
 
 def rollout(motion: NESPlayerMotion, body: tuple, pre_run: int, hold: int, direction: int,
             solids: Sequence[Solid], enemies: Sequence[Enemy], horizon: int = HORIZON,
-            airborne: bool = False, steer: int = 0, steer_direction: int = 0) -> Outcome:
+            airborne: bool = False, steer: int = 0, steer_direction: int = 0,
+            items: Sequence[Enemy] = ()) -> Outcome:
     """Mario from ``body`` (world pixels), standing (or in the air,
     ``airborne``), running ``pre_run`` frames then holding the jump button
     ``hold`` frames, steering ``steer_direction`` the first ``steer`` frames
@@ -532,14 +565,24 @@ def rollout(motion: NESPlayerMotion, body: tuple, pre_run: int, hold: int, direc
     paths, stompable = _packed(enemies, horizon + SAFE_AFTER + 1)
     x, y, x1, y1 = (float(v) for v in body)
     raw = _rollout(_motion_array(motion), x, y, x1, y1, pre_run, hold, direction, _solid_array(solids),
-                   paths, stompable, horizon, airborne, steer, steer_direction, SAFE_AFTER)
-    return _outcome(raw, solids, enemies)
+                   paths, stompable, horizon, airborne, steer, steer_direction, SAFE_AFTER,
+                   _item_paths(items, solids, horizon + SAFE_AFTER + 1))
+    return _outcome(raw, solids, enemies, items)
 
 
 def _meets(goal: Goal, outcome: Outcome, enemies: Sequence[Enemy] = ()) -> Optional[float]:
     """The margin by which ``outcome`` meets ``goal`` (larger is better);
     None if it does not."""
     middle = (outcome.body[0] + outcome.body[2]) / 2
+    if goal.kind == "bump":
+        # the block hit from below (the rest of the jump falls back down)
+        solid = outcome.solid
+        hit = outcome.end == "bonk" and _overlap(solid.x0, solid.x1, goal.x0, goal.x1) \
+            and abs(solid.bottom - goal.top) <= STAND + 1
+        return -abs(middle - (goal.x0 + goal.x1) / 2) if hit else None
+    if goal.kind == "collect":
+        got = outcome.end == "landed" and outcome.collected is not None and outcome.collected.ref == goal.ref
+        return 0.0 if got else None
     if goal.kind == "stomp":
         stomped = outcome.end == "landed" and outcome.stomped is not None and outcome.stomped.ref == goal.ref
         return 0.0 if stomped else None
@@ -577,7 +620,8 @@ def buttons_of(pre_run: int, hold: int, direction: int, frames: int, steer: int 
 
 
 def plan_jump(goal: Goal, motion: NESPlayerMotion, body: tuple, solids: Sequence[Solid],
-              enemies: Sequence[Enemy], direction: int, latest_takeoff: int = HORIZON) -> Optional[Plan]:
+              enemies: Sequence[Enemy], direction: int, latest_takeoff: int = HORIZON,
+              items: Sequence[Enemy] = ()) -> Optional[Plan]:
     """The plan meeting ``goal`` with the most margin (then the soonest);
     None when no takeoff and hold (nor walking on) does: the goal is
     infeasible from here. ``latest_takeoff``: no plan taking off later
@@ -587,17 +631,19 @@ def plan_jump(goal: Goal, motion: NESPlayerMotion, body: tuple, solids: Sequence
     frames = HORIZON + SAFE_AFTER + 1
     enemy_paths(enemies, solids, frames)
     paths, stompable = _packed(enemies, frames)
+    item_paths = _item_paths(items, solids, frames)
     m, packed_solids = _motion_array(motion), _solid_array(solids)
     x, y, x1, y1 = (float(v) for v in body)
     tries = [(pre_run, hold) for pre_run in PRE_RUNS if pre_run <= latest_takeoff for hold in NES_JUMP_FRAMES]
     if latest_takeoff >= HORIZON:
         tries.insert(0, (HORIZON, 0))
+    ending = _BONK if goal.kind == "bump" else _LANDED  # every other goal ends standing
     for pre_run, hold in tries:
         raw = _rollout(m, x, y, x1, y1, pre_run, hold, direction, packed_solids, paths, stompable, HORIZON,
-                       False, 0, 0, SAFE_AFTER)
-        if raw[0] != _LANDED:
-            continue  # every goal ends standing
-        outcome = _outcome(raw, solids, enemies)
+                       False, 0, 0, SAFE_AFTER, item_paths)
+        if raw[0] != ending:
+            continue
+        outcome = _outcome(raw, solids, enemies, items)
         margin = _meets(goal, outcome, enemies)
         if margin is None:
             continue
@@ -612,7 +658,8 @@ def plan_jump(goal: Goal, motion: NESPlayerMotion, body: tuple, solids: Sequence
 
 
 def plan_flight(goal: Optional[Goal], motion: NESPlayerMotion, body: tuple, solids: Sequence[Solid],
-                enemies: Sequence[Enemy], direction: int, hold_left: int, aim: float) -> Optional[Plan]:
+                enemies: Sequence[Enemy], direction: int, hold_left: int, aim: float,
+                items: Sequence[Enemy] = ()) -> Optional[Plan]:
     """In the air: the jump's rest, ``hold_left`` more frames of the jump
     button steering ``direction``, if it still meets ``goal`` (None: any
     safe landing); else the correction meeting it with the most margin: the
@@ -625,6 +672,7 @@ def plan_flight(goal: Optional[Goal], motion: NESPlayerMotion, body: tuple, soli
     frames = HORIZON + SAFE_AFTER + 1
     enemy_paths(enemies, solids, frames)
     paths, stompable = _packed(enemies, frames)
+    item_paths = _item_paths(items, solids, frames)
     m, packed_solids = _motion_array(motion), _solid_array(solids)
     x, y, x1, y1 = (float(v) for v in body)
     holds = FLIGHT_HOLDS if motion.previous_jump else (0,)
@@ -634,10 +682,10 @@ def plan_flight(goal: Optional[Goal], motion: NESPlayerMotion, body: tuple, soli
     best, fallback = None, None
     for hold, steer, d in tries:
         raw = _rollout(m, x, y, x1, y1, 0, hold, direction, packed_solids, paths, stompable, HORIZON,
-                       True, steer, d, SAFE_AFTER)
+                       True, steer, d, SAFE_AFTER, item_paths)
         if raw[0] != _LANDED:
             continue
-        outcome = _outcome(raw, solids, enemies)
+        outcome = _outcome(raw, solids, enemies, items)
         plan = Plan(0, hold, direction, outcome, 0.0,
                     buttons_of(0, hold, direction, outcome.frame + 1, steer, d))
         margin = 0.0 if goal is None else _meets(goal, outcome, enemies)
@@ -657,10 +705,10 @@ def plan_flight(goal: Optional[Goal], motion: NESPlayerMotion, body: tuple, soli
         return fallback[1]
     for hold, steer, d in tries:
         raw = _rollout(m, x, y, x1, y1, 0, hold, direction, packed_solids, paths, stompable, HORIZON,
-                       True, steer, d, LAST_RESORT_SAFE)
+                       True, steer, d, LAST_RESORT_SAFE, item_paths)
         if raw[0] != _LANDED:
             continue
-        outcome = _outcome(raw, solids, enemies)
+        outcome = _outcome(raw, solids, enemies, items)
         near = -abs((outcome.body[0] + outcome.body[2]) / 2 - aim)
         if fallback is None or near > fallback[0]:
             fallback = (near, Plan(0, hold, direction, outcome, 0.0,

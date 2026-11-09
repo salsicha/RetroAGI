@@ -59,6 +59,7 @@ class Data:
         self.mario = torch.as_tensor(d["mario"], device=device)
         self.surfaces = torch.as_tensor(d["surfaces"], device=device)
         self.enemies = torch.as_tensor(d["enemies"], device=device)
+        self.items = torch.as_tensor(d["items"], device=device)
         self.choices = torch.as_tensor(d["choices"].astype(np.int64), device=device)
         self.targets = torch.as_tensor(targets(d["outcomes"]), device=device)
 
@@ -68,7 +69,7 @@ class Data:
     def outputs(self, model, rows):
         c = self.choices[rows]
         s = c[:, 0]
-        out = model(self.mario[s], self.surfaces[s], self.enemies[s])
+        out = model(self.mario[s], self.surfaces[s], self.enemies[s], self.items[s])
         return pick(out, c[:, 1], c[:, 2], c[:, 3]), self.targets[rows]
 
 

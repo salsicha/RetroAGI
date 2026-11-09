@@ -58,8 +58,9 @@ def test_candidates_cover_every_kind_and_tokens_have_their_slots():
         env.step(0)
     state = BlockTruthState().read(env)
     options = candidates(state)
-    assert {kind for _, kind, _, _ in options} == set(range(len(KINDS)))
-    mario, surfaces, enemies, slots = state_tokens(state)
+    # (no block overhead nor item here: neither bump nor collect)
+    assert {KINDS[kind] for _, kind, _, _ in options} == {"land", "stomp", "pass", "run", "wait"}
+    mario, surfaces, enemies, items, slots = state_tokens(state)
     assert surfaces.shape[0] == SURFACE_SLOTS and enemies.shape[0] == ENEMY_SLOTS
     assert all(ref in slots for _, _, ref, _ in options if ref is not None)
     assert mario[6] == 1.0  # standing

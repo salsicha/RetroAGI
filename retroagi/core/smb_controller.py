@@ -29,6 +29,7 @@ from typing import Optional
 
 from .smb_physics import NESPlayerMotion
 from .smb_planner import (
+    BLOCK_KINDS,
     BUTTON,
     HORIZON,
     Enemy,
@@ -111,6 +112,9 @@ class State:
     # Whether Mario's motion is known well enough to plan from (perceived:
     # the executor has measured his speed; always, from game memory).
     ready: bool = True
+    # Things to collect (a mushroom out of a question block), as enemies'
+    # boxes and velocities.
+    items: list = field(default_factory=list)
 
 
 def perceived(feedback, scene) -> Optional[State]:
@@ -200,7 +204,7 @@ def on_the_way(state: State, enemy: Enemy) -> bool:
             return True
         edge = floor.x1 + 2 if toward > 0 else floor.x0 - 2
         floor = next((s for s in state.solids if s.x0 <= edge < s.x1 and 0 < s.top - floor.top <= STEP
-                      and s.kind not in ("block", "edge")), None)
+                      and s.kind not in (*BLOCK_KINDS, "edge")), None)
     return False
 
 
@@ -249,16 +253,16 @@ class Controller:
     def _plan(self, state: State, latest_takeoff: int = HORIZON) -> None:
         goal = self.choice.goal
         middle = (state.body[0] + state.body[2]) / 2
-        if goal.kind == "land":
+        if goal.kind in ("land", "bump"):
             direction = 1 if (goal.x0 + goal.x1) / 2 >= middle else -1
         elif goal.kind == "pass":
             direction = goal.side
         else:
-            enemy = next((e for e in state.enemies if e.ref == goal.ref), None)
-            target = (enemy.box[0] + enemy.box[2]) / 2 if enemy else middle
+            thing = next((e for e in state.enemies + state.items if e.ref == goal.ref), None)
+            target = (thing.box[0] + thing.box[2]) / 2 if thing else middle
             direction = 1 if target >= middle else -1
         self.plan = plan_jump(goal, state.motion, state.body, state.solids, state.enemies, direction,
-                              latest_takeoff=latest_takeoff)
+                              latest_takeoff=latest_takeoff, items=state.items)
         # The plan's first button is pressed this frame (or, from start, the
         # first press).
         self.plan_frame = max(0, self.frame - 1)
@@ -313,13 +317,14 @@ class Controller:
         down). A goal whose enemy is gone (stomped, or off the screen)
         becomes any safe landing."""
         goal = self.choice.goal
-        if goal.kind != "land" and not any(e.ref == goal.ref for e in state.enemies):
-            goal = None
+        if goal.kind == "bump" or (goal.kind != "land" and not any(
+                e.ref == goal.ref for e in state.enemies + state.items)):
+            goal = None  # (after a bump, or its thing gone: any safe landing)
         rest = plan.buttons[step:]
         hold_left = next((k for k, b in enumerate(rest) if b not in (2, 4, 5)), len(rest))
         aim = (plan.outcome.body[0] + plan.outcome.body[2]) / 2
         flight = plan_flight(goal, state.motion, state.body, state.solids, state.enemies, plan.direction,
-                             hold_left, aim)
+                             hold_left, aim, items=state.items)
         if flight is None or flight.buttons == rest[:len(flight.buttons)]:
             return plan, step
         if flight.outcome.stomped is None:

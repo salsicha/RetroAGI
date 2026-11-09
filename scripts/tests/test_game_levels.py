@@ -16,7 +16,11 @@ def test_a_seed_always_makes_the_same_level_of_the_games_pieces():
     level = random_level(7)
     assert level == random_level(7) and level != random_level(8)
     kinds = set(level["platform_kinds"])
-    assert kinds <= {"ground", "pipe", "brick"}
+    assert kinds <= {"ground", "pipe", "brick", "question_block"}
+    # Every question block holds a coin or a mushroom.
+    questions = {k for k, kind in enumerate(level["platform_kinds"]) if kind == "question_block"}
+    assert set(level["block_contents"]) == questions
+    assert set(level["block_contents"].values()) <= {"coin", "mushroom"}
     assert all(e["game_rules"] for e in level["enemies"])
     assert level["scroll_x"] == SCROLL_X
     # Pipes and bricks sit on the 16-pixel grid; the floor is cut where a

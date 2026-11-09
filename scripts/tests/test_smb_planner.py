@@ -214,3 +214,16 @@ def test_a_walker_falls_off_a_ledge_and_walks_off_the_screen():
     flying = Enemy((200.0, 100.0, 210.0, 106.0), -0.5, 0.0, ("slots", 1))
     enemy_paths([flying], [FLOOR], 20)
     assert flying.at(20)[1] == 100.0
+
+
+def test_the_planner_bumps_a_block_and_collects_an_item():
+    # A question block four tiles over the floor ahead: a jump hits it from
+    # below.
+    block = Solid(128, 144, 144, 160, "question", ("blocks", 0))
+    plan = plan_jump(Goal("bump", block.ref, 128, 144, top=160), NESPlayerMotion(), STANDING, [FLOOR, block], [], 1)
+    assert plan is not None and plan.outcome.end == "bonk" and plan.outcome.solid is block
+    # A mushroom on the floor moving away at a pixel a frame: a jump that
+    # lands touching it on the way collects it.
+    mushroom = Enemy((150.0, 192.0, 166.0, 208.0), 1.0, 0.0, ("items", 0), stompable=False)
+    plan = plan_jump(Goal("collect", mushroom.ref), NESPlayerMotion(), STANDING, [FLOOR], [], 1, items=[mushroom])
+    assert plan is not None and plan.outcome.collected is mushroom

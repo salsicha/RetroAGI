@@ -50,9 +50,9 @@ class OutcomeChooser:
 
     def decide(self, state: State, last_event=None, last=None) -> Choice:
         options = candidates(state)
-        mario, surfaces, enemies, slots = state_tokens(state)
+        *tokens, slots = state_tokens(state)
         rows = [(kind, slots.get(ref, -1) if ref is not None else -1, m) for _, kind, ref, m in options]
-        p = predict(self.model, (mario, surfaces, enemies), rows, self.device)
+        p = predict(self.model, tokens, rows, self.device)
         feasible = p[:, INFEASIBLE] < 0.5
         x = state.body[0]
         if x >= self.furthest + NEW_GROUND:
@@ -83,6 +83,6 @@ class OutcomeChooser:
         kind and modifier, and for a landing where it lands (its slot moves
         as the camera scrolls)."""
         choice, kind, _, modifier = option
-        if choice.goal is not None and choice.goal.kind == "land":
+        if choice.goal is not None and choice.goal.kind in ("land", "bump"):
             return kind, modifier, round(choice.goal.x0 / SPOT)
         return kind, modifier
