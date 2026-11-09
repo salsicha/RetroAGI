@@ -45,6 +45,10 @@ from .smb_planner import (
 # Frames of a planned jump after which the chooser decides again even if
 # Mario has not landed (a plan gone wrong).
 PLAN_SLACK = 24
+# A jump has landed once Mario has stood this many frames in a row (vision
+# said "standing" for one frame mid-jump over 1-1's second pit; the jump
+# ended, its buttons released, and he fell in).
+LANDING_FRAMES = 2
 # Re-plan before takeoff, and check the flight after it, every this many
 # frames (the scene moves on).
 REPLAN_EVERY = 4
@@ -226,6 +230,7 @@ class Controller:
 
     def start(self, choice: Choice, state: State) -> None:
         self.choice, self.plan, self.frame, self.event = choice, None, 0, None
+        self.stood = 0  # frames in a row Mario has stood
         if choice.verb == "jump":
             self._plan(state)
 
@@ -273,13 +278,14 @@ class Controller:
             plan, step = self.plan, self.frame - 1 - self.plan_frame
         if taken_off and not state.grounded and (step - plan.pre_run) % REPLAN_EVERY == 0:
             plan, step = self._check_flight(state, plan, step)
-        if taken_off and state.grounded and step > plan.pre_run + 1:
+        self.stood = self.stood + 1 if state.grounded else 0
+        if taken_off and self.stood >= LANDING_FRAMES and step > plan.pre_run + 1:
             # Landed (or stomped and landed): the choice is done, whatever
             # buttons the plan had left.
             self.event = "stomped" if plan.outcome.stomped is not None else "landed"
             return 0
         if step >= len(plan.buttons):
-            if state.grounded:
+            if self.stood >= LANDING_FRAMES:
                 self.event = "stomped" if plan.outcome.stomped is not None else "landed"
                 return 0
             if step >= len(plan.buttons) + PLAN_SLACK:
