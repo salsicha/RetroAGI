@@ -290,4 +290,21 @@ Each phase ends with a measurement that decides whether to go on.
   memory the bench **0.90** (the staircases pass; deaths at the second
   pit and the 1965 Goombas), full 1-1 in max points finished with score
   1,600 (the speed run died at the second pit).
+- **Koopas and grounded probes, 2026-11-09.** The planner now rejects a
+  landing Mario would slide off into a pit (a pass over 1-1's second pit
+  landed him on the floor's last pixels at speed). Block SMB gained Koopa
+  Troopas as 1-1 has them (a 12 by 12 body; a stomp leaves a shell, a touch
+  kicks it at 3 pixels a frame, a moving shell kills enemies and hurts
+  Mario), a quarter of the random levels' enemy pieces. And a sampled
+  choice that ends with Mario in the air plays on, buttons released, until
+  he lands before anything is probed, as in play (probed in mid-air, a jump
+  seemed to save him from the Goomba below 1-1's third pipe). Retrained on
+  4.52 million choices (data/datasets/block_smb/outcomes_20261109d;
+  data/outcome/outcome_20261109d.pt): fresh random levels 99 speed runs and
+  100 max-points runs (the scripted chooser 97 and 95). **1-1 from game
+  memory: all 24 obstacles, and full 1-1 finished in both modes** (the
+  speed run in 1,789 frames, faster than the scripted chooser's best of
+  2,017; max points with score 1,750). From vision: the bench 0.96; full
+  1-1 died (x 1991 in the speed run, x 682 in max points, by the third
+  pipe where vision also misses on the bench).
 

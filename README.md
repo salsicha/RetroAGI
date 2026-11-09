@@ -33,13 +33,15 @@ Where it stands (2026-11-08):
 
 | Chooser, state | 1-1 obstacle bench (24) | Full 1-1 | 100 fresh random levels |
 |---|---|---|---|
-| Outcome network, game memory | 0.85 | finished both modes (speed run 1,895 frames) | |
-| Outcome network, vision only | 0.81 | max points finished; speed run died at x 1686 | |
-| Outcome network, simulator state | | | 100 speed run, 100 max points |
+| Outcome network, game memory | **24/24** | **finished both modes** (speed run 1,789 frames; max points score 1,750) | |
+| Outcome network, vision only | 0.96 | died (x 1991 speed run, x 682 max points) | |
+| Outcome network, simulator state | | | 99 speed run, 100 max points |
 | Scripted, game memory | 24/24 | max points finished; speed run died at x 1676 | |
 | Scripted, vision only | 0.92 | both died near x 2020 | |
-| Scripted, simulator state | | | 100 speed run, 99 max points |
+| Scripted, simulator state | | | 97 speed run, 95 max points |
 
+The random levels include question blocks, mushrooms, big Mario and Koopa
+Troopas (2026-11-09).
 The outcome network was trained only on Block SMB random levels; nothing
 learns on the real game. Full-level results shift from change to change.
 
@@ -47,7 +49,7 @@ learns on the real game. Full-level results shift from change to change.
 # score a player on the 24 obstacles of 1-1
 python -m retroagi.stages.full_smb.obstacle_bench --bench data/full_smb_obstacles/Level1-1 --player scripted_vision
 # the scripted chooser, or the outcome network's, on fresh random levels
-python -m retroagi.stages.block_smb.game_levels --levels 100 --first-seed 100000 [--model data/outcome/outcome_20261108.pt]
+python -m retroagi.stages.block_smb.game_levels --levels 100 --first-seed 100000 [--model data/outcome/outcome_20261109d.pt]
 # sample outcomes, then train the outcome network
 python -m retroagi.stages.block_smb.outcome_sampling --levels 2000 --workers 14 --output data/datasets/block_smb/outcomes_NEW
 python -m retroagi.stages.block_smb.outcome_train --data data/datasets/block_smb/outcomes_NEW --fresh data/datasets/block_smb/outcomes_fresh_20261108 --output artifacts/block_smb/outcome_NEW
