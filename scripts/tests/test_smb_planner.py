@@ -251,14 +251,20 @@ def test_a_seen_walker_collides_with_the_games_box_not_the_drawn_one():
 
 
 def test_a_jump_from_the_last_pixels_of_a_pipe_is_a_drop():
-    # Standing 2 pixels onto a pipe's end (1-1's second pipe, where vision
-    # misplaced the end by 2), no jump is planned: Mario would run off before
-    # it took; 4 pixels on, he jumps.
+    # Running at a pipe's end 4 pixels onto it (1-1's second pipe, where
+    # vision misplaced the end by 2), no jump is planned: Mario would run off
+    # before it took; 8 pixels on, he jumps. Standing still, or at the back
+    # of what he stands on, a little footing is enough.
     top = pipe(0, 160)
-    edge = rollout(NESPlayerMotion(), (30.0, 144.0, 40.0, 160.0), 0, 10, 1, [top, FLOOR], [])
+    running = NESPlayerMotion(x_speed=24, moving=1)
+    edge = rollout(copy(running), (28.0, 144.0, 38.0, 160.0), 0, 10, 1, [top, FLOOR], [])
     assert edge.end == "fell" and edge.frame == 0
-    footing = rollout(NESPlayerMotion(), (28.0, 144.0, 38.0, 160.0), 0, 10, 1, [top, FLOOR], [])
+    footing = rollout(copy(running), (24.0, 144.0, 34.0, 160.0), 0, 10, 1, [top, FLOOR], [])
     assert footing.end == "landed" and footing.solid is FLOOR
+    still = rollout(NESPlayerMotion(), (30.0, 144.0, 40.0, 160.0), 0, 10, 1, [top, FLOOR], [])
+    assert still.end == "landed" and still.frame > 0
+    back = rollout(copy(running), (-6.0, 144.0, 4.0, 160.0), 0, 10, 1, [top, FLOOR], [])
+    assert back.end == "landed" and back.frame > 0
 
 
 def test_a_sliver_of_pipe_does_not_hide_the_step_under_it():

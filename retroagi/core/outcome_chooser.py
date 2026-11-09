@@ -21,7 +21,10 @@ What was tried is remembered for a short while: a choice taken from a spot
 (SPOT pixels) is not taken from it again until Mario reaches NEW_GROUND
 pixels beyond his furthest so far (then all is forgotten), unless nothing
 else is left; waits with enemies on screen may repeat, and forget what was
-tried from the spot (the enemies have moved on). One choice at a time the
+tried from the spot (the enemies have moved on), but not the landings, runs
+and bumps the executor could not carry out from it, infeasible or blocked
+(by the third pipe it tried the pipe's top, and ran into the pipe, after
+every wait). One choice at a time the
 chooser had tried two failing landings by turns, and gone round a staircase
 it could not climb: land on a step, back down, run into it, land again.
 Without the forgetting, it waited beside 1-1's third pipe, every way on
@@ -42,6 +45,9 @@ SLACK = 0.02
 MIN_FRAMES = 8
 POINT_VALUE = {"speed_run": 0.0, "max_points": 0.2}
 DEATH, INFEASIBLE, FINISHED, STUCK, PROGRESS, FRAMES, POINTS = range(len(PREDICTIONS))
+# The kinds of choice about no enemy (land, run, bump): whether the executor
+# can carry one out from a spot does not change as enemies move.
+ABOUT_NO_ENEMY = (0, 3, 5)
 
 
 class OutcomeChooser:
@@ -49,6 +55,8 @@ class OutcomeChooser:
         self.model, self.mode, self.device = model, mode, device
         self.last = None  # (options, predictions, picked index): for inspection
         self.tried: dict = {}  # spot -> the choices taken from it
+        self.refused: dict = {}  # spot -> the choices about no enemy found infeasible or blocked there
+        self.picked = None  # (spot, signature, kind) of the last choice
         self.furthest = float("-inf")
 
     def decide(self, state: State, last_event=None, last=None) -> Choice:
@@ -57,13 +65,17 @@ class OutcomeChooser:
         rows = [(kind, slots.get(ref, -1) if ref is not None else -1, m) for _, kind, ref, m in options]
         p = predict(self.model, tokens, rows, self.device)
         feasible = p[:, INFEASIBLE] < 0.5
+        if last_event in ("infeasible", "blocked") and self.picked is not None and self.picked[2] in ABOUT_NO_ENEMY:
+            self.refused.setdefault(self.picked[0], set()).add(self.picked[1])
         x = state.body[0]
         if x >= self.furthest + NEW_GROUND:
             self.tried.clear()
+            self.refused.clear()
         self.furthest = max(self.furthest, x)
         spot = (round(x / SPOT), round(state.body[3] / SPOT))
         signatures = [self._signature(o, state) for o in options]
-        fresh = np.array([sig not in self.tried.get(spot, ()) for sig in signatures])
+        fresh = np.array([sig not in self.tried.get(spot, ()) and sig not in self.refused.get(spot, ())
+                          for sig in signatures])
         if (feasible & fresh).any():
             feasible &= fresh
         if not feasible.any():
@@ -76,6 +88,7 @@ class OutcomeChooser:
                  + POINT_VALUE[self.mode] * p[:, POINTS] + p[:, FINISHED] * 100.0)
         best = int(np.argmax(np.where(allowed, value, -np.inf)))
         self.last = (options, p, best)
+        self.picked = (spot, signatures[best], options[best][1])
         if options[best][0].verb == "wait" and state.enemies:
             self.tried.pop(spot, None)  # the enemies move on: what failed here may work after
         else:

@@ -82,3 +82,16 @@ def test_a_wait_with_enemies_on_screen_forgets_what_was_tried(monkeypatch):
     chooser = OutcomeChooser(None, "speed_run")
     picks = [chooser.decide(STATE) for _ in range(4)]
     assert [(c.verb, c.x) for c in picks] == [("run", 201.0), ("run", 137.0), ("wait", 0.0), ("run", 201.0)]
+
+
+def test_what_could_not_be_carried_out_stays_refused_after_a_wait(monkeypatch):
+    rows = {(3, 1): row(progress=96, frames=40), (3, 0): row(progress=32, frames=20), (4, 0): row(frames=8)}
+    choose(monkeypatch, "speed_run", rows)  # patches the predictions
+    chooser = OutcomeChooser(None, "speed_run")
+    first = chooser.decide(STATE)
+    assert first.x == 201.0
+    # The long run could not be carried out: after the short run and a wait,
+    # the short run again, not the long one.
+    picks = [chooser.decide(STATE, "infeasible", first)]
+    picks += [chooser.decide(STATE, "arrived", picks[-1]) for _ in range(2)]
+    assert [(c.verb, c.x) for c in picks] == [("run", 137.0), ("wait", 0.0), ("run", 137.0)]

@@ -63,11 +63,13 @@ STOMP_OVERLAP = 4
 # and jump again): dropping off 1-1's second pipe and sliding toward a
 # Goomba left no room to jump it.
 SAFE_AFTER = 12
-# A jump starts only with Mario's feet at least this far onto what he stands
-# on (pixels); any nearer its end the rollout says "fell" (no plan): he would
-# run off before the jump took: vision placed 1-1's second pipe's end 2 pixels too far, a run-up and
-# jump from its last pixels was planned, and Mario dropped off unjumped
-# behind a Goomba.
+# A jump starts only while Mario would still stand on something this many
+# pixels further the way he moves (standing still, where he is); else the
+# rollout says "fell" (no plan): he would run off before the jump took.
+# Vision placed 1-1's second pipe's end 2 pixels too far, a run-up and jump
+# from its last pixels was planned, and Mario dropped off unjumped behind a
+# Goomba. (Measured on both sides, standing at the back of a step vision
+# began a pixel late refused every jump up the 2368 staircase.)
 TAKEOFF_KEEP = 4
 # _reached's answer for a landing Mario slides off into a pit.
 SLID_OFF = -2
@@ -463,12 +465,12 @@ def _touch(x0, y0, x1, y1, items, frame, got):
 
 
 @njit(cache=True)
-def _footing(x, width, feet, solids):
-    """Whether a body at ``x`` stands at least TAKEOFF_KEEP onto a solid at
-    its feet (across a seam, at least half its width is on one of them)."""
+def _footing(x, width, feet, solids, moving):
+    """Whether a body at ``x``, moved TAKEOFF_KEEP the way it is ``moving``
+    (the sign of its speed), still stands on a solid at its feet."""
+    x += TAKEOFF_KEEP * moving
     for i in range(solids.shape[0]):
-        if (abs(solids[i, 1] - feet) <= STAND
-                and min(x + width, solids[i, 2]) - max(x, solids[i, 0]) >= TAKEOFF_KEEP):
+        if abs(solids[i, 1] - feet) <= STAND and x < solids[i, 2] and solids[i, 0] < x + width:
             return True
     return False
 
@@ -490,7 +492,8 @@ def _rollout(m0, x, y, x1, y1, pre_run, hold, direction, solids, paths, stompabl
     last = paths.shape[1] - 1
     for frame in range(horizon):
         jump = pre_run <= frame < pre_run + hold
-        if jump and frame == pre_run and not airborne and not _footing(x, width, y + height, solids):
+        moving = (m[0] > 0) - (m[0] < 0)
+        if jump and frame == pre_run and not airborne and not _footing(x, width, y + height, solids, moving):
             return _FELL, frame, x, y, x + width, y + height, -1, -1, stomped, got  # off the end before it takes
         d = steer_direction if frame < steer else direction
         dx, dy, jumped = _advance(m, d, jump, not airborne, y, True)
