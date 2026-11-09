@@ -72,3 +72,13 @@ def test_a_choice_taken_from_a_spot_is_not_repeated_there_until_new_ground(monke
     # Further right, all is forgotten.
     ahead = State(body=(140, 196, 150, 208), motion=STATE.motion, grounded=True, solids=[FLOOR], enemies=[])
     assert chooser.decide(ahead).x == 241.0
+
+
+def test_a_wait_with_enemies_on_screen_forgets_what_was_tried(monkeypatch):
+    # The long run is tried from the spot; with a Goomba on screen the short
+    # run is next, then (both tried) the wait; after it, the long run again.
+    rows = {(3, 1): row(progress=96, frames=40), (3, 0): row(progress=32, frames=20), (4, 0): row(frames=8)}
+    choose(monkeypatch, "speed_run", rows)  # patches the predictions
+    chooser = OutcomeChooser(None, "speed_run")
+    picks = [chooser.decide(STATE) for _ in range(4)]
+    assert [(c.verb, c.x) for c in picks] == [("run", 201.0), ("run", 137.0), ("wait", 0.0), ("run", 201.0)]

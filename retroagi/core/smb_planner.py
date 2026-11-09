@@ -63,6 +63,12 @@ STOMP_OVERLAP = 4
 # and jump again): dropping off 1-1's second pipe and sliding toward a
 # Goomba left no room to jump it.
 SAFE_AFTER = 12
+# A jump starts only with Mario's feet at least this far onto what he stands
+# on (pixels); any nearer its end the rollout says "fell" (no plan): he would
+# run off before the jump took: vision placed 1-1's second pipe's end 2 pixels too far, a run-up and
+# jump from its last pixels was planned, and Mario dropped off unjumped
+# behind a Goomba.
+TAKEOFF_KEEP = 4
 # _reached's answer for a landing Mario slides off into a pit.
 SLID_OFF = -2
 # In the air with no landing that safe, one no enemy reaches within this
@@ -172,9 +178,10 @@ class Goal:
 class Outcome:
     """How a rollout ends: "landed" (on ``solid``), "hit" (``enemy``; also a
     landing an enemy reaches within SAFE_AFTER frames), "bonk" (a block from
-    below), "fell", "timeout"; at ``frame``, Mario's body then. A stomp on
-    the way bounces Mario and the rollout goes on to his landing; ``stomped``
-    is the enemy stomped, ``collected`` the item he touched."""
+    below), "fell" (also a jump started within TAKEOFF_KEEP of an end),
+    "timeout"; at ``frame``, Mario's body then. A stomp on the way bounces
+    Mario and the rollout goes on to his landing; ``stomped`` is the enemy
+    stomped, ``collected`` the item he touched."""
 
     end: str
     frame: int
@@ -202,7 +209,9 @@ def _overlap(a0, a1, b0, b1) -> bool:
 def solids_of(scene, camera: float) -> list:
     """Every still thing vision reports as a solid, in world pixels: pipes
     and blocks by their boxes, the floor and steps from their tops down to
-    the screen's bottom, moving surfaces thin."""
+    the screen's bottom (but those the pipes and blocks of their height
+    cover at least half of: their own tops), moving surfaces thin. A 2-pixel pipe vision
+    made up at a step's end once hid the whole step Mario stood on."""
     lists = packed_lists(scene)
     out = []
     for slot, p in enumerate(lists.get("pipes", ())):
@@ -213,9 +222,10 @@ def solids_of(scene, camera: float) -> list:
         out.append(Solid(x0 + camera, y0, x1 + camera, y1, kind, ("blocks", slot)))
     for slot, s in enumerate(lists.get("surfaces", ())):
         x0, x1 = s.x0 + camera, s.x1 + camera
-        covered = any(
-            _overlap(x0, x1, o.x0, o.x1) and abs(o.top - s.top) <= 2 for o in out if o.kind in ("pipe", *BLOCK_KINDS)
-        )
+        covered = 2 * sum(
+            max(0.0, min(x1, o.x1) - max(x0, o.x0))
+            for o in out if o.kind in ("pipe", *BLOCK_KINDS) and abs(o.top - s.top) <= 2
+        ) >= x1 - x0
         if covered:
             continue
         bottom = s.top + 8 if s.moving else SCREEN_BOTTOM
@@ -453,6 +463,17 @@ def _touch(x0, y0, x1, y1, items, frame, got):
 
 
 @njit(cache=True)
+def _footing(x, width, feet, solids):
+    """Whether a body at ``x`` stands at least TAKEOFF_KEEP onto a solid at
+    its feet (across a seam, at least half its width is on one of them)."""
+    for i in range(solids.shape[0]):
+        if (abs(solids[i, 1] - feet) <= STAND
+                and min(x + width, solids[i, 2]) - max(x, solids[i, 0]) >= TAKEOFF_KEEP):
+            return True
+    return False
+
+
+@njit(cache=True)
 def _rollout(m0, x, y, x1, y1, pre_run, hold, direction, solids, paths, stompable, horizon,
              airborne, steer, steer_direction, safe_after, items):
     """rollout on arrays (from the air when ``airborne``, steering
@@ -469,6 +490,8 @@ def _rollout(m0, x, y, x1, y1, pre_run, hold, direction, solids, paths, stompabl
     last = paths.shape[1] - 1
     for frame in range(horizon):
         jump = pre_run <= frame < pre_run + hold
+        if jump and frame == pre_run and not airborne and not _footing(x, width, y + height, solids):
+            return _FELL, frame, x, y, x + width, y + height, -1, -1, stomped, got  # off the end before it takes
         d = steer_direction if frame < steer else direction
         dx, dy, jumped = _advance(m, d, jump, not airborne, y, True)
         airborne = airborne or jumped

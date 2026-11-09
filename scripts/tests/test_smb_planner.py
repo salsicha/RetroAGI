@@ -4,7 +4,7 @@ planner's goals and its "infeasible" answer, and the controller's runs."""
 
 from copy import copy
 
-from retroagi.core.smb_controller import Choice, Controller, State, meets_soon, stopping_distance
+from retroagi.core.smb_controller import Choice, Controller, State, _collision_box, meets_soon, stopping_distance
 from retroagi.core.smb_physics import NESPlayerMotion
 from retroagi.core.smb_planner import (
     INSET,
@@ -17,7 +17,9 @@ from retroagi.core.smb_planner import (
     plan_jump,
     rollout,
     screen_edge,
+    solids_of,
 )
+from retroagi.core.smb_scene_labels import BlockView, MarioView, SceneObservation, Surface
 
 FLOOR = Solid(0, 208, 4000, 240, "ground", ("surfaces", 0))
 STANDING = (100.0, 192.0, 112.0, 208.0)  # Mario's body on the floor
@@ -239,3 +241,40 @@ def test_a_landing_mario_would_slide_off_into_a_pit_is_no_landing():
     assert o.end == "fell"
     plan = plan_jump(Goal("land", far.ref, far.x0, far.x1, top=208), fast, (100.0, 192.0, 110.0, 208.0), [near, far], [], 1)
     assert plan is not None and plan.outcome.solid is far
+
+
+def test_a_seen_walker_collides_with_the_games_box_not_the_drawn_one():
+    # A Goomba drawn 16 by 16 at screen x 183 (1-1, game memory: 184-194, 198-204).
+    assert _collision_box((183, 193, 199, 209)) == (184, 198, 194, 204)
+    # A Koopa drawn 16 by 24 at 195 (game memory: 195-207, 193-205).
+    assert _collision_box((195, 185, 211, 209)) == (195, 193, 207, 205)
+
+
+def test_a_jump_from_the_last_pixels_of_a_pipe_is_a_drop():
+    # Standing 2 pixels onto a pipe's end (1-1's second pipe, where vision
+    # misplaced the end by 2), no jump is planned: Mario would run off before
+    # it took; 4 pixels on, he jumps.
+    top = pipe(0, 160)
+    edge = rollout(NESPlayerMotion(), (30.0, 144.0, 40.0, 160.0), 0, 10, 1, [top, FLOOR], [])
+    assert edge.end == "fell" and edge.frame == 0
+    footing = rollout(NESPlayerMotion(), (28.0, 144.0, 38.0, 160.0), 0, 10, 1, [top, FLOOR], [])
+    assert footing.end == "landed" and footing.solid is FLOOR
+
+
+def test_a_sliver_of_pipe_does_not_hide_the_step_under_it():
+    # 1-1's staircase at 2368: vision made up a 2-pixel pipe at the end of
+    # the step Mario stood on; the step stays, a pipe's own top does not.
+    scene = SceneObservation(
+        mario=MarioView((86, 177, 98, 192), True, "ground", True),
+        pipes=((81, 193, 83, 208), (130, 160, 162, 208)),
+        surfaces=(Surface(81, 97, 192, False), Surface(130, 162, 160, False)),
+    )
+    tops = [(s.kind, s.x0, s.x1) for s in solids_of(scene, 0.0)]
+    assert ("ground", 81, 97) in tops and ("ground", 130, 162) not in tops
+    # A row of blocks' top is theirs, not a floor down to the screen's bottom.
+    row = SceneObservation(
+        mario=MarioView((86, 177, 98, 192), True, "ground", True),
+        blocks=tuple(BlockView((x, 144, x + 16, 160), "brick") for x in range(320, 400, 16)),
+        surfaces=(Surface(320, 400, 144, False),),
+    )
+    assert all(s.kind != "ground" for s in solids_of(row, 0.0))

@@ -20,10 +20,13 @@ risks death, a wait or a step back that does not is the one kept.
 What was tried is remembered for a short while: a choice taken from a spot
 (SPOT pixels) is not taken from it again until Mario reaches NEW_GROUND
 pixels beyond his furthest so far (then all is forgotten), unless nothing
-else is left; waits with enemies on screen may repeat. One choice at a time
-the chooser had tried two failing landings by turns, and gone round a
-staircase it could not climb: land on a step, back down, run into it, land
-again.
+else is left; waits with enemies on screen may repeat, and forget what was
+tried from the spot (the enemies have moved on). One choice at a time the
+chooser had tried two failing landings by turns, and gone round a staircase
+it could not climb: land on a step, back down, run into it, land again.
+Without the forgetting, it waited beside 1-1's third pipe, every way on
+tried, while a Goomba walked up from behind: the jump back over it had been
+tried there before.
 """
 
 import numpy as np
@@ -73,7 +76,9 @@ class OutcomeChooser:
                  + POINT_VALUE[self.mode] * p[:, POINTS] + p[:, FINISHED] * 100.0)
         best = int(np.argmax(np.where(allowed, value, -np.inf)))
         self.last = (options, p, best)
-        if not (options[best][0].verb == "wait" and state.enemies):
+        if options[best][0].verb == "wait" and state.enemies:
+            self.tried.pop(spot, None)  # the enemies move on: what failed here may work after
+        else:
             self.tried.setdefault(spot, set()).add(signatures[best])
         return options[best][0]
 

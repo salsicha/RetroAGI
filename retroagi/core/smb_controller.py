@@ -74,6 +74,8 @@ HEAD_ROOM = 4
 # Big Mario (after a mushroom: drawn taller than BIG_DRAWN pixels) collides
 # BIG_BODY_WIDTH wide, his top BIG_HEAD_ROOM below the drawn top.
 BIG_DRAWN, BIG_BODY_WIDTH, BIG_HEAD_ROOM = 20, 12, 8
+# A walker drawn taller than this is a Koopa (_collision_box).
+KOOPA_DRAWN = 20
 # Enemies seen starting in this many columns at the screen's left edge are
 # left out: there vision read cut-off sprites as enemies walking toward
 # Mario, and he jumped back over a pit at them (the game hides the first 8
@@ -169,7 +171,8 @@ def perceived(feedback, scene, items: Optional[ItemTracker] = None) -> Optional[
       the frames beside 1-1's fourth pipe);
     - the solids are vision's, none inside Mario's drawn box, floor gaps
       hidden by enemies joined, and the screen's left edge, a wall;
-    - the enemies are its tracks seen this frame, none starting in the
+    - the enemies are its tracks seen this frame (a walker's collision box
+      inside its drawn one: _collision_box), none starting in the
       LEFT_COLUMNS, none smaller than MIN_ENEMY away from the right edge and
       none mostly inside Mario's drawn box (vision read big Mario's top half
       as an enemy on his head), with their averaged velocities (seen for fewer than
@@ -196,6 +199,8 @@ def perceived(feedback, scene, items: Optional[ItemTracker] = None) -> Optional[
         if _inside(t.box, drawn_on_screen):
             continue  # part of Mario's own sprite (big Mario's top half read as an enemy)
         world = (t.box[0] + camera, t.box[1], t.box[2] + camera, t.box[3])
+        if t.kind == "walker":
+            world = _collision_box(world)
         if len(t.samples) >= MEASURED:
             vx, vy = t.velocity
         else:
@@ -222,6 +227,21 @@ def perceived(feedback, scene, items: Optional[ItemTracker] = None) -> Optional[
         ready=feedback.motion_ready,
         items=items.seen() if items is not None else [],
     )
+
+
+def _collision_box(drawn) -> tuple:
+    """A walker's collision box inside the sprite vision draws, as the game
+    collides it (game memory, 1-1): from the drawn left side (the game
+    measures it from the sprite's place, whichever way it faces), a Goomba
+    (drawn 16 tall) 1 to 11 across and 6 tall ending 5 above the drawn
+    bottom, a Koopa (drawn taller than KOOPA_DRAWN) 0 to 12 across and 12
+    tall ending 4 above it. With the drawn boxes, a pass over a Goomba pair
+    looked like a hit in the air, and the flight check braked Mario down in
+    front of them."""
+    left, bottom = drawn[0], drawn[3]
+    if drawn[3] - drawn[1] > KOOPA_DRAWN:
+        return (left, bottom - 16, left + 12, bottom - 4)
+    return (left + 1, bottom - 11, left + 11, bottom - 5)
 
 
 def _inside(box, outer) -> bool:
