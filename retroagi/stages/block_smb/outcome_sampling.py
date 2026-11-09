@@ -125,6 +125,17 @@ def outcome(env, source: BlockTruthState, choice: Choice, probe: bool = True) ->
             break
         state = source.read(env)
     progress = env.mario["x"] - x0
+    # A choice can end with Mario in the air (a run off a ledge); nothing is
+    # chosen until he stands, so the buttons stay released until he lands,
+    # as in play. (Probed in mid-air, a "jump" seemed to save him from the
+    # Goomba below 1-1's third pipe, and running off it looked safe.)
+    falling = 0
+    while not (died or finished or env.mario["on_ground"]) and falling < FALLING:
+        _, _, terminated, truncated, info = env.step(0)
+        falling += 1
+        if terminated or truncated:
+            died, finished = bool(info["death"]), bool(env._goal_credited)
+            end = "died" if died else "finished" if finished else end
     ended = snapshot_env_state(env) if probe else None  # where the probes start, Mario's speed kept
     died_after = False
     if not (died or finished):
