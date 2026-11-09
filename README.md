@@ -29,13 +29,13 @@ fast controller ([the plan](docs/choose-and-control-plan.md)):
 Nothing learns on Full SMB: training data comes from random levels built
 in Block SMB from the real game's pieces and rules.
 
-Where it stands (2026-11-08):
+Where it stands (2026-11-09):
 
 | Chooser, state | 1-1 obstacle bench (24) | Full 1-1 | 100 fresh random levels |
 |---|---|---|---|
-| Outcome network, game memory | **24/24** | **finished both modes** (speed run 1,789 frames; max points score 1,750) | |
-| Outcome network, vision only | 0.96 | died (x 1991 speed run, x 682 max points) | |
-| Outcome network, simulator state | | | 99 speed run, 100 max points |
+| Outcome network, game memory | **24/24** | **finished both modes** (speed run 1,789 frames; max points score 2,200) | |
+| Outcome network, vision only | 0.96 | **finished both modes** (speed run 1,733 frames; max points score 800) | |
+| Outcome network, simulator state | | | 98 speed run, 98 max points |
 | Scripted, game memory | 24/24 | max points finished; speed run died at x 1676 | |
 | Scripted, vision only | 0.92 | both died near x 2020 | |
 | Scripted, simulator state | | | 97 speed run, 95 max points |

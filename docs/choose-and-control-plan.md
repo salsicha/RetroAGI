@@ -308,3 +308,30 @@ Each phase ends with a measurement that decides whether to go on.
   1-1 died (x 1991 in the speed run, x 682 in max points, by the third
   pipe where vision also misses on the bench).
 
+- **Vision finishes 1-1, 2026-11-09.** Five fixes to perception, the
+  planner and the chooser, the network unchanged (outcome_20261109d):
+  - perceived walkers get the game's collision box inside the drawn
+    sprite (from its left side: a Goomba 10 by 6 ending 5 above the drawn
+    bottom, a Koopa 12 by 12 ending 4 above it; read from game memory).
+    With the drawn boxes a pass over a Goomba pair looked like a hit in
+    the air, and the flight check braked Mario down in front of them;
+  - a jump starts only while Mario would still stand on something 4
+    pixels further the way he moves (TAKEOFF_KEEP): vision placed the
+    second pipe's end 2 pixels too far, and a run-up and jump from its last
+    pixels dropped him unjumped behind a Goomba;
+  - a floor piece is dropped as a pipe's or block's own top only when the
+    pipes and blocks of its height cover at least half of it: a made-up
+    2-pixel pipe at a step's end had hidden the step Mario stood on;
+  - a wait with enemies on screen forgets what was tried from the spot (the
+    enemies have moved on), but landings, runs and bumps found infeasible
+    or blocked there stay refused until new ground: beside the third pipe
+    the chooser had waited, every way on tried, while a Goomba walked up
+    from behind.
+  **Full 1-1 from vision finished in both modes** (speed run 1,733 frames;
+  max points 2,038 frames, score 800); from game memory both finished
+  (1,789 frames; max points score 2,200). Benches: vision 0.96 (one slow
+  max-points start, x 592, outlasts the 900-frame limit, counted for two
+  obstacles), game memory 1.00. Fresh random levels 98 of 100 in each mode:
+  seed 100036 lost to the takeoff margin (Mario slides to a pit's edge
+  after dropping off a pipe, which the network, trained without the
+  margin, does not foresee), seed 100018 to a Goomba on a high brick row.
