@@ -6,8 +6,9 @@ simulator's state is saved and every candidate choice (candidates) is played
 from it by the same executor the agent uses (core/smb_controller.py), then
 the state is put back (the choices: core/smb_choices.py). Its outcome
 (outcome): how it ended (the controller's event), whether Mario died during
-it, or after it, buttons released, until he has stood WINDOW frames (the
-chooser's first rule: not dying soon after either), how far right it took
+it, or after it, buttons released, until he has stood WINDOW frames, with
+no probe choice from where it ended saving him (the chooser's first rule:
+not dying soon after either, when nothing can be done about it), how far right it took
 him and in how many frames, the points it gained, whether he reached the
 flag, and whether it left him stuck: no forward choice from where it ended
 (probes, Mario's speed kept) feasible, safe and getting him on (one choice at a time, the chooser
@@ -34,6 +35,7 @@ from retroagi.core.smb_choices import (
     ITEM_SLOTS,
     ITEM_WIDTH,
     KINDS,
+    RUN_BACK,
     RUN_LONG,
     SURFACE_SLOTS,
     SURFACE_WIDTH,
@@ -137,18 +139,28 @@ def outcome(env, source: BlockTruthState, choice: Choice, probe: bool = True) ->
             if standing >= WINDOW:
                 break
     stuck = died or died_after
-    if probe and not (stuck or finished):
+    if probe and not (died or finished):
         # Probed from where the choice ended, not after the window: standing
         # there first, Mario slid to rest, and a landing on a step at speed,
-        # a jump across ready, was taken for a dead end.
-        stuck = True
+        # a jump across ready, was taken for a dead end. A death in the
+        # window counts only when no probe (a brake back among them) from
+        # there survives: landing at speed on 1-1's two-column staircase
+        # top, he slid off it standing, though jumping on across was safe.
+        stuck, saved = True, False
         restore_env_state(env, ended)
-        for option in probes(source.read(env)):
+        state = source.read(env)
+        mx = (state.body[0] + state.body[2]) / 2
+        for option in probes(state) + ([Choice("run", x=mx - RUN_BACK)] if died_after else []):
             r = outcome(env, source, option, probe=False)
             restore_env_state(env, ended)
-            if r[2] > 0 and ENDS[int(r[-1])] != "infeasible" and not (r[0] or r[1]) and r[3] >= STUCK_PROGRESS:
+            safe = r[2] > 0 and ENDS[int(r[-1])] != "infeasible" and not (r[0] or r[1])
+            saved = saved or safe
+            if safe and r[3] >= STUCK_PROGRESS:
                 stuck = False
+            if saved and not stuck:
                 break
+        if died_after and saved:
+            died_after = False
     return (float(died), float(died_after), float(frames), float(progress), float(env.score - points0),
             float(finished), float(stuck), float(ENDS.index(end)))
 

@@ -40,11 +40,11 @@ def test_a_run_into_a_pit_and_a_goomba_reaching_a_wait_count_as_deaths():
     pit = scene([[0, FLOOR, 120, 32], [200, FLOOR, 824, 32]])
     result = outcome(pit, BlockTruthState(), Choice("run", x=140, keep_speed=True))
     assert result[DIED] or result[DIED_AFTER]
-    # A Goomba walking at a waiting Mario, close enough to reach him within
-    # the window after the wait ends (it ends as the Goomba comes near).
+    # A Goomba walking at a waiting Mario reaches him in the window after
+    # the wait, but a jump from there over it saves him: no death.
     walker = scene([[0, FLOOR, 1024, 32]], enemies=[54])
     result = outcome(walker, BlockTruthState(), Choice("wait", frames=200))
-    assert result[DIED] or result[DIED_AFTER]
+    assert not (result[DIED] or result[DIED_AFTER])
     # Nothing near: a short wait is safe and takes its frames.
     safe = scene([[0, FLOOR, 1024, 32]])
     result = outcome(safe, BlockTruthState(), Choice("wait", frames=8))
