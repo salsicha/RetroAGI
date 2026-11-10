@@ -51,7 +51,7 @@ from retroagi.core.smb_physics import NESPlayerMotion
 from retroagi.core.smb_planner import BLOCK_KINDS, Enemy, Goal, Solid, floor_behind, screen_edge, solids_of
 from retroagi.core.smb_scene_labels import scene_from_labels
 
-from .pixel_labels import ENEMY_KIND_TYPES, PLAYER_FLOAT_STATE, Unexplained, label_frame
+from .pixel_labels import ENEMY_KIND_CLASSES, ENEMY_KIND_TYPES, PLAYER_FLOAT_STATE, Unexplained, label_frame
 from .truth import true_frame
 
 ENEMY_AHEAD = 112
@@ -144,8 +144,10 @@ class TruthState:
                 vx, vy = (box[0] - first[1]) / frames, (box[1] - first[2]) / frames
             elif item:
                 vx, vy = ItemTracker.MUSHROOM_SPEED, 0.0
-            else:
+            elif ENEMY_KIND_CLASSES.get(slot["kind"]) == "walker":
                 vx, vy = (-WALK if box[0] > truth["mario"][0] else WALK), 0.0
+            else:
+                vx, vy = 0.0, 0.0  # a plant or anything else: still until measured
             if item:
                 items.append(Enemy(tuple(float(v) for v in box), vx, vy, ("slots", k), stompable=False))
                 continue

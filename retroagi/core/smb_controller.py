@@ -176,7 +176,9 @@ def perceived(feedback, scene, items: Optional[ItemTracker] = None) -> Optional[
       LEFT_COLUMNS, none smaller than MIN_ENEMY away from the right edge and
       none mostly inside Mario's drawn box (vision read big Mario's top half
       as an enemy on his head), with their averaged velocities (seen for fewer than
-      MEASURED frames: a walker's WALK pixels a frame toward Mario);
+      MEASURED frames: a walker's WALK pixels a frame toward Mario, anything
+      else still: 5-1's piranha plants, never measured as they rise and
+      sink, seemed to walk through the air at Mario);
     - the items are ``items``' (an ItemTracker the caller feeds vision's
       power-ups), none if not given.
     None while vision does not show Mario."""
@@ -203,8 +205,10 @@ def perceived(feedback, scene, items: Optional[ItemTracker] = None) -> Optional[
             world = _collision_box(world)
         if len(t.samples) >= MEASURED:
             vx, vy = t.velocity
-        else:
+        elif t.kind == "walker":
             vx, vy = (-WALK if world[0] > body[0] else WALK), 0.0
+        else:
+            vx, vy = 0.0, 0.0  # a plant or anything else: still until measured
         enemies.append(Enemy(world, vx, vy, ("enemies", t.identity), stompable=t.kind == "walker"))
     # Nothing solid lies inside Mario's own drawn box: at the screen's left
     # edge, parts of his cut-off sprite read as a 3-pixel pipe.
