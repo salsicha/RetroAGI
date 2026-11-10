@@ -102,3 +102,15 @@ def test_reaching_the_flag_counts_only_when_likely(monkeypatch):
     assert choose(monkeypatch, "speed_run", rows) == (3, 1)
     rows[(3, 2)] = row(progress=8, frames=40, finished=0.9)
     assert choose(monkeypatch, "speed_run", rows) == (3, 2)
+
+
+def test_waiting_is_tried_after_max_waits_at_a_spot(monkeypatch):
+    # Every way on a little risky, waiting safe: after MAX_WAITS waits the
+    # least risky way on is taken.
+    from retroagi.core.outcome_chooser import MAX_WAITS
+
+    rows = {(3, 1): row(death=0.08, progress=96, frames=40), (4, 0): row(frames=8, progress=4)}
+    choose(monkeypatch, "speed_run", rows)  # patches the predictions
+    chooser = OutcomeChooser(None, "speed_run")
+    picks = [chooser.decide(STATE).verb for _ in range(MAX_WAITS + 1)]
+    assert picks == ["wait"] * MAX_WAITS + ["run"]

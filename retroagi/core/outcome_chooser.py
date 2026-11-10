@@ -27,7 +27,8 @@ else is left; waits with enemies on screen may repeat, and forget what was
 tried from the spot (the enemies have moved on), but not the landings, runs
 and bumps the executor could not carry out from it, infeasible or blocked
 (by the third pipe it tried the pipe's top, and ran into the pipe, after
-every wait). One choice at a time the
+every wait). After MAX_WAITS waits at a spot, waiting there counts as
+tried too: rule 1 then keeps the least risky way on. One choice at a time the
 chooser had tried two failing landings by turns, and gone round a staircase
 it could not climb: land on a step, back down, run into it, land again.
 Without the forgetting, it waited beside 1-1's third pipe, every way on
@@ -42,6 +43,11 @@ from .smb_choices import candidates, state_tokens
 from .smb_controller import Choice, State
 
 SAFE = 0.05
+# Waits at one spot after which waiting there counts as tried until new
+# ground: before 1-1's second pipe every way on was a few points riskier
+# than the 5% kept (a hidden plant in any pipe, the random levels taught),
+# and Mario waited until the time ran out.
+MAX_WAITS = 4
 SPOT = 8
 NEW_GROUND = 16
 SLACK = 0.02
@@ -59,6 +65,7 @@ class OutcomeChooser:
         self.last = None  # (options, predictions, picked index): for inspection
         self.tried: dict = {}  # spot -> the choices taken from it
         self.refused: dict = {}  # spot -> the choices about no enemy found infeasible or blocked there
+        self.waits: dict = {}  # spot -> waits taken there
         self.picked = None  # (spot, signature, kind) of the last choice
         self.furthest = float("-inf")
 
@@ -74,11 +81,13 @@ class OutcomeChooser:
         if x >= self.furthest + NEW_GROUND:
             self.tried.clear()
             self.refused.clear()
+            self.waits.clear()
         self.furthest = max(self.furthest, x)
         spot = (round(x / SPOT), round(state.body[3] / SPOT))
         signatures = [self._signature(o, state) for o in options]
+        waited_out = self.waits.get(spot, 0) >= MAX_WAITS
         fresh = np.array([sig not in self.tried.get(spot, ()) and sig not in self.refused.get(spot, ())
-                          for sig in signatures])
+                          and not (waited_out and o[0].verb == "wait") for sig, o in zip(signatures, options)])
         if (feasible & fresh).any():
             feasible &= fresh
         if not feasible.any():
@@ -92,6 +101,8 @@ class OutcomeChooser:
         best = int(np.argmax(np.where(allowed, value, -np.inf)))
         self.last = (options, p, best)
         self.picked = (spot, signatures[best], options[best][1])
+        if options[best][0].verb == "wait":
+            self.waits[spot] = self.waits.get(spot, 0) + 1
         if options[best][0].verb == "wait" and state.enemies:
             self.tried.pop(spot, None)  # the enemies move on: what failed here may work after
         else:
