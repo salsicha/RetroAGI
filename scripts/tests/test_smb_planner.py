@@ -356,3 +356,29 @@ def test_mario_pressed_against_a_pipe_can_still_move_away_and_jump():
     body = (100.0, 196.0, 110.0, 208.0)
     plan = plan_jump(Goal("land", step.ref, 118, 134, top=176), NESPlayerMotion(), body, [tall, step, FLOOR], [], 1)
     assert plan is not None and plan.outcome.solid is step
+
+
+def test_a_step_up_ahead_is_a_wall_not_an_end():
+    # On a staircase's 16-pixel step, running at the next one up: the jump
+    # is no drop and a landing that slides into it is no slide-off.
+    low = Solid(100, 176, 116, 240, "ground", ("surfaces", 1))
+    high = Solid(116, 160, 132, 240, "ground", ("surfaces", 2))
+    running = NESPlayerMotion(x_speed=24, moving=1)
+    hop = rollout(copy(running), (104.0, 164.0, 114.0, 176.0), 0, 10, 1, [low, high, FLOOR], [])
+    assert hop.end == "landed"
+    slow = NESPlayerMotion(x_speed=16, moving=1)
+    onto = rollout(copy(slow), (98.0, 150.0, 108.0, 162.0), 0, 0, 1, [low, high, FLOOR], [], airborne=True)
+    assert onto.end == "landed" and onto.solid is low
+
+
+def test_a_wait_brakes_to_a_stop():
+    # Moving right at 2 pixels a frame: a wait presses left (the game's skid)
+    # until he is slow, then nothing.
+    moving = State(body=STANDING, motion=NESPlayerMotion(x_speed=32, moving=1), grounded=True, solids=[FLOOR],
+                   enemies=[])
+    controller = Controller()
+    controller.start(Choice("wait", frames=24), moving)
+    assert controller.press(moving) == 3
+    slow = State(body=STANDING, motion=NESPlayerMotion(x_speed=8, moving=1), grounded=True, solids=[FLOOR],
+                 enemies=[])
+    assert controller.press(slow) == 0

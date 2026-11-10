@@ -35,11 +35,11 @@ def test_an_outcome_is_the_same_each_time_from_a_saved_state():
     assert outcome(env, source, Choice("run", x=150, keep_speed=True)) == first
 
 
-def test_a_run_into_a_pit_and_a_goomba_reaching_a_wait_count_as_deaths():
-    # A pit from 120 to 200: a long run ends over it, Mario falling in.
+def test_a_run_stops_at_a_pit_and_a_goomba_reaching_a_wait_is_jumped():
+    # A pit from 120 to 200: a long run toward it stops at its edge.
     pit = scene([[0, FLOOR, 120, 32], [200, FLOOR, 824, 32]])
     result = outcome(pit, BlockTruthState(), Choice("run", x=140, keep_speed=True))
-    assert result[DIED] or result[DIED_AFTER]
+    assert not (result[DIED] or result[DIED_AFTER]) and ENDS[int(result[-1])] == "edge"
     # A Goomba walking at a waiting Mario reaches him in the window after
     # the wait, but a jump from there over it saves him: no death.
     walker = scene([[0, FLOOR, 1024, 32]], enemies=[54])

@@ -72,7 +72,12 @@ class VisualTracks:
     # Tracks not seen this frame, for up to LOST_FRAMES (Track.missed).
     lost: list = field(default_factory=list)
 
-    def observe(self, scene, scroll):
+    def observe(self, scene, scroll, reckoned=False):
+        """The tracks after seeing ``scene``, the camera having moved
+        ``scroll`` pixels (None: unknown); ``reckoned``: that scroll was
+        dead-reckoned, a fraction off the game's whole-pixel step, so one
+        frame's move against a track's course is no turn (it reset every
+        track's speed on 5-1's bare floor)."""
         objects = [(e.box, e.kind, e.type) for e in scene.enemies if e.kind != "defeated"]
         objects += [(b, "platform", -1) for b in scene.moving_platforms]
         # Tracks unseen since an earlier frame move on by their velocity (and
@@ -119,7 +124,7 @@ class VisualTracks:
                     continue
                 used.add(i)
                 velocity = old.velocity
-                reversed_course = velocity is not None and any(
+                reversed_course = not reckoned and velocity is not None and any(
                     abs(v) > 0.1 and delta * v < 0 for delta, v in zip((dx, dy), velocity)
                 )
                 # Preserve this visual identity across motion and reversals.

@@ -11,12 +11,14 @@ A choice is a verb, the thing it is about and a coarse modifier:
   the air and corrected when its landing no longer meets the goal
   (smb_planner.plan_flight), done when he stands again;
 - "run" to a level x: running there and braking so as to stop at it (the
-  motion model's stopping distance), or keeping speed (``keep_speed``);
-- "wait": standing until an enemy is clear of a level x (``until_clear``),
-  a hit is due, or at most ``frames``.
+  motion model's stopping distance), or keeping speed (``keep_speed``),
+  never into a pit (it ends at the edge: pit_ahead);
+- "wait": standing, braking to a stop (_brake), until an enemy is clear of
+  a level x (``until_clear``), a hit is due, or at most ``frames``.
 
 Events: "landed", "stomped", "arrived", "waited", "infeasible", "hit",
-"blocked", "threat" (a run meeting an enemy soon: meets_soon). The state
+"blocked", "threat" (a run meeting an enemy soon: meets_soon), "edge" (a
+run stopped before a pit). The state
 each frame (State) is the scene's solids and enemies in world pixels,
 Mario's body and his motion: from vision and the
 executor's estimates in play (perceived), or from game memory to test the
@@ -56,6 +58,12 @@ LANDING_FRAMES = 2
 REPLAN_EVERY = 4
 # A run ends this close to its x (pixels).
 ARRIVE = 2
+# A wait brakes while Mario's speed is at least this (sixteenths of a pixel a
+# frame: below it the game's skid turns him round); a run ends this many
+# pixels before Mario would slide over a pit (pit_ahead).
+BRAKE_SPEED, EDGE_KEEP = 11, 4
+# (a solid's top this far above his feet still counts as under them)
+STAND_SLACK = 2
 # A wait ends when a coming enemy is this close (pixels) whatever else.
 TOO_CLOSE = 24
 # Frames a run may last before the chooser decides again.
@@ -324,6 +332,25 @@ def meets_soon(state: State, enemy: Enemy, frames: int = THREAT_FRAMES) -> bool:
     return closing > 0 and max(gap, 0.0) <= closing * frames
 
 
+def _brake(state: State) -> int:
+    """Waiting Mario stops where he is: the button against his motion while
+    it is BRAKE_SPEED or more (slower, the game turns him round instead),
+    else none. (Released, he slid off a 5-1 pillar into Goombas.)"""
+    speed = state.motion.x_speed
+    if state.grounded and abs(speed) >= BRAKE_SPEED:
+        return BUTTON[-1 if speed > 0 else 1, False]
+    return 0
+
+
+def pit_ahead(state: State, direction: int) -> bool:
+    """Whether Mario, released now, would slide (EDGE_KEEP more) over a pit:
+    no solid at his feet and none lower under his front there."""
+    x0, _, x1, feet = state.body
+    front = (x1 if direction > 0 else x0) + direction * (stopping_distance(state.motion, direction) + EDGE_KEEP)
+    return not any(s.x0 <= front <= s.x1 and s.top >= feet - STAND_SLACK and s.kind != "edge"
+                   for s in state.solids)
+
+
 def stopping_distance(motion: NESPlayerMotion, direction: int) -> float:
     """How far Mario slides, ``direction`` released now (pixels)."""
     m = copy(motion)
@@ -458,6 +485,11 @@ class Controller:
         if any(meets_soon(state, e) for e in ahead):
             self.event = "threat"
             return BUTTON[direction, False] if choice.keep_speed else 0
+        if state.grounded and pit_ahead(state, direction):
+            # A run never takes Mario into a pit: it ends where he can still
+            # stop (in 5-1 a run back slid him into the pit behind).
+            self.event = "edge"
+            return BUTTON[-direction, False]
         if not choice.keep_speed and left <= stopping_distance(state.motion, direction):
             return 0  # braking: released, Mario slides to the x
         return BUTTON[direction, False]
@@ -474,4 +506,4 @@ class Controller:
             enemy = next((e for e in state.enemies if e.ref == ref), None)
             if enemy is None or (enemy.box[2] < x if enemy.vx <= 0 else enemy.box[0] > x):
                 self.event = "waited"
-        return 0
+        return _brake(state)

@@ -488,6 +488,11 @@ def _reached(x0, y0, x1, y1, m0, paths, stomped, frame, safe_after, solids):
     last = paths.shape[1] - 1
     for k in range(1, safe_after + 1):
         dx, _, _ = _advance(m, 0, False, True, y0, False)
+        if _blocked(x0 + dx, x0, x1 - x0, y0, y1, solids):
+            dx = 0.0  # stopped by a wall (the next step up)
+            m[0] = 0
+            m[1] = 0
+            m[2] = 0
         x0 += dx
         x1 += dx
         supported, below = _footing(x0, x1 - x0, y1, solids, (m[0] > 0) - (m[0] < 0)), False
@@ -525,10 +530,13 @@ def _touch(x0, y0, x1, y1, items, frame, got):
 @njit(cache=True)
 def _footing(x, width, feet, solids, moving):
     """Whether a body at ``x``, moved TAKEOFF_KEEP the way it is ``moving``
-    (the sign of its speed), still stands on a solid at its feet."""
+    (the sign of its speed), still stands on a solid at its feet, or a wall
+    there holds it (the next step up a staircase: taken for an end, every
+    step was a dead end)."""
     x += TAKEOFF_KEEP * moving
     for i in range(solids.shape[0]):
-        if abs(solids[i, 1] - feet) <= STAND and x < solids[i, 2] and solids[i, 0] < x + width:
+        if x < solids[i, 2] and solids[i, 0] < x + width and (
+                abs(solids[i, 1] - feet) <= STAND or solids[i, 1] < feet - WALL_DEPTH < solids[i, 3]):
             return True
     return False
 

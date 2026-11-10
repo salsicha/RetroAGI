@@ -15,13 +15,14 @@ from .smb_scene_labels import fixed_surfaces
 from .smb_pixel_types import VISIBLE_COLUMNS
 from .smb_trajectory import VisualTracks, plan_flight
 
-# Where Mario's drawn left side stays on screen while the camera follows him:
-# Block SMB's old camera, and the real game's (1-1, 5-1). Away from them his
-# movement is seen directly; at one with no landmark to measure the scroll
-# by (5-1's long bare floor), it is dead-reckoned from the buttons pressed
-# (taken for no scroll, the camera estimate stood still for 300 frames and
-# Mario seemed to crawl).
-FOLLOW_COLUMNS = (85, 112)
+# Left of this screen column (Mario's drawn left side) the camera never
+# moves: the real game starts scrolling as he passes about 80 and follows him
+# only partly until 112 (5-1: a pixel a frame on screen, a pixel and a half
+# of scroll), Block SMB's old camera at 85. From it on, with no landmark to
+# measure the scroll by (5-1's long bare floor), the scroll is dead-reckoned
+# from the buttons pressed (taken for none, the camera estimate stood still,
+# Mario seemed to crawl and a Koopa to run at 1.6 pixels a frame).
+SCROLL_FROM = 77
 
 
 def terrain_edges(scene):
@@ -173,6 +174,7 @@ class SpatialFeedback:
     def observe(self, scene):
         self.tracked = False
         shift = None
+        reckoned = False
         if scene.mario.box is None:
             self.previous = None
             self.feet_velocity = 0.0
@@ -189,12 +191,14 @@ class SpatialFeedback:
             if shift is None:
                 # Outside the camera-follow column, displacement is visible
                 # directly. Do not interpret a scrolling, centred Mario as rest.
-                if all(abs(s.mario.box[0] - column) > 3 for s in (self.previous, scene) for column in FOLLOW_COLUMNS):
+                if all(s.mario.box[0] < SCROLL_FROM for s in (self.previous, scene)):
                     shift = 0
                 elif self.predicted_dx is not None:
                     # Featureless scrolling floor supplies no world landmark.
                     # Dead-reckon from actual buttons until visual edges return.
-                    shift = self.predicted_dx - (scene.mario.box[0] - self.previous.mario.box[0])
+                    old, now = self.previous.mario.box, scene.mario.box
+                    shift = self.predicted_dx - (now[0] + now[2] - old[0] - old[2]) / 2
+                    reckoned = True
             # With no landmark and a scrolling player, world speed is unknown.
             dx = None
             if shift is not None:
@@ -278,7 +282,7 @@ class SpatialFeedback:
                 self.speed = None
         if shift is not None:
             self.camera_position += shift
-        self.tracks.observe(scene, shift)
+        self.tracks.observe(scene, shift, reckoned)
         if self.flight is not None and shift is not None:
             self.flight.shift(shift)
         if self.destination is not None:

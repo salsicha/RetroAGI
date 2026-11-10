@@ -207,11 +207,11 @@ def test_a_one_pixel_wobble_of_the_seen_box_is_not_speed():
     # back: no speed, and no correction of the motion.
     feedback = SpatialFeedback()
     for x0 in (146, 146, 146, 145, 145, 146, 146, 146):
-        feedback.observe(
-            SceneObservation(
-                MarioView((x0, 208, 156, 220), True, "ground", True),
-                surfaces=(Surface(8, 248, 220, False),),
-            )
+        scene = SceneObservation(
+            MarioView((x0, 208, 156, 220), True, "ground", True),
+            surfaces=(Surface(8, 248, 220, False),),
         )
+        feedback.observe(scene)
+        feedback.executed(0, scene)  # (no button, as play reports each frame)
     assert feedback.speed == 0
     assert feedback.motion.x_speed == 0

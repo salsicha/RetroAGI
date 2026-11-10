@@ -68,7 +68,8 @@ TRY_POWER_UPS = 0.5
 # right; PROBE_SURFACES of the surfaces ahead are probed.
 STUCK_PROGRESS = 16
 PROBE_SURFACES = 3
-ENDS = ("landed", "stomped", "arrived", "waited", "threat", "blocked", "infeasible", "timeout", "died", "finished")
+ENDS = ("landed", "stomped", "arrived", "waited", "threat", "blocked", "infeasible", "timeout", "died", "finished",
+        "edge")
 OUTCOME_FIELDS = ("died", "died_after", "frames", "progress", "points", "finished", "stuck", "end")
 
 
