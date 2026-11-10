@@ -4,7 +4,7 @@ planner's goals and its "infeasible" answer, and the controller's runs."""
 
 from copy import copy
 
-from retroagi.core.smb_controller import Choice, Controller, State, _collision_box, meets_soon, stopping_distance
+from retroagi.core.smb_controller import Choice, Controller, State, _collision_box, meets_soon, pit_ahead, stopping_distance
 from retroagi.core.smb_physics import NESPlayerMotion
 from retroagi.core.smb_planner import (
     blocked,
@@ -382,3 +382,17 @@ def test_a_wait_brakes_to_a_stop():
     slow = State(body=STANDING, motion=NESPlayerMotion(x_speed=8, moving=1), grounded=True, solids=[FLOOR],
                  enemies=[])
     assert controller.press(slow) == 0
+
+
+def test_a_run_at_a_pipe_is_no_pit_but_one_over_a_gap_is():
+    # The floor is cut where a pipe stands: running at it is no edge.
+    left = Solid(0, 208, 160, 240, "ground", ("surfaces", 0))
+    tube = pipe(160, 176)
+    right = Solid(192, 208, 600, 240, "ground", ("surfaces", 1))
+    state = State(body=(130.0, 196.0, 140.0, 208.0), motion=NESPlayerMotion(x_speed=24, moving=1), grounded=True,
+                  solids=[left, tube, right], enemies=[])
+    assert not pit_ahead(state, 1)
+    # A block overhead does not cover a pit.
+    block = Solid(160, 144, 176, 160, "block", ("blocks", 0))
+    gap = State(body=state.body, motion=state.motion, grounded=True, solids=[left, block, right], enemies=[])
+    assert pit_ahead(gap, 1)

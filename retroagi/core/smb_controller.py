@@ -344,10 +344,12 @@ def _brake(state: State) -> int:
 
 def pit_ahead(state: State, direction: int) -> bool:
     """Whether Mario, released now, would slide (EDGE_KEEP more) over a pit:
-    no solid at his feet and none lower under his front there."""
+    under his front there no solid reaching down to his feet (the floor, a
+    lower one, or a pipe or step: a wall stops him; taken for a pit, every
+    run at 1-1's first pipe stopped short of it)."""
     x0, _, x1, feet = state.body
     front = (x1 if direction > 0 else x0) + direction * (stopping_distance(state.motion, direction) + EDGE_KEEP)
-    return not any(s.x0 <= front <= s.x1 and s.top >= feet - STAND_SLACK and s.kind != "edge"
+    return not any(s.x0 <= front <= s.x1 and s.bottom >= feet - STAND_SLACK and s.kind != "edge"
                    for s in state.solids)
 
 
