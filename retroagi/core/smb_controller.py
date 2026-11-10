@@ -451,7 +451,7 @@ class Controller:
             self.event = "arrived"
             return BUTTON[direction, False] if choice.keep_speed else 0
         x0, top, x1, feet = state.body
-        if blocked(x0 + direction * 2, x1 - x0, top, feet, state.solids):
+        if blocked(x0 + direction * 2, x0, x1 - x0, top, feet, state.solids):
             self.event = "blocked"
             return 0
         ahead = [e for e in state.enemies if ((e.box[0] + e.box[2]) / 2 - middle) * direction > 0]

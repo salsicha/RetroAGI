@@ -367,10 +367,18 @@ def _advance(m, direction, jump, grounded, y, run):
 
 
 @njit(cache=True)
-def _blocked(x, width, top, feet, solids):
+def _blocked(x, start, width, top, feet, solids):
+    """Whether a body moved from ``start`` to ``x`` goes deeper into a solid's
+    side (a wall, not a ledge it stands on); one already overlapping a wall
+    may move out (Mario pressed against a pipe overlaps it by a few pixels:
+    the game tests walls at points inside his box; taken for blocked every
+    way, he stood by 5-1's tall pipe until the time ran out)."""
     for i in range(solids.shape[0]):
         if x < solids[i, 2] and solids[i, 0] < x + width and feet > solids[i, 1] + WALL_DEPTH and top < solids[i, 3]:
-            return True
+            now = min(x + width, solids[i, 2]) - max(x, solids[i, 0])
+            before = min(start + width, solids[i, 2]) - max(start, solids[i, 0])
+            if now > before:
+                return True
     return False
 
 
@@ -553,7 +561,7 @@ def _rollout(m0, x, y, x1, y1, pre_run, hold, direction, solids, paths, stompabl
         airborne = airborne or jumped
         nx = x + dx
         feet = y + height
-        if _blocked(nx, width, y, feet, solids):
+        if _blocked(nx, x, width, y, feet, solids):
             nx = x  # a wall: no sideways motion, as the game stops it
             m[0] = 0
             m[1] = 0
@@ -622,10 +630,11 @@ def _rollout(m0, x, y, x1, y1, pre_run, hold, direction, solids, paths, stompabl
     return _TIMEOUT, horizon, x, y, x + width, y + height, -1, -1, stomped, got, bumped
 
 
-def blocked(x: float, width: float, top: float, feet: float, solids: Sequence[Solid]) -> bool:
-    """Whether a body at ``x`` (``width`` wide, from ``top`` to ``feet``)
-    would be inside a solid's side: a wall, not a ledge it stands on."""
-    return bool(_blocked(float(x), float(width), float(top), float(feet), _solid_array(solids)))
+def blocked(x: float, start: float, width: float, top: float, feet: float, solids: Sequence[Solid]) -> bool:
+    """Whether a body moved from ``start`` to ``x`` (``width`` wide, from
+    ``top`` to ``feet``) would go deeper into a solid's side: a wall, not a
+    ledge it stands on (_blocked)."""
+    return bool(_blocked(float(x), float(start), float(width), float(top), float(feet), _solid_array(solids)))
 
 
 def _packed(enemies: Sequence[Enemy], frames: int) -> tuple:

@@ -7,6 +7,7 @@ from copy import copy
 from retroagi.core.smb_controller import Choice, Controller, State, _collision_box, meets_soon, stopping_distance
 from retroagi.core.smb_physics import NESPlayerMotion
 from retroagi.core.smb_planner import (
+    blocked,
     INSET,
     Enemy,
     Goal,
@@ -343,3 +344,15 @@ def test_a_run_up_whose_goal_fails_jumps_to_any_safe_landing():
     for _ in range(4):
         controller.press(later)
     assert controller.event is None and controller.plan is not None
+
+
+def test_mario_pressed_against_a_pipe_can_still_move_away_and_jump():
+    # Overlapping a tall pipe's side by 2 pixels (5-1: the game tests walls
+    # inside his box): moving away and jumping are not blocked, deeper is.
+    tall = pipe(70, 112)
+    assert not blocked(102.0, 100.0, 10.0, 196.0, 208.0, [tall, FLOOR])
+    assert blocked(98.0, 100.0, 10.0, 196.0, 208.0, [tall, FLOOR])
+    step = Solid(118, 176, 134, 240, "ground", ("surfaces", 1))
+    body = (100.0, 196.0, 110.0, 208.0)
+    plan = plan_jump(Goal("land", step.ref, 118, 134, top=176), NESPlayerMotion(), body, [tall, step, FLOOR], [], 1)
+    assert plan is not None and plan.outcome.solid is step
