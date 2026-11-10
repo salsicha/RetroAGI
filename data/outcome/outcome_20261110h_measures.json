@@ -1,0 +1,78 @@
+{
+ "step": 20000,
+ "loss": 0.06925085932016373,
+ "fresh": {
+  "all": {
+   "choices": 319541,
+   "deaths": 0.004550276789814234,
+   "death_auc": 0.9601521430238245,
+   "death_error": 0.006796266417950392,
+   "infeasible_right": 0.9683984214858187,
+   "stuck_right": 0.9534613711542493,
+   "progress_error_px": 5.205684661865234
+  },
+  "land": {
+   "choices": 214950,
+   "deaths": 0.002949523041024804,
+   "death_auc": 0.9513917374756565,
+   "death_error": 0.004604795482009649,
+   "infeasible_right": 0.9673040241916725,
+   "stuck_right": 0.9577343568271691,
+   "progress_error_px": 5.053468227386475
+  },
+  "stomp": {
+   "choices": 8079,
+   "deaths": 0.00891199428588152,
+   "death_auc": 0.977368760667749,
+   "death_error": 0.013471878133714199,
+   "infeasible_right": 0.9340264884267855,
+   "stuck_right": 0.9363782646367125,
+   "progress_error_px": 14.37106990814209
+  },
+  "pass": {
+   "choices": 16158,
+   "deaths": 0.010830548591911793,
+   "death_auc": 0.9366194438734012,
+   "death_error": 0.016547661274671555,
+   "infeasible_right": 0.9475801460576804,
+   "stuck_right": 0.9224532739200396,
+   "progress_error_px": 10.277402877807617
+  },
+  "run": {
+   "choices": 42243,
+   "deaths": 0.009161281399428844,
+   "death_auc": 0.9551925044844289,
+   "death_error": 0.0134041802957654,
+   "infeasible_right": 0.9743862888525909,
+   "stuck_right": 0.9404161636247426,
+   "progress_error_px": 6.398100852966309
+  },
+  "wait": {
+   "choices": 28162,
+   "deaths": 0.006072011776268482,
+   "death_auc": 0.9823928367952857,
+   "death_error": 0.007928763516247272,
+   "infeasible_right": 0.9970527661387686,
+   "stuck_right": 0.963923016831191,
+   "progress_error_px": 1.616024136543274
+  },
+  "bump": {
+   "choices": 9548,
+   "deaths": 0.0015710096340626478,
+   "death_auc": 0.9085492499737753,
+   "death_error": 0.0016140793450176716,
+   "infeasible_right": 0.9516129032258065,
+   "stuck_right": 0.952869710934227,
+   "progress_error_px": 6.736852645874023
+  },
+  "collect": {
+   "choices": 401,
+   "deaths": 0.0,
+   "death_auc": NaN,
+   "death_error": 0.0018322155810892582,
+   "infeasible_right": 0.8428927680798005,
+   "stuck_right": 0.9102244389027432,
+   "progress_error_px": 9.131009101867676
+  }
+ }
+}

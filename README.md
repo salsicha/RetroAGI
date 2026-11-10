@@ -29,19 +29,21 @@ fast controller ([the plan](docs/choose-and-control-plan.md)):
 Nothing learns on Full SMB: training data comes from random levels built
 in Block SMB from the real game's pieces and rules.
 
-Where it stands (2026-11-09):
+Where it stands (2026-11-10), with outcome_20261109d (the default) and
+outcome_20261110h (trained with World 5-1's enemies):
 
-| Chooser, state | 1-1 obstacle bench (24) | Full 1-1 | 100 fresh random levels |
-|---|---|---|---|
-| Outcome network, game memory | **24/24** | **finished both modes** (speed run 1,898 frames; max points score 2,300) | |
-| Outcome network, vision only | **24/24** | **finished both modes** (speed run 1,788 frames; max points score 1,300) | |
-| Outcome network, simulator state | | | 97 speed run, 97 max points |
-| Scripted, game memory | 24/24 | max points finished; speed run died at x 1676 | |
-| Scripted, vision only | 0.92 | both died near x 2020 | |
-| Scripted, simulator state | | | 97 speed run, 95 max points |
+| Chooser, state | 1-1 obstacle bench (24) | Full 1-1 | Full 5-1 | 100 fresh random levels |
+|---|---|---|---|---|
+| Network d, game memory | **24/24** | finished both modes | max points finished; speed run died at x 1909 | |
+| Network d, vision only | **24/24** | speed run finished; max points died at x 682 | died at x 1906 | |
+| Network d, simulator state | | | | 87 speed run, 91 max points |
+| Network h, game memory | 0.92 | finished both modes | **finished both modes** | |
+| Network h, vision only | 0.88 | **finished both modes** | **max points finished** (score 1,100); speed run died at x 618 | |
+| Network h, simulator state | | | | **93 speed run, 93 max points** |
 
-The random levels include question blocks, mushrooms, big Mario and Koopa
-Troopas (2026-11-09).
+The random levels include question blocks, mushrooms, big Mario, Koopa
+Troopas (2026-11-09), and World 5-1's piranha plants, hopping Paratroopas
+and Bullet Bill cannons (2026-11-10).
 The outcome network was trained only on Block SMB random levels; nothing
 learns on the real game. Full-level results shift from change to change.
 

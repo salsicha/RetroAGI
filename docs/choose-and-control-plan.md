@@ -356,3 +356,37 @@ Each phase ends with a measurement that decides whether to go on.
 
   outcome_20261109d stays the default: the real game is the test, and
   nothing learns on it.
+- **World 5-1, 2026-11-10.** The second test level, played and measured
+  only. Its game memory showed three things the random levels lacked, now
+  in Block SMB as the game has them (measured): piranha plants (rising 24
+  pixels at half a pixel a frame, 64 frames out and 64 down, staying down
+  while Mario is within 33 pixels, colliding by a 10x6 box 4 to 10 pixels
+  over the pipe's top), hopping Koopa Paratroopas (3.25 pixels a frame up,
+  0.12 gravity), and Bullet Bill cannons (10x6 bullets at 1.5 pixels a
+  frame through everything). The planner's enemies have kinds (walker,
+  hopper, plant, flier) with their own paths, and the network's enemy
+  tokens carry the kind. 5-1 also exposed, and the fixes cover:
+  - perception: the camera estimate stood still on bare floor and in the
+    game's partial-follow zone (now dead-reckoned from Mario's buttons
+    from screen x 77 on); only walkers are assumed to come at Mario until
+    measured; a hopper's speed comes from its last 4 moves; two enemies
+    drawn as one keep their whole width;
+  - planner: a wall blocks only moving deeper into it (Mario pressed
+    against a pipe could not jump); a head bump goes on to a safe landing;
+    a run-up whose goal fails jumps to any safe landing; a staircase's next
+    step is a wall, not an end;
+  - controller: a wait brakes to a stop; a run stops before a pit (a pipe
+    or step ahead is no pit);
+  - chooser: reaching the flag counts only when likely; landings, runs
+    and bumps refused at a spot stay refused across waits.
+  Three networks were trained on the way. Two were discarded: their
+  sampled outcomes carried planner bugs (staircase steps as ends, pipes
+  as pits) that taught false dead ends. The third, outcome_20261110h (6.26
+  million choices, data/datasets/block_smb/outcomes_20261110h), plays
+  random levels and 5-1 better than outcome_20261109d but 1-1's benches
+  worse (0.92 from game memory, 0.88 from vision: the run off the second
+  pipe toward a Goomba walking away, the Goombas after the second pit, the
+  second staircase pair); outcome_20261109d stays the default for now.
+  A check before each long sampling run now compares how sampled choices
+  end with the last set (runs ending at an edge fell from 35% to 13% once
+  pipes stopped counting as pits).
