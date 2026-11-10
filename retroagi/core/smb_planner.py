@@ -422,20 +422,19 @@ def _reached(x0, y0, x1, y1, m0, paths, stomped, frame, safe_after, solids):
     those in the bit mask ``stomped`` aside; -1 if none does, SLID_OFF if
     he slides off what he landed on with nothing below to catch him (a
     landing on the last pixels before a pit at speed: he was falling before
-    anything could be chosen)."""
+    anything could be chosen), or so near its end, still sliding, that no
+    jump could start (_footing: on the far end of 1-1's last staircase top,
+    every jump was refused and he slid into the pit)."""
     m = m0.copy()
     last = paths.shape[1] - 1
     for k in range(1, safe_after + 1):
         dx, _, _ = _advance(m, 0, False, True, y0, False)
         x0 += dx
         x1 += dx
-        supported, below = False, False
+        supported, below = _footing(x0, x1 - x0, y1, solids, (m[0] > 0) - (m[0] < 0)), False
         for i in range(solids.shape[0]):
-            if x0 < solids[i, 2] and solids[i, 0] < x1:
-                if abs(solids[i, 1] - y1) <= STAND:
-                    supported = True
-                elif solids[i, 1] > y1:
-                    below = True
+            if x0 < solids[i, 2] and solids[i, 0] < x1 and solids[i, 1] > y1 + STAND:
+                below = True
         if not supported:
             if not below:
                 return SLID_OFF

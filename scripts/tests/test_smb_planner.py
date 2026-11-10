@@ -241,6 +241,11 @@ def test_a_landing_mario_would_slide_off_into_a_pit_is_no_landing():
     assert o.end == "fell"
     plan = plan_jump(Goal("land", far.ref, far.x0, far.x1, top=208), fast, (100.0, 192.0, 110.0, 208.0), [near, far], [], 1)
     assert plan is not None and plan.outcome.solid is far
+    # Nor one he would slide on to its last pixels, where no jump can start
+    # (1-1's last staircase top): 8 pixels from the end is a landing, 4 not.
+    slow = NESPlayerMotion(x_speed=8, moving=1)
+    assert rollout(copy(slow), (124.0, 192.0, 134.0, 208.0), 0, 1, 1, [near, far], []).end == "landed"
+    assert rollout(copy(slow), (128.0, 192.0, 138.0, 208.0), 0, 1, 1, [near, far], []).end == "fell"
 
 
 def test_a_seen_walker_collides_with_the_games_box_not_the_drawn_one():
