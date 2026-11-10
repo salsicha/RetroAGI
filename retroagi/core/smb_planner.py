@@ -87,6 +87,11 @@ SLID_OFF = -2
 LAST_RESORT_SAFE = 4
 # A pass lands this far clear of the enemy (pixels).
 PASS_GAP = 4
+# Plans that still meet their goal from this many pixels further back are
+# preferred (plan_jump): on a 16-pixel step across 1-1's second staircase
+# pit, the soonest landing was a 3-frame hop that a few pixels of vision's
+# error put against the step's side.
+ROBUST_SHIFT = 3
 # How far inside a thing's ends a landing is kept (pixels; Mario is 10-12
 # wide): the goal region's margin. On a thing too narrow for it (a 16-pixel
 # step), at least NARROW_KEEP of it: Mario's middle stays on the top.
@@ -745,8 +750,9 @@ def buttons_of(pre_run: int, hold: int, direction: int, frames: int, steer: int 
 def plan_jump(goal: Optional[Goal], motion: NESPlayerMotion, body: tuple, solids: Sequence[Solid],
               enemies: Sequence[Enemy], direction: int, latest_takeoff: int = HORIZON,
               items: Sequence[Enemy] = ()) -> Optional[Plan]:
-    """The plan meeting ``goal`` (None: any safe landing) with the most
-    margin (then the soonest);
+    """The plan meeting ``goal`` (None: any safe landing), robust to a seen
+    position's error (ROBUST_SHIFT) if any is, with the most margin (then
+    the soonest);
     None when no takeoff and hold (nor walking on) does: the goal is
     infeasible from here. ``latest_takeoff``: no plan taking off later
     (frames of running) than this; walking on without jumping is a plan that
@@ -770,7 +776,14 @@ def plan_jump(goal: Optional[Goal], motion: NESPlayerMotion, body: tuple, solids
         margin = 0.0 if goal is None else _meets(goal, outcome, enemies)
         if margin is None:
             continue
-        key = (margin, -outcome.frame)
+        # Robust: it still meets the goal from ROBUST_SHIFT pixels further
+        # back (the error of a seen position).
+        back = ROBUST_SHIFT * direction
+        again = _rollout(m, x - back, y, x1 - back, y1, pre_run, hold, direction, packed_solids, paths,
+                         stompable, HORIZON, False, 0, 0, SAFE_AFTER, item_paths)
+        robust = again[0] == _LANDED and (
+            goal is None or _meets(goal, _outcome(again, solids, enemies, items), enemies) is not None)
+        key = (robust, margin, -outcome.frame)
         if best is None or key > best[0]:
             best = (key, Plan(pre_run, hold, direction, outcome, margin))
     if best is None:

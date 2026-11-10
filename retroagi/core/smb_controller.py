@@ -112,8 +112,6 @@ RIGHT_EDGE = 240
 # enemies ran Mario at full speed into a pair of Goombas too close to jump.
 THREAT_FRAMES = 48
 LEVEL = 24
-# A step down a staircase (pixels: a block).
-STEP = 16
 
 
 @dataclass
@@ -307,9 +305,10 @@ def _inside(box, outer) -> bool:
 
 def on_the_way(state: State, enemy: Enemy) -> bool:
     """Whether ``enemy`` is on Mario's way: its feet within LEVEL of his, or
-    of a floor he reaches walking toward it down steps (each next one
-    adjacent and at most STEP lower: Goombas at the foot of a staircase,
-    ignored while he ran down it, were met at full speed)."""
+    of a floor he reaches walking toward it, down steps or off an edge onto
+    anything lower (Goombas at the foot of a staircase, ignored while he ran
+    down it, were met at full speed; a Goomba on the floor beyond a pipe,
+    ignored as he ran off it, was landed on)."""
     body, feet = state.body, state.body[3]
     if abs(enemy.box[3] - feet) < LEVEL:
         return True
@@ -321,7 +320,7 @@ def on_the_way(state: State, enemy: Enemy) -> bool:
         if abs(enemy.box[3] - floor.top) < LEVEL:
             return True
         edge = floor.x1 + 2 if toward > 0 else floor.x0 - 2
-        floor = next((s for s in state.solids if s.x0 <= edge < s.x1 and 0 < s.top - floor.top <= STEP
+        floor = next((s for s in state.solids if s.x0 <= edge < s.x1 and s.top > floor.top
                       and s.kind not in (*BLOCK_KINDS, "edge")), None)
     return False
 

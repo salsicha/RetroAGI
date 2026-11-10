@@ -398,3 +398,29 @@ def test_a_run_at_a_pipe_is_no_pit_but_one_over_a_gap_is():
     block = Solid(160, 144, 176, 160, "block", ("blocks", 0))
     gap = State(body=state.body, motion=state.motion, grounded=True, solids=[left, block, right], enemies=[])
     assert pit_ahead(gap, 1)
+
+
+def test_a_goomba_on_the_floor_beyond_a_pipe_is_on_the_way():
+    # Running on a pipe's top at a Goomba on the floor beyond it (1-1's
+    # second pipe): Mario runs off onto that floor, the Goomba is a threat.
+    tube = pipe(100, 160)
+    floor = Solid(132, 208, 400, 240, "ground", ("surfaces", 1))
+    goomba = Enemy((180.0, 198.0, 190.0, 204.0), 0.5, 0.0, ("slots", 0))
+    state = State(body=(110.0, 148.0, 120.0, 160.0), motion=NESPlayerMotion(x_speed=32, moving=1), grounded=True,
+                  solids=[tube, floor], enemies=[goomba])
+    assert meets_soon(state, goomba)
+
+
+def test_a_jump_to_a_narrow_step_across_a_pit_keeps_room_for_error():
+    # 1-1's second staircase pair: from one 2-column top across a 32-pixel
+    # pit to a 16-pixel top. The plan still lands from 3 pixels further back.
+    near = Solid(400, 144, 432, 240, "ground", ("surfaces", 0))
+    far = Solid(464, 144, 480, 240, "ground", ("surfaces", 1))
+    lower = Solid(480, 160, 496, 240, "ground", ("surfaces", 2))
+    body = (418.0, 132.0, 428.0, 144.0)
+    goal = Goal("land", far.ref, far.x0, far.x1, top=144)
+    solids = [near, far, lower]
+    plan = plan_jump(goal, NESPlayerMotion(), body, solids, [], 1)
+    assert plan is not None
+    back = rollout(NESPlayerMotion(), (415.0, 132.0, 425.0, 144.0), plan.pre_run, plan.hold, 1, solids, [])
+    assert back.end == "landed" and back.solid is far
