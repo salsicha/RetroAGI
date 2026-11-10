@@ -47,6 +47,8 @@ class Track:
     identity: int = 0
     # Frames since it was last seen (0: seen this frame).
     missed: int = 0
+    # Its object type as vision last told it (EnemyView.type; -1 not told).
+    type: int = -1
 
     @property
     def velocity(self):
@@ -71,8 +73,8 @@ class VisualTracks:
     lost: list = field(default_factory=list)
 
     def observe(self, scene, scroll):
-        objects = [(e.box, e.kind) for e in scene.enemies if e.kind != "defeated"]
-        objects += [(b, "platform") for b in scene.moving_platforms]
+        objects = [(e.box, e.kind, e.type) for e in scene.enemies if e.kind != "defeated"]
+        objects += [(b, "platform", -1) for b in scene.moving_platforms]
         # Tracks unseen since an earlier frame move on by their velocity (and
         # the scroll) to where they should be now.
         lost = []
@@ -83,7 +85,7 @@ class VisualTracks:
                 lost.append(old)
         found = set()
         updated, used = [], set()
-        for box, kind in objects:
+        for box, kind, seen_type in objects:
             matches = []
             if scroll is not None:
                 for i, old in enumerate(self.tracks):
@@ -102,15 +104,17 @@ class VisualTracks:
                 # a neighbour when two visible objects both match this track.
                 competitors = sorted(
                     abs(other[0] - old.box[0] + scroll) + abs(other[1] - old.box[1])
-                    for other, other_kind in objects
+                    for other, other_kind, _ in objects
                     if other_kind == kind
                     and abs(other[0] - old.box[0] + scroll) <= 8
                     and abs(other[1] - old.box[1]) <= 8
                 )
                 if len(competitors) > 1 and competitors[1] - competitors[0] <= 1:
+                    track.type = seen_type
                     updated.append(track)
                     continue
                 if abs(dx) + abs(dy) != competitors[0]:
+                    track.type = seen_type
                     updated.append(track)
                     continue
                 used.add(i)
@@ -126,6 +130,7 @@ class VisualTracks:
                 track.samples = track.samples[-ESTIMATE_SAMPLES:]
             elif not matches:
                 track = self._found_again(box, kind, lost, found) or track
+            track.type = seen_type
             updated.append(track)
         if scroll is None:
             self.lost = []

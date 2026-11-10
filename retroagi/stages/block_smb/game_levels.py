@@ -9,8 +9,9 @@ top one or two columns wide), rows of bricks and question blocks at the
 game's two heights (4 and 8 tiles above the floor, Goombas sometimes walking
 on the upper one; a question block holds a coin or a mushroom, big Mario
 breaks bricks), question blocks over the floor, single Goombas and pairs,
-Koopa Troopas (a stomp leaves a shell that a touch kicks), and a
-staircase before the flag, each separated by a few tiles of floor
+Koopa Troopas (a stomp leaves a shell that a touch kicks), and from World
+5-1 piranha plants in pipes, hopping Koopa Paratroopas and Bullet Bill
+cannons, and a staircase before the flag, each separated by a few tiles of floor
 (random_level). The floor is cut where a pipe or a step stands, as the game
 draws it. Goombas follow the game's rules (env.py "game_rules": they wake as
 they come on screen, walk left at half a pixel a frame, turn at walls, fall
@@ -31,6 +32,10 @@ from typing import Optional
 from retroagi.core.smb_controller import Controller, State
 from retroagi.core.smb_planner import Enemy, Solid, screen_edge
 
+from .piranha import EXPOSED_FRAMES, HIDDEN_FRAMES, RISE_FRAMES
+
+PLANT_CYCLE = 2 * RISE_FRAMES + EXPOSED_FRAMES + HIDDEN_FRAMES
+
 TILE = 16
 FLOOR = 208
 BOTTOM = 240
@@ -45,7 +50,7 @@ START_FLAT = 10
 FLAT = (3, 8)
 END_FLAT = 10
 # The pieces and how often each comes.
-PIECES = {"pipe": 3, "pit": 2, "goombas": 3, "bricks": 2, "stairs": 1, "questions": 1}
+PIECES = {"pipe": 3, "pit": 2, "goombas": 3, "bricks": 2, "stairs": 1, "questions": 1, "cannon": 1}
 PIPE_TILES = (2, 3, 4)
 PIT_TILES = (2, 2, 3, 3, 4)
 STAIR_TILES = (3, 4)
@@ -66,6 +71,12 @@ BIG_START = 0.3
 # Koopa Troopa this share of the time.
 PAIR_GAP = 24
 KOOPA_SHARE = 0.25
+# World 5-1's things: a pipe holds a piranha plant PLANT_SHARE of the time
+# (at a random point of its cycle); an enemy piece is a Koopa Paratroopa
+# PARATROOPA_SHARE of the time; a cannon is CANNON_TILES tall.
+PLANT_SHARE = 0.4
+PARATROOPA_SHARE = 0.2
+CANNON_TILES = (1, 2)
 # A Goomba's body as the simulator places it: its feet this far below the
 # y it is given.
 GOOMBA_FEET = 14
@@ -106,13 +117,23 @@ def random_level(seed: int, pieces: int = 12) -> dict:
         if kind == "pipe":
             top = FLOOR - rng.choice(PIPE_TILES) * TILE
             solids.append([x, top, 2 * TILE, BOTTOM - top, "pipe"])
+            if rng.random() < PLANT_SHARE:
+                enemies.append({"kind": "piranha_plant", "x": float(x + TILE // 2), "pipe_top": float(top),
+                                "phase": rng.randrange(PLANT_CYCLE)})
             x += 2 * TILE
+        elif kind == "cannon":
+            top = FLOOR - rng.choice(CANNON_TILES) * TILE
+            solids.append([x, top, TILE, BOTTOM - top, "cannon"])
+            x += TILE
         elif kind == "pit":
             width = rng.choice(PIT_TILES) * TILE
             pits.append((x, x + width))
             x += width
         elif kind == "goombas":
-            if rng.random() < KOOPA_SHARE:
+            roll = rng.random()
+            if roll < PARATROOPA_SHARE:
+                enemies.append(_goomba(x, FLOOR, "paratroopa"))
+            elif roll < PARATROOPA_SHARE + KOOPA_SHARE:
                 enemies.append(_goomba(x, FLOOR, "koopa"))
             else:
                 enemies.append(_goomba(x, FLOOR))
@@ -162,7 +183,7 @@ def random_level(seed: int, pieces: int = 12) -> dict:
     width = x + END_FLAT * TILE
 
     # The floor, cut at pits and where pipes and steps stand.
-    cuts = sorted(pits + [(s[0], s[0] + s[2]) for s in solids if s[4] in ("pipe", "ground")])
+    cuts = sorted(pits + [(s[0], s[0] + s[2]) for s in solids if s[4] in ("pipe", "ground", "cannon")])
     floor, start = [], 0
     for x0, x1 in cuts:
         if x0 > start:
@@ -187,7 +208,25 @@ def random_level(seed: int, pieces: int = 12) -> dict:
     }
 
 
-_KINDS = {"ground": "ground", "pipe": "pipe", "brick": "block", "question_block": "block", "moving_platform": "moving"}
+_KINDS = {"ground": "ground", "pipe": "pipe", "brick": "block", "question_block": "block", "moving_platform": "moving",
+          "cannon": "ground"}  # (the game's labels call a cannon ground)
+
+
+def enemy_kind(enemy: dict) -> str:
+    """The planner's kind of a simulator enemy (smb_planner.ENEMY_KINDS)."""
+    if enemy.get("kind") == "piranha_plant":
+        return "plant"
+    if enemy.get("kind") == "bullet":
+        return "flier"
+    return "hopper" if enemy.get("wings") else "walker"
+
+
+def plant_velocity(plant: dict) -> float:
+    """A plant's vertical speed by its cycle (pixels a frame; up negative)."""
+    rise, exposed = plant["rise_frames"], plant["exposed_frames"]
+    phase = plant["plant_tick"] % (2 * rise + exposed + plant["hidden_frames"])
+    speed = plant["plant_height"] / rise
+    return -speed if phase < rise else speed if rise + exposed <= phase < 2 * rise + exposed else 0.0
 # A question block not yet hit (the game draws it with its question mark).
 QUESTION = "question"
 
@@ -211,10 +250,16 @@ class BlockTruthState:
             box = (e["x"], e["y"], e["x"] + e["w"], e["y"] + e["h"])
             if e["dead"] or e["h"] <= 0 or not awake or box[2] <= left or box[0] >= right:
                 continue
-            # (standing, its fall speed is gravity's step the floor stopped)
-            vy = 0.0 if e["on_ground"] else e["vy"]
+            kind = enemy_kind(e)
+            if kind == "plant":
+                if e["exposed"] <= 0:
+                    continue  # down in its pipe: not seen
+                vy = plant_velocity(e)
+            else:
+                # (standing, its fall speed is gravity's step the floor stopped)
+                vy = 0.0 if e["on_ground"] else e["vy"]
             enemies.append(Enemy(box, e["speed"] * e["direction"], vy, ("enemies", k),
-                                 stompable=bool(e.get("stompable", True))))
+                                 stompable=bool(e.get("stompable", True)), kind=kind))
         items = [Enemy((i["x"], i["y"], i["x"] + i["w"], i["y"] + i["h"]), i["vx"], i["vy"], ("items", k),
                        stompable=False)
                  for k, i in enumerate(env.items) if i["x"] + i["w"] > left and i["x"] < right]

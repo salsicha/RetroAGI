@@ -50,6 +50,7 @@ def snapshot_env_state(env: MarioScenarioEnv) -> dict[str, Any]:
         ],
         "enemies": [dict(enemy) for enemy in env.enemies],
         "items": [dict(item) for item in getattr(env, "items", ())],
+        "cannons": [dict(cannon) for cannon in getattr(env, "cannons", ())],
         "camera_x": env.camera_x,
         "score": env.score,
         "steps": env.steps,
@@ -82,6 +83,7 @@ def restore_env_state(env: MarioScenarioEnv, snapshot: Mapping[str, Any]) -> Non
     ]
     env.enemies = [dict(enemy) for enemy in snapshot["enemies"]]
     env.items = [dict(item) for item in snapshot.get("items", ())]
+    env.cannons = [dict(cannon) for cannon in snapshot.get("cannons", ())]
     env.camera_x = snapshot["camera_x"]
     env.score = snapshot["score"]
     env.steps = snapshot["steps"]

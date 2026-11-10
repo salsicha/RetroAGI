@@ -170,7 +170,7 @@ def test_the_hold_scene_shows_what_mario_waits_for_and_the_teacher_holds_first(s
         if parameters["hold_on"] == "plant":
             plant = env.enemies[0]
             assert plant["kind"] == "piranha_plant" and plant["timed_crossing"]
-            assert plant["h"] == plant["plant_height"]  # fully up in the first picture
+            assert plant["exposed"] == plant["plant_height"]  # fully up in the first picture
         else:
             lift = next(p for p in env.platforms if p["moving"])
             assert lift["rect"].x >= env.platforms[0]["rect"].right + LIFT_AWAY

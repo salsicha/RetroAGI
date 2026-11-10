@@ -10,7 +10,10 @@ in one pass (smb_choices.candidates, outcome_network.predict). Then:
    stuck (from where no forward choice gets him on: a valley between
    staircases, entered for its quick progress, held him there), if any;
 2. progress right: of those, the one bringing the most progress a frame
-   (frames counted from MIN_FRAMES up, so a short wait is no free win);
+   (frames counted from MIN_FRAMES up, so a short wait is no free win),
+   and above all one likely (at least an even chance) to reach the flag
+   (weighed by its chance, a 1% chance far from the flag outweighed a jump
+   over 1-1's first Goomba and Mario ran back into it);
 3. coins and power-ups: in max-points mode a point is worth POINT_VALUE
    pixels a frame of progress, so a stomp wins when it costs little
    progress; in a speed run points are worth nothing.
@@ -85,7 +88,7 @@ class OutcomeChooser:
         if (allowed & (p[:, STUCK] < 0.5)).any():
             allowed &= p[:, STUCK] < 0.5
         value = (p[:, PROGRESS] / np.maximum(p[:, FRAMES], MIN_FRAMES)
-                 + POINT_VALUE[self.mode] * p[:, POINTS] + p[:, FINISHED] * 100.0)
+                 + POINT_VALUE[self.mode] * p[:, POINTS] + (p[:, FINISHED] >= 0.5) * 100.0)
         best = int(np.argmax(np.where(allowed, value, -np.inf)))
         self.last = (options, p, best)
         self.picked = (spot, signatures[best], options[best][1])

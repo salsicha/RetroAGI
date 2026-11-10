@@ -94,7 +94,7 @@ def test_timed_plants_are_fully_raised_whenever_a_runner_would_cross():
             heights = []
             for frame in range(crossing + 17):
                 if frame >= crossing - 8:
-                    heights.append(env.enemies[0]["h"])
+                    heights.append(env.enemies[0]["exposed"])
                 env.step(0)
         finally:
             env.close()

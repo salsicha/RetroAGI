@@ -47,6 +47,9 @@ class OutcomeConfig:
     width: int = 96
     layers: int = 3
     heads: int = 4
+    # The enemy features it reads, the first of each enemy token's (a model
+    # from before the enemies' kinds reads 7).
+    enemy_width: int = ENEMY_WIDTH
 
 
 def _scaled(mario, surfaces, enemies, items):
@@ -76,7 +79,7 @@ class OutcomeNetwork(nn.Module):
         w = config.width
         self.mario_in = nn.Linear(MARIO_WIDTH, w)
         self.surface_in = nn.Linear(SURFACE_WIDTH, w)
-        self.enemy_in = nn.Linear(ENEMY_WIDTH, w)
+        self.enemy_in = nn.Linear(config.enemy_width, w)
         self.item_in = nn.Linear(ITEM_WIDTH, w)
         self.kind = nn.Embedding(4, w)  # Mario, surface, enemy, item
         layer = nn.TransformerEncoderLayer(w, config.heads, 4 * w, dropout=0.0, batch_first=True)
@@ -97,7 +100,7 @@ class OutcomeNetwork(nn.Module):
         tokens = torch.cat([
             self.mario_in(m)[:, None] + self.kind.weight[0],
             self.surface_in(s) + self.kind.weight[1],
-            self.enemy_in(e) + self.kind.weight[2],
+            self.enemy_in(e[..., :self.config.enemy_width]) + self.kind.weight[2],
             self.item_in(i) + self.kind.weight[3],
         ], dim=1)
         absent = torch.cat([

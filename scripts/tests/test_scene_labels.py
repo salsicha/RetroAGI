@@ -250,9 +250,10 @@ def test_block_power_ups_are_drawn_and_reported_and_only_reward():
         env.close()
 
 
-@pytest.mark.parametrize("phase, shown", [(90, False), (30, True), (8, True)])
+@pytest.mark.parametrize("phase, shown", [(200, False), (80, True), (24, True)])
 def test_block_plant_inside_its_pipe_is_not_reported(phase, shown):
-    # Phases (16 rising, 48 out, 16 sinking, 32 hidden): 90 hidden, 30 out, 8 half-risen.
+    # Phases (the game's: 48 rising, 64 out, 48 sinking, 64 hidden): 200
+    # hidden, 80 out, 24 half-risen.
     scenario = {
         "world_width": 256,
         "mario": [20, 200],

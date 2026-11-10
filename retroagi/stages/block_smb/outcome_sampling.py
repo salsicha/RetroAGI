@@ -32,9 +32,11 @@ import numpy as np
 
 from retroagi.core.smb_choices import (
     ENEMY_SLOTS,
+    ENEMY_WIDTH,
     ITEM_SLOTS,
     ITEM_WIDTH,
     KINDS,
+    MARIO_WIDTH,
     RUN_BACK,
     RUN_LONG,
     SURFACE_SLOTS,
@@ -229,9 +231,9 @@ def sample_level(seed: int, mode: str, *, explore: float = EXPLORE, rng: Optiona
         if terminated or truncated:
             break
     return {
-        "mario": np.array(marios, np.float32).reshape(-1, 7),
+        "mario": np.array(marios, np.float32).reshape(-1, MARIO_WIDTH),
         "surfaces": np.array(surfaces, np.float32).reshape(-1, SURFACE_SLOTS, SURFACE_WIDTH),
-        "enemies": np.array(enemies, np.float32).reshape(-1, ENEMY_SLOTS, 7),
+        "enemies": np.array(enemies, np.float32).reshape(-1, ENEMY_SLOTS, ENEMY_WIDTH),
         "items": np.array(items, np.float32).reshape(-1, ITEM_SLOTS, ITEM_WIDTH),
         "choices": np.array(rows, np.int32).reshape(-1, 4),  # state, kind, slot, modifier
         "outcomes": np.array(outcomes, np.float32).reshape(-1, len(OUTCOME_FIELDS)),

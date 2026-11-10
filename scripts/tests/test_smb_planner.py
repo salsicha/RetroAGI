@@ -38,9 +38,11 @@ def test_a_rollout_lands_hits_walls_and_bumps_blocks():
     assert hop.end == "landed" and hop.solid is FLOOR and hop.body[2] <= 116
     tall = rollout(motion, (104.0, 192.0, 116.0, 208.0), 0, 20, 1, [FLOOR, pipe(116, 176)], [])
     assert tall.end == "landed" and tall.solid.kind == "pipe"
-    # A block just above Mario's head: jumping into it bumps it.
+    # A block just above Mario's head: jumping into it bumps it, and he
+    # falls back to the floor.
     block = Solid(98, 160, 114, 176, "block", ("blocks", 0))
-    assert rollout(motion, STANDING, 0, 16, 0, [FLOOR, block], []).end == "bonk"
+    bump = rollout(motion, STANDING, 0, 16, 0, [FLOOR, block], [])
+    assert bump.end == "landed" and bump.bumped is block and bump.solid is FLOOR
     # Running on a floor that ends: Mario falls.
     short = Solid(0, 208, 130, 240, "ground", ("surfaces", 0))
     assert rollout(motion, STANDING, 64, 0, 1, [short], []).end == "fell"
@@ -223,7 +225,12 @@ def test_the_planner_bumps_a_block_and_collects_an_item():
     # below.
     block = Solid(128, 144, 144, 160, "question", ("blocks", 0))
     plan = plan_jump(Goal("bump", block.ref, 128, 144, top=160), NESPlayerMotion(), STANDING, [FLOOR, block], [], 1)
-    assert plan is not None and plan.outcome.end == "bonk" and plan.outcome.solid is block
+    assert plan is not None and plan.outcome.end == "landed" and plan.outcome.bumped is block
+    # Not when every landing after the bump is among enemies (1-1: a bump
+    # landed Mario by two Goombas woken in the run-up).
+    row = Enemy((120.0, 198.0, 240.0, 204.0), 0.0, 0.0, ("slots", 0), stompable=False)
+    assert plan_jump(Goal("bump", block.ref, 128, 144, top=160), NESPlayerMotion(), STANDING, [FLOOR, block],
+                     [row], 1) is None
     # A mushroom on the floor moving away at a pixel a frame: a jump that
     # lands touching it on the way collects it.
     mushroom = Enemy((150.0, 192.0, 166.0, 208.0), 1.0, 0.0, ("items", 0), stompable=False)
@@ -289,3 +296,50 @@ def test_a_sliver_of_pipe_does_not_hide_the_step_under_it():
         surfaces=(Surface(320, 400, 144, False),),
     )
     assert all(s.kind != "ground" for s in solids_of(row, 0.0))
+
+
+def test_hoppers_plants_and_fliers_have_their_own_paths():
+    # A Paratroopa standing on the floor hops about 44 pixels and lands again.
+    hopper = Enemy((200.0, 193.0, 212.0, 205.0), -0.5, 0.0, ("slots", 0), kind="hopper")
+    enemy_paths([hopper], [FLOOR], 120)
+    tops = [b[1] for b in hopper.path]
+    assert 40 <= 193 - min(tops) <= 48 and max(tops) == 193.0 and tops[60] < 193
+    # A plant halfway out rises to 4 pixels above its pipe's top and stays;
+    # one going down sinks into the pipe.
+    top = pipe(160, 160)
+    plant = Enemy((171.0, 160.0, 181.0, 166.0), 0.0, 0.0, ("slots", 1), stompable=False, kind="plant")
+    enemy_paths([plant], [top, FLOOR], 60)
+    assert plant.path[-1][3] == 160 - 4 and plant.path[-1][0] == 171.0
+    sinking = Enemy((171.0, 150.0, 181.0, 156.0), 0.0, 0.5, ("slots", 2), stompable=False, kind="plant")
+    enemy_paths([sinking], [top, FLOOR], 60)
+    assert sinking.path[-1][1] > 160
+    # A Bullet Bill flies straight through a pipe.
+    bullet = Enemy((300.0, 182.0, 310.0, 188.0), -1.5, 0.0, ("slots", 3), kind="flier")
+    enemy_paths([bullet], [top, FLOOR], 100)
+    assert tuple(bullet.path[100]) == (150.0, 182.0, 160.0, 188.0)
+
+
+def test_a_hoppers_speed_is_its_recent_moves_plus_gravity():
+    from retroagi.core.smb_controller import HOP_GRAVITY, hopper_speed
+
+    # Falling ever faster: the last four moves 1, 2, 2, 3 (mean 2) are its
+    # speed two and a half frames ago.
+    assert hopper_speed([0, 0, 1, 2, 2, 3]) == 2 + HOP_GRAVITY * 2.5
+
+
+def test_a_run_up_whose_goal_fails_jumps_to_any_safe_landing():
+    # Running at a Koopa to pass it, the goal turns out unmeetable in the
+    # run-up (a second Koopa just behind it, as vision split one into two):
+    # the jump still goes, to a safe landing (a stomp), not into them.
+    koopa = Enemy((180.0, 193.0, 192.0, 205.0), -0.5, 0.0, ("slots", 0))
+    start = State(body=(100.0, 196.0, 110.0, 208.0), motion=NESPlayerMotion(x_speed=24, moving=1), grounded=True,
+                  solids=[FLOOR], enemies=[koopa])
+    controller = Controller()
+    controller.start(Choice("jump", Goal("pass", ("slots", 0), side=1)), start)
+    assert controller.plan is not None and controller.plan.pre_run > 0
+    # Two Koopas now: passing beyond both is out of reach.
+    wall = [Enemy((180.0 + 14 * k, 193.0, 192.0 + 14 * k, 205.0), -0.5, 0.0, ("slots", k)) for k in range(6)]
+    later = State(body=start.body, motion=start.motion, grounded=True, solids=[FLOOR], enemies=wall)
+    for _ in range(4):
+        controller.press(later)
+    assert controller.event is None and controller.plan is not None

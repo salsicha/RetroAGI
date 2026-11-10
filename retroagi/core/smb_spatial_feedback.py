@@ -15,6 +15,14 @@ from .smb_scene_labels import fixed_surfaces
 from .smb_pixel_types import VISIBLE_COLUMNS
 from .smb_trajectory import VisualTracks, plan_flight
 
+# Where Mario's drawn left side stays on screen while the camera follows him:
+# Block SMB's old camera, and the real game's (1-1, 5-1). Away from them his
+# movement is seen directly; at one with no landmark to measure the scroll
+# by (5-1's long bare floor), it is dead-reckoned from the buttons pressed
+# (taken for no scroll, the camera estimate stood still for 300 frames and
+# Mario seemed to crawl).
+FOLLOW_COLUMNS = (85, 112)
+
 
 def terrain_edges(scene):
     """Unclipped, static landmarks for separating scroll from player motion."""
@@ -181,7 +189,7 @@ class SpatialFeedback:
             if shift is None:
                 # Outside the camera-follow column, displacement is visible
                 # directly. Do not interpret a scrolling, centred Mario as rest.
-                if all(abs(s.mario.box[0] - 85) > 3 for s in (self.previous, scene)):
+                if all(abs(s.mario.box[0] - column) > 3 for s in (self.previous, scene) for column in FOLLOW_COLUMNS):
                     shift = 0
                 elif self.predicted_dx is not None:
                     # Featureless scrolling floor supplies no world landmark.

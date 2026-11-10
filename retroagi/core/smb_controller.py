@@ -31,6 +31,7 @@ from .smb_physics import NESPlayerMotion
 from .smb_planner import (
     BLOCK_KINDS,
     BUTTON,
+    HOP_GRAVITY,
     HORIZON,
     Enemy,
     Goal,
@@ -76,6 +77,15 @@ HEAD_ROOM = 4
 BIG_DRAWN, BIG_BODY_WIDTH, BIG_HEAD_ROOM = 20, 12, 8
 # A walker drawn taller than this is a Koopa (_collision_box).
 KOOPA_DRAWN = 20
+# The planner's kind of enemy (smb_planner.ENEMY_KINDS) by the object type
+# vision tells (pixel_labels.ENEMY_TYPE_NUMBERS: a Piranha Plant, a Koopa
+# Paratroopa, a Bullet Bill); otherwise by vision's kind ("other": a flier).
+# A Bullet Bill can be stomped.
+TYPE_KINDS = {4: "plant", 5: "hopper", 9: "flier"}
+BULLET_TYPE = 9
+# A hopper's vertical speed is measured over its last this many frames
+# (hopper_speed).
+HOP_SAMPLES = 4
 # Enemies seen starting in this many columns at the screen's left edge are
 # left out: there vision read cut-off sprites as enemies walking toward
 # Mario, and he jumped back over a pit at them (the game hides the first 8
@@ -171,8 +181,9 @@ def perceived(feedback, scene, items: Optional[ItemTracker] = None) -> Optional[
       the frames beside 1-1's fourth pipe);
     - the solids are vision's, none inside Mario's drawn box, floor gaps
       hidden by enemies joined, and the screen's left edge, a wall;
-    - the enemies are its tracks seen this frame (a walker's collision box
-      inside its drawn one: _collision_box), none starting in the
+    - the enemies are its tracks seen this frame, each of the planner's
+      kinds (TYPE_KINDS), a walker's and a plant's collision box inside its
+      drawn one (_collision_box, _plant_box), none starting in the
       LEFT_COLUMNS, none smaller than MIN_ENEMY away from the right edge and
       none mostly inside Mario's drawn box (vision read big Mario's top half
       as an enemy on his head), with their averaged velocities (seen for fewer than
@@ -201,15 +212,21 @@ def perceived(feedback, scene, items: Optional[ItemTracker] = None) -> Optional[
         if _inside(t.box, drawn_on_screen):
             continue  # part of Mario's own sprite (big Mario's top half read as an enemy)
         world = (t.box[0] + camera, t.box[1], t.box[2] + camera, t.box[3])
-        if t.kind == "walker":
+        kind = TYPE_KINDS.get(t.type, "walker" if t.kind == "walker" else "plant" if t.kind == "plant" else "flier")
+        if kind in ("walker", "hopper"):
             world = _collision_box(world)
+        elif kind == "plant":
+            world = _plant_box(world)
         if len(t.samples) >= MEASURED:
             vx, vy = t.velocity
-        elif t.kind == "walker":
+            if kind == "hopper":
+                vy = hopper_speed([dy for _, dy in t.samples])
+        elif kind in ("walker", "hopper"):
             vx, vy = (-WALK if world[0] > body[0] else WALK), 0.0
         else:
             vx, vy = 0.0, 0.0  # a plant or anything else: still until measured
-        enemies.append(Enemy(world, vx, vy, ("enemies", t.identity), stompable=t.kind == "walker"))
+        stompable = kind in ("walker", "hopper") or t.type == BULLET_TYPE
+        enemies.append(Enemy(world, vx, vy, ("enemies", t.identity), stompable=stompable, kind=kind))
     # Nothing solid lies inside Mario's own drawn box: at the screen's left
     # edge, parts of his cut-off sprite read as a 3-pixel pipe.
     drawn = (box[0] + camera, box[1], box[2] + camera, box[3])
@@ -246,6 +263,22 @@ def _collision_box(drawn) -> tuple:
     if drawn[3] - drawn[1] > KOOPA_DRAWN:
         return (left, bottom - 16, left + 12, bottom - 4)
     return (left + 1, bottom - 11, left + 11, bottom - 5)
+
+
+def hopper_speed(moves) -> float:
+    """A hopper's vertical speed now from its last vertical moves (pixels a
+    frame, oldest first): the mean of the last HOP_SAMPLES, which is its
+    speed in the middle of them, plus the gravity since (a 16-frame mean put
+    a Paratroopa's landing 6 frames late, under Mario's)."""
+    recent = moves[-HOP_SAMPLES:]
+    return sum(recent) / len(recent) + HOP_GRAVITY * (len(recent) + 1) / 2
+
+
+def _plant_box(drawn) -> tuple:
+    """A piranha plant's collision box in the part of it vision draws (out of
+    its pipe, from the plant's top): the game's 10 by 6, 3 in from its left
+    side and 14 below its top (game memory, 5-1)."""
+    return (drawn[0] + 3, drawn[1] + 14, drawn[0] + 13, drawn[1] + 20)
 
 
 def _inside(box, outer) -> bool:
@@ -359,7 +392,15 @@ class Controller:
             # ran Mario off the edge of 1-1's second pit).
             self._plan(state, latest_takeoff=plan.pre_run - step)
             if self.event:
-                return 0
+                # The goal cannot be met any more: rather than run on at what
+                # is ahead, any safe landing taking off as soon (in 5-1 the
+                # pass over two Koopas, vision's one, failed in the run-up,
+                # and Mario coasted into them).
+                fallback = plan_jump(None, state.motion, state.body, state.solids, state.enemies,
+                                     plan.direction, latest_takeoff=plan.pre_run - step, items=state.items)
+                if fallback is None:
+                    return 0
+                self.plan, self.plan_frame, self.event = fallback, max(0, self.frame - 1), None
             plan, step = self.plan, self.frame - 1 - self.plan_frame
         if taken_off and not state.grounded and (step - plan.pre_run) % REPLAN_EVERY == 0:
             plan, step = self._check_flight(state, plan, step)

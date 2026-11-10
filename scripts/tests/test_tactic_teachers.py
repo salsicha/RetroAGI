@@ -51,17 +51,18 @@ def test_a_hidden_plant_is_predicted_to_rise_again():
     try:
         env.reset(scenario=held_out("piranha_avoidance", 100))
         plant = env.enemies[0]
-        while plant["h"] > 0:
+        while plant["exposed"] > 0:
             env.step(0)
         boxes = ct._enemy_paths(env, 200)[0]
-        heights = [box[3] - box[1] for box in boxes]
-        assert heights[0] == 0 and max(heights) == plant["plant_height"]
+        # Down in its pipe now, its box rises above the pipe's top again.
+        assert boxes[0][1] >= plant["pipe_top"] and min(box[1] for box in boxes) < plant["pipe_top"]
         # Frame by frame as the simulator moves it.
-        seen = [plant["h"]]
+        seen = [(plant["x"], plant["y"], plant["x"] + plant["w"], plant["y"] + plant["h"])]
         for _ in range(200):
             env.step(0)
-            seen.append(env.enemies[0]["h"])
-        assert heights == seen
+            e = env.enemies[0]
+            seen.append((e["x"], e["y"], e["x"] + e["w"], e["y"] + e["h"]))
+        assert boxes == seen
     finally:
         env.close()
 

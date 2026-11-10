@@ -95,3 +95,10 @@ def test_what_could_not_be_carried_out_stays_refused_after_a_wait(monkeypatch):
     picks = [chooser.decide(STATE, "infeasible", first)]
     picks += [chooser.decide(STATE, "arrived", picks[-1]) for _ in range(2)]
     assert [(c.verb, c.x) for c in picks] == [("run", 137.0), ("wait", 0.0), ("run", 137.0)]
+
+
+def test_reaching_the_flag_counts_only_when_likely(monkeypatch):
+    rows = {(3, 1): row(progress=96, frames=40), (3, 2): row(progress=8, frames=40, finished=0.02)}
+    assert choose(monkeypatch, "speed_run", rows) == (3, 1)
+    rows[(3, 2)] = row(progress=8, frames=40, finished=0.9)
+    assert choose(monkeypatch, "speed_run", rows) == (3, 2)

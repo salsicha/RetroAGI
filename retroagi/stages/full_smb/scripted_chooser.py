@@ -37,6 +37,7 @@ from typing import Optional
 
 from retroagi.core.smb_controller import (
     ARRIVE,
+    HOP_SAMPLES,
     MEASURED,
     WALK,
     Choice,
@@ -45,6 +46,7 @@ from retroagi.core.smb_controller import (
     meets_soon,
     on_the_way,
     ItemTracker,
+    hopper_speed,
     perceived,
 )
 from retroagi.core.smb_physics import NESPlayerMotion
@@ -90,6 +92,12 @@ LABEL_FRAMES = 16
 SPEED_FRAMES = 16
 # A slot's enemy moving more than this in a frame is another enemy.
 JUMP = 16
+
+
+# The planner's kind of enemy (smb_planner.ENEMY_KINDS) by the game's enemy
+# code (pixel_labels.ENEMY_KIND_TYPES): a Piranha Plant, a Koopa Paratroopa,
+# a Bullet Bill; any other walker walks, anything else flies.
+SLOT_KINDS = {0x0D: "plant", 0x0E: "hopper", 0x33: "flier"}
 
 
 class TruthState:
@@ -142,6 +150,9 @@ class TruthState:
             frames = self.frame - first[0]
             if frames >= MEASURED:
                 vx, vy = (box[0] - first[1]) / frames, (box[1] - first[2]) / frames
+                if SLOT_KINDS.get(slot["kind"]) == "hopper":
+                    ys = [y for _, _, y in places[-HOP_SAMPLES - 1:]]
+                    vy = hopper_speed([b - a for a, b in zip(ys, ys[1:])])
             elif item:
                 vx, vy = ItemTracker.MUSHROOM_SPEED, 0.0
             elif ENEMY_KIND_CLASSES.get(slot["kind"]) == "walker":
@@ -151,7 +162,10 @@ class TruthState:
             if item:
                 items.append(Enemy(tuple(float(v) for v in box), vx, vy, ("slots", k), stompable=False))
                 continue
-            enemies.append(Enemy(tuple(float(v) for v in box), vx, vy, ("slots", k), slot["stompable"]))
+            kind = SLOT_KINDS.get(slot["kind"], "walker" if ENEMY_KIND_CLASSES.get(slot["kind"]) == "walker" else "flier")
+            if kind == "plant" and any(s.x0 <= _middle(box) <= s.x1 and s.top <= box[1] for s in self.solids):
+                continue  # down in its pipe: not seen
+            enemies.append(Enemy(tuple(float(v) for v in box), vx, vy, ("slots", k), slot["stompable"], kind=kind))
         if labelling:
             # The enemies drawn in the labelled frame hide the floor under them.
             self.solids = floor_behind(solids_of(scene_from_labels(labelled.scene), truth["camera"]), enemies)

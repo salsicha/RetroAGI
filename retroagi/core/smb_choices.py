@@ -19,7 +19,7 @@ network's tokens and says which slot each thing took.
 import numpy as np
 
 from .smb_controller import Choice, State
-from .smb_planner import Goal
+from .smb_planner import ENEMY_KINDS, Goal
 
 KINDS = ("land", "stomp", "pass", "run", "wait", "bump", "collect")
 PREFERS = ("near", "middle", "far")
@@ -38,7 +38,7 @@ BUMP_REACH = 96
 # Token sizes: at most this many surfaces, enemies and items per state.
 SURFACE_SLOTS, ENEMY_SLOTS, ITEM_SLOTS = 24, 8, 2
 SURFACE_KINDS = ("ground", "pipe", "block", "question", "moving", "edge")
-MARIO_WIDTH, SURFACE_WIDTH, ENEMY_WIDTH, ITEM_WIDTH = 7, 4 + len(SURFACE_KINDS), 7, 6
+MARIO_WIDTH, SURFACE_WIDTH, ENEMY_WIDTH, ITEM_WIDTH = 7, 4 + len(SURFACE_KINDS), 7 + len(ENEMY_KINDS), 6
 
 
 def state_tokens(state: State) -> tuple:
@@ -46,8 +46,8 @@ def state_tokens(state: State) -> tuple:
     [ENEMY_SLOTS, ENEMY_WIDTH], items [ITEM_SLOTS, ITEM_WIDTH], slot of each
     thing's ref): x relative to Mario's left side, y as on screen (his
     height says whether he is big); Mario's speeds (pixels a frame) and
-    whether he stands; each surface's kind; each enemy's velocity and
-    whether it can be stomped; each item's velocity. The nearest things
+    whether he stands; each surface's kind; each enemy's velocity, whether
+    it can be stomped and its kind (ENEMY_KINDS); each item's velocity. The nearest things
     take the slots; unused slots are zeros."""
     body = state.body
     x = body[0]
@@ -63,7 +63,8 @@ def state_tokens(state: State) -> tuple:
         slots[s.ref] = k
     near = sorted(state.enemies, key=lambda e: abs(e.box[0] - x))
     for k, e in enumerate(near[:ENEMY_SLOTS]):
-        enemies[k] = (e.box[0] - x, e.box[1], e.box[2] - x, e.box[3], e.vx, e.vy, float(e.stompable))
+        enemies[k, :7] = (e.box[0] - x, e.box[1], e.box[2] - x, e.box[3], e.vx, e.vy, float(e.stompable))
+        enemies[k, 7 + ENEMY_KINDS.index(e.kind)] = 1.0
         slots[e.ref] = k
     items = np.zeros((ITEM_SLOTS, ITEM_WIDTH), np.float32)
     for k, i in enumerate(sorted(state.items, key=lambda i: abs(i.box[0] - x))[:ITEM_SLOTS]):

@@ -154,7 +154,8 @@ def train(data_folder: str, eval_folder: str, output: str, steps: int = STEPS, b
 
 def load_model(path: str, device="cpu") -> OutcomeNetwork:
     saved = torch.load(path, map_location=device)
-    model = OutcomeNetwork(OutcomeConfig(**saved["config"])).to(device)
+    config = {"enemy_width": saved["model"]["enemy_in.weight"].shape[1], **saved["config"]}
+    model = OutcomeNetwork(OutcomeConfig(**config)).to(device)
     model.load_state_dict(saved["model"])
     return model.eval()
 

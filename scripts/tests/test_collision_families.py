@@ -109,7 +109,7 @@ def test_a_plant_stays_down_while_mario_is_near_and_keeps_its_cycle_otherwise():
             up = 0
             for _ in range(200):
                 env.step(0)
-                up += env.enemies[0]["h"] > 0
+                up += env.enemies[0]["exposed"] > 0
             return up
         finally:
             env.close()

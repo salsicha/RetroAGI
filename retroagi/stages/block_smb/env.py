@@ -19,6 +19,7 @@ from retroagi.core.smb_physics import NESPlayerMotion
 from retroagi.core.smb_pixel_types import TYPE_ID
 
 from . import tactic_schedule
+from .piranha import plant_sprite
 from .stomp import stomp_collision_geometry
 
 # ── Gym-compatible space stubs (no gym dependency required) ──────────────────
@@ -64,7 +65,7 @@ ENEMY_GRAVITY = 0.5
 # shapes with each shape's pixel type in place of its colour, and
 # render_instances() with the number of the object that drew it, so both are
 # exact.
-PLATFORM_KINDS = ("ground", "brick", "question_block", "pipe")
+PLATFORM_KINDS = ("ground", "brick", "question_block", "pipe", "cannon")
 TILE = 16
 SKY = (107, 140, 255)
 GROUND, GROUND_EDGE = (139, 69, 19), (84, 38, 8)
@@ -100,6 +101,19 @@ HURT_FRAMES = 120
 KOOPA_W, KOOPA_H, KOOPA_FEET = 12, 12, 3
 SHELL_SPEED = 3.0
 KICK_GRACE = 8
+# Koopa Paratroopas (5-1's green ones, game memory): a Koopa with wings that
+# hops, HOP_SPEED pixels a frame up each time it lands, under HOP_GRAVITY
+# (44 pixels high, a hop every 55 frames); a stomp takes its wings: an
+# ordinary Koopa.
+HOP_SPEED, HOP_GRAVITY = -3.25, 0.12
+# Bullet Bills (5-1's, game memory): fired from a cannon (a "cannon"
+# platform, a column the game draws as ground) toward Mario, a BULLET_W by
+# BULLET_H box BULLET_BELOW under the cannon's top, flying BULLET_SPEED
+# pixels a frame through everything; a stomp drops it. A cannon on screen
+# fires after each of CANNON_FRAMES in turn (the game's gaps, 31 to 392
+# frames, looked random; a fixed turn keeps replays from saved states alike).
+BULLET_W, BULLET_H, BULLET_BELOW, BULLET_SPEED = 10, 6, 6, 1.5
+CANNON_FRAMES = (46, 200, 98, 264, 170, 31, 240, 120, 214, 88, 180, 152)
 # Pre-episode frames ("watch_frames") end with Mario standing: up to this many
 # more are watched while one who starts above the floor drops onto it.
 LANDING_WATCH = 64
@@ -303,6 +317,7 @@ class MarioScenarioEnv:
         self.coins = []
         self.power_ups = []
         self.items = []  # mushrooms out of question blocks
+        self.cannons = []  # Bullet Bill cannons: x, w, top, timer, shots
         self.stomped = False
         self.enemies = []
         self.goal = None
@@ -417,6 +432,10 @@ class MarioScenarioEnv:
         for p in scenario.get("platforms", []):
             self.platforms.append(self._parse_platform(p))
         self.platform_kinds = self._platform_kinds(scenario.get("platform_kinds"))
+        self.cannons = [
+            {"x": p["rect"].x, "w": p["rect"].w, "top": p["rect"].y, "timer": CANNON_FRAMES[0], "shots": 0}
+            for p, kind in zip(self.platforms, self.platform_kinds) if kind == "cannon"
+        ]
         if scenario.get("mario_big"):
             self._resize(big=True)  # (standing where small Mario would)
         # What each question block holds ({platform index: "coin" or
@@ -827,6 +846,7 @@ class MarioScenarioEnv:
                 continue
             self._update_enemy(enemy, rects)
         self._shells_hit(reward_terms)
+        self._fire_cannons()
         self._track_goal_to_enemy()
 
         # ── 15. Enemy collision ───────────────────────────────────────────────
@@ -1108,6 +1128,11 @@ class MarioScenarioEnv:
         for e in self.enemies:
             foot = e.get("foot_offset", 0)
             enemies.append((e["x"], e["y"], e["x"] + e["w"], e["y"] + e["h"]))
+            if e.get("kind") == "piranha_plant":
+                x, y, w, h = plant_sprite(e)
+                drawn.append((x, y, x + w, y + h))
+                state.append(0 if h <= 0 else 1)
+                continue
             drawn.append((e["x"], e["y"], e["x"] + e["w"], e["y"] + e["h"] + foot))
             state.append(2 if e["dead"] else 0 if e["h"] <= 0 else 1)
         return {
@@ -1129,6 +1154,11 @@ class MarioScenarioEnv:
         cam = int(self.camera_x)
         rects = []
         for enemy in self.enemies:
+            if enemy.get("kind") == "piranha_plant":
+                x, y, w, h = plant_sprite(enemy)
+                if h > 0:
+                    rects.append(pygame.Rect(int(x) - cam, int(y), w, h))
+                continue
             if enemy["h"] <= 0:
                 continue
             foot = enemy.get("foot_offset", 0)
@@ -1163,6 +1193,8 @@ class MarioScenarioEnv:
                 yield "moving_platform", None, partial(self._draw_lift, rect=screen_rect)
             elif kind == "pipe":
                 yield None, None, partial(self._draw_pipe, rect=screen_rect)
+            elif kind == "cannon":
+                yield None, None, partial(self._draw_ground, rect=screen_rect)
             elif kind == "question_block":
                 yield None, None, partial(self._draw_question_row, rect=screen_rect)
             elif kind in ("brick", "brick_row"):
@@ -1183,11 +1215,15 @@ class MarioScenarioEnv:
                     None,
                     partial(self._draw_power_up, rect=power_up["rect"].move(-cam, 0)),
                 )
-        for enemy, rect in zip((e for e in self.enemies if e["h"] > 0), self.enemy_screen_rects()):
+        drawn = (e for e in self.enemies if (plant_sprite(e)[3] if e.get("kind") == "piranha_plant" else e["h"]) > 0)
+        for enemy, rect in zip(drawn, self.enemy_screen_rects()):
             if enemy.get("kind") == "piranha_plant":
                 yield "enemy", "plant", partial(self._draw_plant, rect=rect)
             elif enemy.get("kind") == "monster":
                 yield "enemy", "other", partial(self._draw_monster, enemy=enemy, rect=rect)
+            elif enemy.get("kind") == "bullet":
+                if not enemy.get("gone"):
+                    yield "enemy", "other", partial(self._draw_monster, enemy=enemy, rect=rect)
             else:
                 kind = "defeated" if enemy["dead"] else "walker"
                 yield "enemy", kind, partial(self._draw_goomba, enemy=enemy, rect=rect)
@@ -1401,7 +1437,12 @@ class MarioScenarioEnv:
         moving shell stops); a still shell is kicked away from him; a shell
         just kicked does not hurt. False when the touch hurts him."""
         shell = enemy.get("shell")
-        if geometry["stomp"] and shell != "still":
+        if geometry["stomp"] and enemy.get("wings"):
+            enemy.update(wings=False, vy=0.0)  # its wings lost: an ordinary Koopa
+            self.score += 5
+            reward_terms["enemy_stomp"] += self.reward_config.enemy_stomp
+            self.stomped = True
+        elif geometry["stomp"] and shell != "still":
             if shell is None:
                 self.score += 5
                 reward_terms["enemy_stomp"] += self.reward_config.enemy_stomp
@@ -1418,6 +1459,27 @@ class MarioScenarioEnv:
             self.mario["vy"] = self.motion.y_speed
             self.mario["on_ground"] = False
         return True
+
+    def _fire_cannons(self) -> None:
+        """Each cannon on screen fires a Bullet Bill toward Mario when its
+        time comes (CANNON_FRAMES in turn)."""
+        middle = self.mario["x"] + self.mario["w"] / 2
+        for cannon in self.cannons:
+            cannon["timer"] -= 1
+            if cannon["timer"] > 0:
+                continue
+            cannon["shots"] += 1
+            cannon["timer"] = CANNON_FRAMES[cannon["shots"] % len(CANNON_FRAMES)]
+            if not self.camera_x <= cannon["x"] < self.camera_x + self.width:
+                continue
+            direction = -1 if middle < cannon["x"] + cannon["w"] / 2 else 1
+            x = cannon["x"] + (cannon["w"] - BULLET_W) / 2
+            self.enemies.append({
+                "kind": "bullet", "x": x, "y": cannon["top"] + BULLET_BELOW, "vx": 0.0, "vy": 0.0,
+                "w": BULLET_W, "h": BULLET_H, "speed": BULLET_SPEED, "direction": direction,
+                "patrol_min": -1e9, "patrol_max": 1e9, "edge_aware": False, "on_ground": False,
+                "dead": False, "stompable": True,
+            })
 
     def _shells_hit(self, reward_terms: dict) -> None:
         """Moving shells kill the enemies they meet."""
@@ -1485,14 +1547,24 @@ class MarioScenarioEnv:
                 enemy["plant_tick"] += 1
             position_plant(enemy)
             return
+        if enemy.get("kind") == "bullet":
+            enemy["x"] += enemy["speed"] * enemy["direction"]
+            if not self.camera_x - 64 <= enemy["x"] <= self.camera_x + self.width + 64:
+                enemy.update(dead=True, gone=True)  # flown off: kept, so the others keep their places
+            return
         if (enemy.get("kind") == "monster" or enemy.get("game_rules")) and not enemy.get("awake"):
             # Like NES enemies, a monster (and any enemy under the game's
             # rules) starts moving once it is on screen.
             if enemy["x"] >= self.camera_x + self.width:
                 return
             enemy["awake"] = True
-        # Gravity
-        enemy["vy"] += ENEMY_GRAVITY
+        # Gravity (a winged Koopa hops each time it lands)
+        if enemy.get("wings"):
+            if enemy["on_ground"]:
+                enemy["vy"] = HOP_SPEED
+            enemy["vy"] += HOP_GRAVITY
+        else:
+            enemy["vy"] += ENEMY_GRAVITY
         if enemy["vy"] > self.max_fall_speed:
             enemy["vy"] = self.max_fall_speed
 
@@ -1610,8 +1682,11 @@ class MarioScenarioEnv:
 
             return parse_plant(e)
         kind = e.get("kind") if isinstance(e, dict) else None
-        if kind not in (None, "monster", "koopa"):
+        if kind not in (None, "monster", "koopa", "paratroopa"):
             raise ValueError(f"unknown enemy kind {kind!r}")
+        wings = kind == "paratroopa"
+        if wings:
+            kind = "koopa"
         game_rules = isinstance(e, dict) and bool(e.get("game_rules", False))
         if isinstance(e, dict):
             x, y = float(e["x"]), float(e["y"])
@@ -1647,6 +1722,7 @@ class MarioScenarioEnv:
             "on_ground": False,
             "dead": False,
             **({"game_rules": True} if game_rules else {}),
+            **({"wings": True} if wings else {}),
         }
 
     # ── Procedural level generator ────────────────────────────────────────────

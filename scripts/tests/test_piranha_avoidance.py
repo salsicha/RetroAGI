@@ -9,7 +9,7 @@ from retroagi.stages.block_smb.monte_carlo import sample_block_smb_monte_carlo_s
 from retroagi.stages.block_smb.piranha import parse_plant
 
 
-def contact_scenario(*, phase=20, mario=(120, 181)):
+def contact_scenario(*, phase=60, mario=(120, 181)):
     return dict(
         world_width=288,
         mario=list(mario),
@@ -19,8 +19,10 @@ def contact_scenario(*, phase=20, mario=(120, 181)):
     )
 
 
-# Mario's feet start 1 px above the plant's top, or beside its stem.
-@pytest.mark.parametrize("mario", [(120, 185), (112, 204)])
+# Fully out (the game's plant: its 10 by 6 box 123-133 across, 210-216
+# down, over a pipe topped at 220): Mario's feet 1 px above the box, or his
+# side touching it.
+@pytest.mark.parametrize("mario", [(120, 197), (114, 204)])
 def test_plant_contact_is_fatal_even_from_above(mario):
     env = MarioScenarioEnv()
     try:
@@ -56,11 +58,11 @@ def test_plant_cycle_and_probes_restore_phase_exactly():
         env.reset(scenario=contact_scenario(mario=(40, 204)))
         saved = snapshot_env_state(env)
         heights = []
-        for _ in range(112):
+        for _ in range(224):  # the game's cycle
             env.step(0)
-            heights.append(env.enemies[0]["h"])
+            heights.append(env.enemies[0]["exposed"])
         assert 0 in heights and 24 in heights and any(0 < h < 24 for h in heights)
-        assert env.enemies[0]["x"] == 120
+        assert env.enemies[0]["sprite_x"] == 120
         assert env.enemies[0]["y"] == saved["enemies"][0]["y"]
         restore_env_state(env, saved)
         safe_jump_holds(env, local_objective(env), 1)
