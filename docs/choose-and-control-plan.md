@@ -335,3 +335,24 @@ Each phase ends with a measurement that decides whether to go on.
   seed 100036 lost to the takeoff margin (Mario slides to a pit's edge
   after dropping off a pipe, which the network, trained without the
   margin, does not foresee), seed 100018 to a Goomba on a high brick row.
+- **Retrained with the margins; the slide check, 2026-11-09.** Outcomes
+  resampled with the takeoff margin and the chooser's new memory (4.50
+  million choices, data/datasets/block_smb/outcomes_20261109e; model
+  data/outcome/outcome_20261109e.pt, deaths ranked at 0.992 on fresh
+  levels). It plays fresh random levels better (99 of 100 in each mode)
+  but 1-1 from vision worse: it landed Mario on the far end of the last
+  staircase top, sliding, where every jump was refused. So the planner's
+  slide check after a landing now uses the takeoff footing too: a landing
+  he would still be sliding on within TAKEOFF_KEEP of an end with nothing
+  below is no landing. With it, on 1-1:
+
+  | | outcome_20261109d (kept) | outcome_20261109e |
+  |---|---|---|
+  | Vision bench | **1.00** (all 24) | misses at 17 and 19 (stopped after 22) |
+  | Game memory bench | **1.00** | not run |
+  | Vision full 1-1 | finished: 1,788 frames; max points score 1,300 | finished: 2,290 frames; score 500 |
+  | Game memory full 1-1 | finished: 1,898 frames; score 2,300 | finished: 1,869 frames; score 1,300 |
+  | Fresh random levels | 97 / 97 | **99 / 99** |
+
+  outcome_20261109d stays the default: the real game is the test, and
+  nothing learns on it.
