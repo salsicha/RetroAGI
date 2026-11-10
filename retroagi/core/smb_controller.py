@@ -83,8 +83,9 @@ HEAD_ROOM = 4
 # Big Mario (after a mushroom: drawn taller than BIG_DRAWN pixels) collides
 # BIG_BODY_WIDTH wide, his top BIG_HEAD_ROOM below the drawn top.
 BIG_DRAWN, BIG_BODY_WIDTH, BIG_HEAD_ROOM = 20, 12, 8
-# A walker drawn taller than this is a Koopa (_collision_box).
-KOOPA_DRAWN = 20
+# A walker drawn taller than this is a Koopa, and wider than this more than
+# one (_collision_box).
+KOOPA_DRAWN, MERGED_DRAWN = 20, 20
 # The planner's kind of enemy (smb_planner.ENEMY_KINDS) by the object type
 # vision tells (pixel_labels.ENEMY_TYPE_NUMBERS: a Piranha Plant, a Koopa
 # Paratroopa, a Bullet Bill); otherwise by vision's kind ("other": a flier).
@@ -266,11 +267,18 @@ def _collision_box(drawn) -> tuple:
     bottom, a Koopa (drawn taller than KOOPA_DRAWN) 0 to 12 across and 12
     tall ending 4 above it. With the drawn boxes, a pass over a Goomba pair
     looked like a hit in the air, and the flight check braked Mario down in
-    front of them."""
-    left, bottom = drawn[0], drawn[3]
+    front of them. Drawn wider than one sprite (MERGED_DRAWN: vision draws
+    two side by side as one), the box spans them all, its right side as
+    far in from the drawn right (5-1: two Koopas read as one, the second
+    left out, and Mario jumped back onto it)."""
+    left, right, bottom = drawn[0], drawn[2], drawn[3]
     if drawn[3] - drawn[1] > KOOPA_DRAWN:
-        return (left, bottom - 16, left + 12, bottom - 4)
-    return (left + 1, bottom - 11, left + 11, bottom - 5)
+        x0, x1, top, low = left, left + 12, bottom - 16, bottom - 4
+    else:
+        x0, x1, top, low = left + 1, left + 11, bottom - 11, bottom - 5
+    if right - left > MERGED_DRAWN:
+        x1 = right - (left + 16 - x1)
+    return (x0, top, x1, low)
 
 
 def hopper_speed(moves) -> float:

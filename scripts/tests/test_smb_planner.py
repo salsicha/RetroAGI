@@ -261,6 +261,8 @@ def test_a_seen_walker_collides_with_the_games_box_not_the_drawn_one():
     assert _collision_box((183, 193, 199, 209)) == (184, 198, 194, 204)
     # A Koopa drawn 16 by 24 at 195 (game memory: 195-207, 193-205).
     assert _collision_box((195, 185, 211, 209)) == (195, 193, 207, 205)
+    # Two Koopas side by side drawn as one 29 wide: the box spans both.
+    assert _collision_box((57, 185, 86, 209)) == (57, 193, 82, 205)
 
 
 def test_a_jump_from_the_last_pixels_of_a_pipe_is_a_drop():
