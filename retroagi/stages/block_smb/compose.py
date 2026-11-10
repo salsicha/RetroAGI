@@ -259,6 +259,8 @@ def plant(rng, difficulty, x, timed: Optional[bool] = None) -> Section:
         "exposed_frames": rng.randint(40, 64),
         "hidden_frames": rng.randint(24, 40) + (24 if timed else 0),
         "timed_crossing": timed,
+        "w": 12,
+        "hit": "body",  # the lesson plant (piranha.position_plant)
     }
     period = 2 * rise + plant_spec["exposed_frames"] + plant_spec["hidden_frames"]
     plant_spec["phase"] = rng.randrange(period)

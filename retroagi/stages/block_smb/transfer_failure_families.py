@@ -138,6 +138,8 @@ def transfer_failure_scenario(family, rng, difficulty):
             "enemies": [
                 {
                     "kind": "piranha_plant",
+                    "w": 12,
+                    "hit": "body",  # the lesson plant (piranha.position_plant)
                     "x": left + (width - 12) // 2,
                     "pipe_top": 220 - height,
                     "plant_height": plant_height,

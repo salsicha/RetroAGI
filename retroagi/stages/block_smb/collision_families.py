@@ -107,7 +107,7 @@ def _plant(pipe_left, pipe_width, pipe_top, after, exposed, hidden, rise=16, gon
         phase = (2 * rise + exposed + hidden - (WATCH + after)) % (2 * rise + exposed + hidden)
     return {"kind": "piranha_plant", "x": pipe_left + (pipe_width - 12) // 2, "pipe_top": pipe_top,
             "plant_height": 20, "rise_frames": rise, "exposed_frames": exposed,
-            "hidden_frames": hidden, "phase": phase}
+            "hidden_frames": hidden, "phase": phase, "w": 12, "hit": "body"}
 
 
 def plant_watch(rise, gone) -> int:

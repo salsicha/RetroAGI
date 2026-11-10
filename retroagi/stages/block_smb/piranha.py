@@ -41,6 +41,13 @@ def position_plant(enemy):
         else:
             fraction = 0.0
     enemy["exposed"] = round(enemy["plant_height"] * fraction)
+    if enemy.get("hit") == "body":
+        # The retired curriculum's lesson plant: its whole part out of the
+        # pipe collides (a tall one is a wall to wait for, which the game's
+        # plant never is).
+        enemy.update(x=enemy["sprite_x"], y=enemy["pipe_top"] - enemy["exposed"], w=enemy["sprite_w"],
+                     h=enemy["exposed"])
+        return
     bottom = enemy["pipe_top"] - enemy["exposed"] + enemy["plant_height"]
     enemy.update(x=enemy["sprite_x"] + HIT_LEFT, y=bottom - HIT_BELOW - HIT_H, w=HIT_W, h=HIT_H)
 
@@ -62,7 +69,9 @@ def stays_down_near(enemy, mario_middle: float) -> bool:
 def parse_plant(spec):
     """A plant from ``spec``: x (its sprite's left side), pipe_top, and
     optionally its cycle (rise_frames, exposed_frames, hidden_frames),
-    plant_height, w (sprite width) and phase."""
+    plant_height, w (sprite width), phase and hit ("body": its whole
+    exposed part collides, the retired curriculum's lesson plant; else the
+    game's box)."""
     rise = int(spec.get("rise_frames", RISE_FRAMES))
     exposed = int(spec.get("exposed_frames", EXPOSED_FRAMES))
     hidden = int(spec.get("hidden_frames", HIDDEN_FRAMES))
@@ -76,6 +85,7 @@ def parse_plant(spec):
         stompable=False,
         sprite_x=x,
         sprite_w=width,
+        **({"hit": "body"} if spec.get("hit") == "body" else {}),
         x=x,
         y=0,
         w=HIT_W,
