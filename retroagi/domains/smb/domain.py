@@ -12,13 +12,15 @@ of the game, and nothing they do not.
   where points are worth nothing, and max points.
 """
 
+from copy import copy
 from typing import Optional
 
 from retroagi.framework.chooser import OutcomeChooser
+from retroagi.framework.observed_dynamics import ObservedDynamics
 
 from .choices import KINDS, RUN_BACK, RUN_LONG, SPACE
 from .controller import Choice, Controller
-from .planner import RULES, Goal
+from .planner import ENEMY_FALL, ENEMY_GRAVITY, FEET_BELOW, RULES, WALL_DEPTH, Goal
 from .scripted_chooser import ScriptedChooser
 
 # What a point is worth, in pixels of progress a frame, in each way to play.
@@ -44,12 +46,32 @@ class SuperMarioBros:
             "finished", "edge")
     space = SPACE
     sources = ("memory", "vision")
-    # The controller's model of how enemies and items move (hand-written
-    # rules by kind; replace it to try an identified or a learned one).
-    dynamics = RULES
+    # The parts with alternatives (--use PART=NAME). The controller's model
+    # of how enemies and items move: "rules", written by hand for each kind
+    # of enemy, or "observed", fitted to what is seen of each thing as it
+    # plays (framework/observed_dynamics; a new one each play, with the
+    # game's walkers' fall off a ledge for what it has not yet seen).
+    parts = {"dynamics": {
+        "rules": lambda: RULES,
+        "observed": lambda: ObservedDynamics(gravity=ENEMY_GRAVITY, fastest=ENEMY_FALL, reach=FEET_BELOW + 2,
+                                             wall_depth=WALL_DEPTH, ignored=("edge",)),
+    }}
+    chosen = {"dynamics": "rules"}
+
+    def using(self, **choices) -> "SuperMarioBros":
+        for part, name in choices.items():
+            if name not in self.parts.get(part, ()):
+                raise ValueError(f"no {part} called {name}: {sorted(self.parts.get(part, ())) or 'no such part'}")
+        other = copy(self)
+        other.chosen = {**self.chosen, **choices}
+        return other
+
+    def dynamics(self):
+        """A new dynamics model of the chosen kind."""
+        return self.parts["dynamics"][self.chosen["dynamics"]]()
 
     def controller(self) -> Controller:
-        return Controller(self.dynamics)
+        return Controller(self.dynamics())
 
     def chooser(self, predictor, mode: str) -> OutcomeChooser:
         return OutcomeChooser(predictor, self.space, POINT_VALUE[mode])

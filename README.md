@@ -38,27 +38,31 @@ Nothing learns on the real game: training data comes from random levels
 built in the Block SMB simulator from the real game's pieces and rules
 (`domains/smb/sim/`).
 
-Where it stands (2026-11-10), with outcome_20261109d (the default) and
-outcome_20261110h (trained with World 5-1's enemies):
+Where it stands (2026-11-11), with outcome_20261109d, on the two levels the
+agent was built on and on six nobody looked at
+([the measurements](docs/generalization.md)). Share of a level's obstacles
+passed, four tries each that start at different moments:
 
-| Chooser, state | 1-1 obstacle bench (24) | Full 1-1 | Full 5-1 | 100 fresh random levels |
-|---|---|---|---|---|
-| Network d, game memory | **24/24** | finished both modes | max points finished; speed run died at x 1909 | |
-| Network d, vision only | **24/24** | speed run finished; max points died at x 682 | died at x 1906 | |
-| Network d, simulator state | | | | 87 speed run, 91 max points |
-| Network h, game memory | 0.92 | finished both modes | **finished both modes** | |
-| Network h, vision only | 0.88 | **finished both modes** | **max points finished** (score 1,100); speed run died at x 618 | |
-| Network h, simulator state | | | | **93 speed run, 93 max points** |
+| State, dynamics model | 1-1 and 5-1 (tuned), 59 obstacles | 2-1, 3-1, 4-1, 6-1, 7-1, 8-1 (untouched), 206 obstacles |
+|---|---|---|
+| Game memory, hand-written rules | 0.96 | 0.65 |
+| Game memory, model fitted to what is seen | 0.96 | 0.66 |
+| Vision only, hand-written rules | 0.83 | 0.49 |
+| Vision only, model fitted to what is seen | **0.91** | **0.55** |
 
-The random levels include question blocks, mushrooms, big Mario, Koopa
-Troopas (2026-11-09), and World 5-1's piranha plants, hopping Paratroopas
-and Bullet Bill cannons (2026-11-10).
-The outcome network was trained only on Block SMB random levels; nothing
-learns on the real game. Full-level results shift from change to change.
+From its start, only 1-1 is finished reliably. On fresh random levels in
+the simulator the network's chooser finishes 87 of 100 in a speed run and
+91 for points (network h, trained with 5-1's enemies: 93 and 93).
+
+The outcome network was trained only on Block SMB random levels (question
+blocks, mushrooms, big Mario, Koopa Troopas, piranha plants, hopping
+Paratroopas, Bullet Bill cannons); nothing learns on the real game.
 
 ```bash
 # score an agent on the 24 obstacles of 1-1, from vision
 python -m retroagi.framework.bench --domain smb --bench data/full_smb_obstacles/Level1-1 --source vision --model data/outcome/outcome_20261109d.pt
+# the same with the dynamics model fitted to what is seen
+python -m retroagi.framework.bench --domain smb --use dynamics=observed --bench data/full_smb_obstacles/Level1-1 --source vision --model data/outcome/outcome_20261109d.pt
 # play a whole level
 python -m retroagi.framework.play --domain smb --level Level1-1 --source vision --model data/outcome/outcome_20261109d.pt
 # the scripted chooser, or the outcome network's, on fresh random levels
@@ -170,6 +174,8 @@ retroagi/
     agent.py                     # the loop: state, chooser, controller, one action a frame
     outcome_network.py           # predicts every choice's outcome in one pass
     chooser.py                   # the fixed priorities on those predictions
+    observed_dynamics.py         # a dynamics model fitted to what is seen of each thing
+    registry.py                  # domains by name; their parts' alternatives (--use PART=NAME)
     sampling.py, training.py     # outcomes measured in practice worlds; the network trained on them
     practice.py, bench.py, play.py   # practice worlds, obstacle benches, whole levels
   domains/smb/                   # Super Mario Bros
@@ -180,12 +186,13 @@ retroagi/
     scripted_chooser.py          # the hand-written chooser
     perception/                  # the vision transformer, tracks, motion estimate, vision to state
     sim/                         # Block SMB: the simulator and random levels of the game's pieces
-    nes/                         # the real game: emulator, game memory, frame labels, obstacle benches
+    nes/                         # the real game: emulator, game memory, frame labels, obstacle benches,
+                                 #   the dynamics models scored against the game (dynamics_check.py)
   legacy/                        # the retired layered agent: its layers, teachers and curriculum
 scripts/
   vit/                           # train the two vision transformers
   vision/                        # measure the two vision transformers
-  dev/                           # compare two recordings of behaviour (refactoring check)
+  dev/                           # refactoring check; result tables; what killed the agent; one obstacle traced
   tests/                         # the test suite (tests/legacy: the retired agent's)
 ```
 

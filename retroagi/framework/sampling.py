@@ -60,6 +60,7 @@ def outcome(world, source, domain, choice, probe: bool = True) -> tuple:
     state = source.read(world)
     start, points = world.progress, world.score
     controller = domain.controller()
+    controller.observe(state)
     controller.start(choice, state)
     frames, died, finished, end = 0, False, False, controller.event
     while end is None:
@@ -81,6 +82,7 @@ def outcome(world, source, domain, choice, probe: bool = True) -> tuple:
             end = controller.event
             break
         state = source.read(world)
+        controller.observe(state)
     progress = world.progress - start
     # A choice can end with the agent unsettled (a run off a ledge); nothing
     # is chosen until it settles, so it does nothing until then, as in play.
@@ -194,8 +196,8 @@ def sample(domain, seed: int, mode: str, *, explore: float = EXPLORE, rng: Optio
 
 
 def _sample_one(job: tuple) -> tuple:
-    name, seed, mode, folder = job
-    shard = sample(registry.load(name), seed, mode)
+    name, use, seed, mode, folder = job
+    shard = sample(registry.load(name, use), seed, mode)
     np.savez_compressed(f"{folder}/level_{seed:06d}_{mode}.npz", **shard)
     return seed, mode, len(shard["seed"]), len(shard["choices"])
 
@@ -207,7 +209,7 @@ def collect(domain, seeds, folder: str, workers: int = 8) -> list:
     from pathlib import Path
 
     Path(folder).mkdir(parents=True, exist_ok=True)
-    jobs = [(domain.name, seed, mode, folder) for seed in seeds for mode in domain.modes]
+    jobs = [(domain.name, registry.used(domain), seed, mode, folder) for seed in seeds for mode in domain.modes]
     with multiprocessing.get_context("spawn").Pool(workers) as pool:
         return list(pool.imap_unordered(_sample_one, jobs))
 
@@ -252,14 +254,14 @@ def main(argv=None) -> int:
     import time
 
     parser = argparse.ArgumentParser(description="Sample every candidate choice's outcome in practice worlds")
-    parser.add_argument("--domain", default="smb")
+    registry.arguments(parser)
     parser.add_argument("--levels", type=int, default=100)
     parser.add_argument("--first-seed", type=int, default=0)
     parser.add_argument("--workers", type=int, default=8)
     parser.add_argument("--output", required=True, help="folder for the shard files")
     args = parser.parse_args(argv)
     start = time.time()
-    rows = collect(registry.load(args.domain), range(args.first_seed, args.first_seed + args.levels), args.output,
+    rows = collect(registry.chosen(args), range(args.first_seed, args.first_seed + args.levels), args.output,
                    args.workers)
     pack(args.output)
     seconds = time.time() - start

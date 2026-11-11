@@ -187,6 +187,9 @@ class Controller:
         self.frame = 0
         self.event: Optional[str] = None
 
+    def observe(self, state: State) -> None:
+        self.dynamics.observe(state.enemies + state.items, state.solids)
+
     def start(self, choice: Choice, state: State) -> None:
         self.choice, self.plan, self.frame, self.event = choice, None, 0, None
         self.stood = 0  # frames in a row Mario has stood

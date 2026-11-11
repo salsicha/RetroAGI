@@ -38,7 +38,7 @@ def main(argv=None) -> int:
     from collections import Counter
 
     parser = argparse.ArgumentParser(description="A chooser in a domain's practice worlds")
-    parser.add_argument("--domain", default="smb")
+    registry.arguments(parser)
     parser.add_argument("--model", default=None,
                         help="an outcome network (training.py) to choose by the fixed priorities; "
                              "the domain's behaviour chooser if not given")
@@ -46,7 +46,7 @@ def main(argv=None) -> int:
     parser.add_argument("--first-seed", type=int, default=0)
     parser.add_argument("--output", default=None)
     args = parser.parse_args(argv)
-    domain = registry.load(args.domain)
+    domain = registry.chosen(args)
     make_chooser = network_choosers(domain, args.model) if args.model else None
     rows = run(domain, range(args.first_seed, args.first_seed + args.levels), make_chooser)
     for mode in sorted({r["mode"] for r in rows}):

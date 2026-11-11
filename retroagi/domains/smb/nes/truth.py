@@ -49,6 +49,15 @@ OFF_SCREEN = 0xFF
 SCORE, COINS, TIME = 0x7DD, 0x75E, 0x7F8  # score: 6 digits; time: 3 digits
 # Enemies Mario cannot stomp: Piranha Plant, Spiny, fire bars.
 UNSTOMPABLE = frozenset((0x0D, 0x12, 0x1B, 0x1D))
+# The game's object codes by name (the disassembly's), for reports.
+KIND_NAMES = {
+    0x00: "green Koopa", 0x02: "Buzzy Beetle", 0x03: "red Koopa", 0x05: "Hammer Bro", 0x06: "Goomba",
+    0x07: "Blooper", 0x08: "Bullet Bill (frenzy)", 0x0A: "grey Cheep Cheep", 0x0B: "red Cheep Cheep",
+    0x0C: "Podoboo", 0x0D: "Piranha Plant", 0x0E: "green Paratroopa (hopping)", 0x0F: "red Paratroopa",
+    0x10: "green Paratroopa (flying)", 0x11: "Lakitu", 0x12: "Spiny", 0x14: "flying Cheep Cheep",
+    0x15: "Bowser's flame", 0x1B: "fire bar", 0x1D: "fire bar", 0x2D: "Bowser", 0x2E: "power-up",
+    0x32: "springboard", 0x33: "Bullet Bill",
+}
 
 
 def _digits(ram, address, count) -> int:

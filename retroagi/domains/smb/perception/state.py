@@ -119,7 +119,7 @@ class ItemTracker:
                 vy = sum(d[1] for d in samples) / len(samples)
             else:
                 vx, vy = self.MUSHROOM_SPEED, 0.0
-            out.append(Enemy(tuple(box), vx, vy, ("items", identity), stompable=False))
+            out.append(Enemy(tuple(box), vx, vy, ("items", identity), stompable=False, type="item"))
         return out
 
 
@@ -180,7 +180,8 @@ def perceived(feedback, scene, items: Optional[ItemTracker] = None) -> Optional[
         else:
             vx, vy = 0.0, 0.0  # a plant or anything else: still until measured
         stompable = kind in ("walker", "hopper") or t.type == BULLET_TYPE
-        enemies.append(Enemy(world, vx, vy, ("enemies", t.identity), stompable=stompable, kind=kind))
+        enemies.append(Enemy(world, vx, vy, ("enemies", t.identity), stompable=stompable, kind=kind,
+                             track=t.places(world[0], world[1]), type=t.type))
     # Nothing solid lies inside Mario's own drawn box: at the screen's left
     # edge, parts of his cut-off sprite read as a 3-pixel pipe.
     drawn = (box[0] + camera, box[1], box[2] + camera, box[3])

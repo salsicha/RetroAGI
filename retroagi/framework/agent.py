@@ -35,6 +35,7 @@ class Agent:
         controller = self.controller
         if state is None:
             return self.idle  # nothing to act on yet
+        controller.observe(state)
         if controller.choice is None or controller.event is not None:
             if not state.decidable:
                 return self.idle

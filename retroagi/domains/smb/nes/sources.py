@@ -47,6 +47,8 @@ LABEL_FRAMES = 16
 SPEED_FRAMES = 16
 # A slot's enemy moving more than this in a frame is another enemy.
 JUMP = 16
+# The places of an enemy kept as its track (frames).
+TRACK_FRAMES = 32
 
 
 # The planner's kind of enemy (smb_planner.ENEMY_KINDS) by the game's enemy
@@ -64,10 +66,11 @@ class MemorySource:
         self.solids: list = []
         self.labelled_at = (None, 0)  # (camera, frame) of the last label
         self.seen: dict = {}  # slot -> [(frame, x, y)], its recent places
+        self.tracks: dict = {}  # slot -> [(x, y)], its places each frame since it was first seen
         self.frame = 0
 
     def reset(self):
-        self.previous_state, self.solids, self.seen, self.frame = None, [], {}, 0
+        self.previous_state, self.solids, self.seen, self.tracks, self.frame = None, [], {}, {}, 0
         self.labelled_at = (None, 0)
 
     def acted(self, action: int) -> None:
@@ -99,12 +102,18 @@ class MemorySource:
             item = ENEMY_KIND_TYPES.get(slot["kind"]) == "power_up"
             if not (slot["active"] and (slot["enemy"] or item) and box and not slot["defeated"] and box[2] > box[0]):
                 self.seen.pop(k, None)
+                self.tracks.pop(k, None)
                 continue
             places = self.seen.setdefault(k, [])
+            track = self.tracks.setdefault(k, [])
             if places and abs(box[0] - places[-1][1]) > JUMP:
                 places.clear()
+                track.clear()
             places.append((self.frame, box[0], box[1]))
             del places[:-SPEED_FRAMES]
+            track.append((float(box[0]), float(box[1])))
+            del track[:-TRACK_FRAMES]
+            seen = {"track": tuple(track), "type": slot["kind"]}
             first = places[0]
             frames = self.frame - first[0]
             if frames >= MEASURED:
@@ -119,12 +128,14 @@ class MemorySource:
             else:
                 vx, vy = 0.0, 0.0  # a plant or anything else: still until measured
             if item:
-                items.append(Enemy(tuple(float(v) for v in box), vx, vy, ("slots", k), stompable=False))
+                items.append(Enemy(tuple(float(v) for v in box), vx, vy, ("slots", k), stompable=False, **seen))
                 continue
             kind = SLOT_KINDS.get(slot["kind"], "walker" if ENEMY_KIND_CLASSES.get(slot["kind"]) == "walker" else "flier")
             if kind == "plant" and any(s.x0 <= (box[0] + box[2]) / 2 <= s.x1 and s.top <= box[1] for s in self.solids):
-                continue  # down in its pipe: not seen
-            enemies.append(Enemy(tuple(float(v) for v in box), vx, vy, ("slots", k), slot["stompable"], kind=kind))
+                self.tracks.pop(k, None)
+                continue  # down in its pipe: not seen (its track starts again when it shows)
+            enemies.append(Enemy(tuple(float(v) for v in box), vx, vy, ("slots", k), slot["stompable"], kind=kind,
+                                 **seen))
         if labelling:
             # The enemies drawn in the labelled frame hide the floor under them.
             self.solids = floor_behind(solids_of(scene_from_labels(labelled.scene), truth["camera"]), enemies)

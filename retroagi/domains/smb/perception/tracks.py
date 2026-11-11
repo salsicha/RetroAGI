@@ -23,6 +23,9 @@ def translated(box, dx=0, dy=0):
 # movement continued for 64 frames was 21 pixels off on average, the mean of
 # 16 sightings 3). A reversal starts the mean again.
 ESTIMATE_SAMPLES = 16
+# A track's moves kept for a model identified from what is seen (frames;
+# turns included, unlike the samples the velocity is averaged over).
+TRACK_FRAMES = 32
 # A track not seen in a frame (vision missed it, or it crossed another) is
 # kept this many frames, moved by its velocity, and found again near there
 # with its identity and velocity.
@@ -39,6 +42,17 @@ class Track:
     missed: int = 0
     # Its object type as vision last told it (EnemyView.type; -1 not told).
     type: int = -1
+    # Its move each frame it has been followed (world pixels), oldest first.
+    moves: list = field(default_factory=list)
+
+    def places(self, x: float, y: float) -> tuple:
+        """Where a point of it now at (x, y) was each frame, oldest first
+        and ending now."""
+        out = [(x, y)]
+        for dx, dy in reversed(self.moves):
+            x, y = x - dx, y - dy
+            out.append((x, y))
+        return tuple(reversed(out))
 
     @property
     def velocity(self):
@@ -123,6 +137,7 @@ class VisualTracks:
                 track.box = box
                 track.samples = ([] if reversed_course else old.samples) + [(dx, dy)]
                 track.samples = track.samples[-ESTIMATE_SAMPLES:]
+                track.moves = (old.moves + [(dx, dy)])[-TRACK_FRAMES:]
             elif not matches:
                 track = self._found_again(box, kind, lost, found) or track
             track.type = seen_type
@@ -163,6 +178,7 @@ class VisualTracks:
         gap = old.missed + 1
         sample = (vx + (box[0] - old.box[0]) / gap, vy + (box[1] - old.box[1]) / gap)
         old.samples = (old.samples + [sample])[-ESTIMATE_SAMPLES:]
+        old.moves = (old.moves + [sample] * gap)[-TRACK_FRAMES:]
         old.box, old.missed = box, 0
         found.add(old.identity)
         return old

@@ -115,7 +115,7 @@ def main(argv=None) -> int:
     from .chooser import network_choosers
 
     parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
-    parser.add_argument("--domain", default="smb")
+    registry.arguments(parser)
     parser.add_argument("--bench", type=Path, required=True)
     parser.add_argument("--source", default=None, help="where the state comes from (the domain's first by default)")
     parser.add_argument("--model", help="an outcome network: choose by the fixed priorities on its predictions")
@@ -123,7 +123,7 @@ def main(argv=None) -> int:
     parser.add_argument("--only", nargs="*", default=())
     parser.add_argument("--output", type=Path)
     args = parser.parse_args(argv)
-    domain = registry.load(args.domain)
+    domain = registry.chosen(args)
     level = json.loads((args.bench / "index.json").read_text())["level"]
     make_chooser = network_choosers(domain, args.model) if args.model else domain.behaviour
     source = domain.source(args.source or domain.sources[0], level)

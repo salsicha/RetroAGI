@@ -86,6 +86,10 @@ class Controller(Protocol):
     choice: Any  # the choice in progress (None before the first)
     event: Optional[str]  # how it ended (None while it goes on)
 
+    def observe(self, state) -> None:
+        """Told every state, a choice in progress or not (for a dynamics
+        model that adapts to what is seen)."""
+
     def start(self, choice, state) -> None: ...
 
     def press(self, state) -> int: ...
@@ -144,6 +148,9 @@ class OutcomePredictor(Protocol):
 class Dynamics(Protocol):
     """The agent's model of how the other things move."""
 
+    def observe(self, things: Sequence, solids: Sequence) -> None:
+        """What is seen this frame (a model that adapts learns from it)."""
+
     def paths(self, things: Sequence, solids: Sequence, frames: int) -> None:
         """Give each thing its predicted box for each of the next ``frames`` frames."""
 
@@ -156,6 +163,11 @@ class Domain(Protocol):
     idle: int  # the action that does nothing
     ends: tuple  # how a sampled choice can end: the controller's events, then "timeout", "died", "finished"
     space: ChoiceSpace
+    parts: dict  # the parts with alternatives: part -> {alternative's name: a function making it}
+    chosen: dict  # part -> the name of the alternative in use
+
+    def using(self, **choices) -> "Domain":
+        """This domain with other alternatives for some parts (part=name)."""
 
     def controller(self) -> Controller: ...
 

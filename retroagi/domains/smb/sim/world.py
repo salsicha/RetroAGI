@@ -120,9 +120,9 @@ class SimSource:
                 # (standing, its fall speed is gravity's step the floor stopped)
                 vy = 0.0 if e["on_ground"] else e["vy"]
             enemies.append(Enemy(box, e["speed"] * e["direction"], vy, ("enemies", k),
-                                 stompable=bool(e.get("stompable", True)), kind=kind))
+                                 stompable=bool(e.get("stompable", True)), kind=kind, type=kind))
         items = [Enemy((i["x"], i["y"], i["x"] + i["w"], i["y"] + i["h"]), i["vx"], i["vy"], ("items", k),
-                       stompable=False)
+                       stompable=False, type="item")
                  for k, i in enumerate(env.items) if i["x"] + i["w"] > left and i["x"] < right]
         m = env.mario
         return State(

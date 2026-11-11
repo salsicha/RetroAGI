@@ -130,7 +130,12 @@ class Solid:
 @dataclass
 class Enemy:
     """An enemy's box now (world pixels) and its velocity (pixels a frame);
-    ``path``: its box each frame from now, when predicted (enemy_paths)."""
+    ``path``: its box each frame from now, when predicted (a dynamics
+    model's paths). For a model identified from what is seen
+    (framework/observed_dynamics): ``track``, its places as seen, oldest
+    first and ending now ((x, y) of one point of it each frame; None: not
+    kept), and ``type``, what the state source calls it (any label: things
+    of one type are taken to move alike)."""
 
     box: tuple
     vx: float
@@ -139,6 +144,8 @@ class Enemy:
     stompable: bool = True
     path: Optional[list] = None
     kind: str = "walker"  # one of ENEMY_KINDS
+    track: Optional[tuple] = None
+    type: object = None
 
     def at(self, frame: int) -> tuple:
         if self.path is not None and frame < len(self.path):
@@ -178,6 +185,9 @@ class RuleDynamics:
     identified from what is seen, or a learned one."""
 
     paths = staticmethod(enemy_paths)
+
+    def observe(self, things: Sequence, solids: Sequence) -> None:
+        pass  # (the rules are fixed: nothing seen changes them)
 
 
 RULES = RuleDynamics()

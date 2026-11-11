@@ -27,6 +27,7 @@ world ──source──▶ state ──choice space──▶ candidate choices
 | Outcome predictor | the state and the candidates | for each: chance of death, of being infeasible, of finishing, of getting stuck; progress, frames, points | the framework's outcome network, or anything with the same answer |
 | Chooser | the predictions | one choice, by fixed priorities: don't die, make progress, gather points | the framework; a domain may add a hand-written one |
 | Controller | a choice and the state each frame | an action each frame, and how the choice ended | the domain, planning with its dynamics model |
+| Dynamics model | the things and solids in each state | where each thing will be for the frames ahead | the domain's rules, or the framework's model fitted to what is seen |
 
 The declarations are in `retroagi/framework/interfaces.py` (`World`,
 `Practice`, `StateSource`, `ChoiceSpace`, `OutcomePredictor`, `Chooser`,
@@ -35,12 +36,38 @@ domain's own types; the framework only passes them between the parts. The
 one thing it asks of a state is `decidable`: whether a choice can be made
 now.
 
+The controller is shown every state (`observe`), a choice in progress or
+not, and passes what moves in it to its dynamics model: a model that
+adapts learns from every frame, not only from the frames it plans in.
+
+## Parts with alternatives
+
+A domain names the parts it has more than one of (`Domain.parts`), and
+every tool takes `--use PART=NAME` to play with another. Super Mario Bros
+has two dynamics models:
+
+| `--use dynamics=` | What it is |
+|---|---|
+| `rules` (the default) | A rule per kind of enemy, written by hand from the game (`domains/smb/planner.py`). |
+| `observed` | `framework/observed_dynamics.py`: told nothing of what a thing is, it fits each thing's motion to its own track and remembers by type what things have been seen to do (how they fall, bounce, come out of solids, pace). Its memory starts empty at each play. |
+
+```bash
+python -m retroagi.framework.bench --domain smb --use dynamics=observed --bench data/full_smb_obstacles/Level2-1 --source vision --model data/outcome/outcome_20261109d.pt
+python -m retroagi.domains.smb.nes.dynamics_check --bench data/full_smb_obstacles/Level2-1 --model data/outcome/outcome_20261109d.pt
+```
+
+The second command scores every dynamics model of the domain on the same
+recorded plays: predicted against true places of each enemy, by kind and
+by frames ahead. [How general is it?](generalization.md) has the results.
+
 ## What the framework provides
 
 | File | What it does |
 |---|---|
 | `agent.py` | The one loop: read the state, let the controller press on, and when a choice has ended ask the chooser for the next. |
 | `chooser.py` | The fixed priorities over predicted outcomes, with a short memory of what was tried where. |
+| `observed_dynamics.py` | A dynamics model identified from what is seen, for worlds of boxes moving among solid boxes: any domain of that shape can use it. |
+| `registry.py` | Domains by name, and their parts' alternatives (`--use`). |
 | `outcome_network.py` | A transformer over the state's tokens with a head per thing: every candidate's outcome in one pass. Its shape comes from the domain's `ChoiceSpec`; a saved network carries that spec and is checked against the domain when loaded. |
 | `sampling.py` | Training data, measured: in practice worlds every candidate is played from a saved state by the domain's controller. |
 | `training.py` | Trains the outcome network on sampled outcomes and measures it on fresh ones. |
@@ -69,7 +96,7 @@ Mario Bros (`retroagi/domains/smb`):
 | Perception: vision, tracking, motion estimate, vision to state | `perception/` |
 | The practice world: random levels of the game's pieces in a simulator | `sim/` |
 | The real game in the emulator, its game-memory state source, the obstacle benches | `nes/` |
-| The ways to play and what a point is worth in each | `domain.py` |
+| The ways to play and what a point is worth in each, and the parts with alternatives | `domain.py` |
 
 Adding a domain means writing these for it; nothing in `framework/` changes.
 `scripts/tests/test_architecture.py` keeps it so: the framework imports no
@@ -90,13 +117,20 @@ benches from game memory and from vision.
 
 ## What is not general yet
 
-- **The dynamics model is written by hand.** The controller takes its model
-  of how enemies and items move as a part that can be swapped
-  (`planner.RULES`, `Controller(dynamics=...)`), but the only one there is
-  a hand-written rule per kind of enemy. Mario's own motion is transcribed
-  from the game (`domains/smb/physics.py`) and compiled into the planner.
-  Nothing is identified or learned from what the agent sees yet: this is
-  where adaptive control has to go.
+- **The agent is tuned to the two levels it was built on**: it passes 96%
+  of their obstacles with perfect perception and 65% of the obstacles of
+  six levels nobody looked at; from vision, 83% and 49%
+  ([measurements](generalization.md)).
+- **The default dynamics model is written by hand**, a rule per kind of
+  enemy. The model identified from what is seen predicts better on levels
+  neither was written on (within 4 pixels 16 frames ahead: 0.74 against
+  0.68), but the agent does not yet play better with it, the simulator
+  gives it no tracks to learn from, and it cannot see what the rules
+  cannot either: a thing that went out of sight, a thing that moves by what
+  Mario does.
+- **Mario's own motion is transcribed from the game**
+  (`domains/smb/physics.py`) and compiled into the planner: nothing about
+  the agent's own body is identified.
 - **Perception is trained on labels read from this game's memory**, and the
   collision boxes inside drawn sprites are entered by hand.
 - **The simulator is a hand copy of the game's rules**; where it differs

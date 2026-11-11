@@ -415,3 +415,22 @@ Each phase ends with a measurement that decides whether to go on.
     play, and results are also reported by distinct start with an
     interval (scripts/dev/bench_table.py).
   See docs/framework.md for the design and for what is not general yet.
+- **First contact with levels nothing was tuned on, and a dynamics model
+  identified from what is seen, 2026-11-11.** Benches were built for
+  worlds 2-1, 3-1, 4-1, 6-1, 7-1 and 8-1 and the agent played them
+  unchanged. With the state from game memory it passes 96% of the
+  obstacles of 1-1 and 5-1 and 65% of the six new levels'; from vision 83%
+  and 49%; only 1-1 is finished from its start. Nearly all failures are
+  deaths: piranha plants first (most of them coming up out of a pipe the
+  agent could not see into), then Lakitu's Spinies, Koopas, Goombas. The
+  controller's hand-written rules for how enemies move, scored against the
+  game (nes/dynamics_check.py), are within 4 pixels 16 frames ahead 91% of
+  the time on 1-1 and 5-1 and 68% on four held-out levels, and had a
+  Goomba falling three times faster than the game's. A model that is told
+  nothing of what a thing is and fits each thing's motion from its track
+  (framework/observed_dynamics.py, `--use dynamics=observed`) reaches 74%
+  on the held-out levels; with it the agent passes 91% and 55% from vision
+  and is unchanged from game memory. The rules stay the default until the
+  simulator gives tracks too. docs/generalization.md has the method (tuned,
+  development and held-out levels), the tables and what they say to do
+  next.
