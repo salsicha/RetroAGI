@@ -65,7 +65,7 @@ python -m retroagi.framework.bench --domain smb --bench data/full_smb_obstacles/
 python -m retroagi.framework.bench --domain smb --use dynamics=observed --bench data/full_smb_obstacles/Level1-1 --source vision --model data/outcome/outcome_20261109d.pt
 # play a whole level
 python -m retroagi.framework.play --domain smb --level Level1-1 --source vision --model data/outcome/outcome_20261109d.pt
-# the scripted chooser, or the outcome network's, on fresh random levels
+# the scripted chooser, or the outcome network as the chooser, on fresh random levels
 python -m retroagi.framework.practice --domain smb --levels 100 --first-seed 100000 [--model data/outcome/outcome_20261109d.pt]
 # sample outcomes, then train the outcome network
 python -m retroagi.framework.sampling --domain smb --levels 2000 --workers 14 --output data/datasets/block_smb/outcomes_NEW
