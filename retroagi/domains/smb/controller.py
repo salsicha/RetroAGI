@@ -25,7 +25,7 @@ executor's estimates in play (perceived), or from game memory to test the
 controller alone.
 """
 
-from copy import copy
+from copy import copy, deepcopy
 from dataclasses import dataclass, field
 from typing import Optional
 
@@ -189,6 +189,11 @@ class Controller:
 
     def observe(self, state: State) -> None:
         self.dynamics.observe(state.enemies + state.items, state.solids)
+
+    def another(self) -> "Controller":
+        """A new controller whose dynamics model knows what this one's has
+        learned (a copy: what either learns from here on is its own)."""
+        return Controller(deepcopy(self.dynamics))
 
     def start(self, choice: Choice, state: State) -> None:
         self.choice, self.plan, self.frame, self.event = choice, None, 0, None

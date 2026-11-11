@@ -51,15 +51,16 @@ STUCK_PROGRESS = 16
 OUTCOME_FIELDS = ("died", "died_after", "frames", "progress", "points", "finished", "stuck", "end")
 
 
-def outcome(world, source, domain, choice, probe: bool = True) -> tuple:
-    """``choice`` played by the controller from the practice world's present
+def outcome(world, source, domain, choice, probe: bool = True, controller=None) -> tuple:
+    """``choice`` played by ``controller`` (a new one of the domain's if not
+    given: one that has learned nothing) from the practice world's present
     state, then WINDOW frames settled: the OUTCOME_FIELDS (stuck only when
     ``probe``; a death counts as stuck). The world is left where the play
     ended."""
     ends = domain.ends
     state = source.read(world)
     start, points = world.progress, world.score
-    controller = domain.controller()
+    controller = controller or domain.controller()
     controller.observe(state)
     controller.start(choice, state)
     frames, died, finished, end = 0, False, False, controller.event
@@ -120,7 +121,7 @@ def outcome(world, source, domain, choice, probe: bool = True) -> tuple:
         world.restore(ended)
         state = source.read(world)
         for option in domain.probes(state) + (domain.escapes(state) if died_after else []):
-            r = outcome(world, source, domain, option, probe=False)
+            r = outcome(world, source, domain, option, probe=False, controller=controller.another())
             world.restore(ended)
             safe = r[2] > 0 and ends[int(r[-1])] != "infeasible" and not (r[0] or r[1])
             saved = saved or safe
@@ -137,26 +138,33 @@ def outcome(world, source, domain, choice, probe: bool = True) -> tuple:
 class Sampler:
     """The chooser of a sampling play: at each decision it plays every
     candidate from the saved state and keeps the outcomes, then explores or
-    lets the domain's behaviour chooser decide."""
+    lets the domain's behaviour chooser decide. Each candidate is played by
+    a controller that knows what the playing ``agent``'s has learned so far
+    (set by sample: a controller's model may adapt to what it sees)."""
 
     def __init__(self, domain, world, source, mode: str, rng: random.Random, explore: float = EXPLORE):
         self.domain, self.world, self.source, self.rng, self.explore = domain, world, source, rng, explore
+        self.agent = None
         self.behaviour = domain.behaviour(mode)
         self.tokens = [[] for _ in domain.space.spec.groups]
         self.rows, self.outcomes = [], []
+        self.sampled = None  # the state last sampled at
 
     def decide(self, state, last_event, last_choice):
         domain, space, world = self.domain, self.domain.space, self.world
-        tokens, slots = space.tokens(state)
-        saved = world.snapshot()
         options = space.candidates(state)
-        index = len(self.tokens[0])
-        for kept, token in zip(self.tokens, tokens):
-            kept.append(token)
-        for c in options:
-            self.outcomes.append(outcome(world, self.source, domain, c.choice))
-            self.rows.append((index, c.kind, slots.get(c.ref, -1) if c.ref is not None else -1, c.modifier))
-            world.restore(saved)
+        if state is not self.sampled:  # (asked again in a frame, its choice refused: sampled already)
+            self.sampled = state
+            tokens, slots = space.tokens(state)
+            saved = world.snapshot()
+            index = len(self.tokens[0])
+            for kept, token in zip(self.tokens, tokens):
+                kept.append(token)
+            for c in options:
+                self.outcomes.append(outcome(world, self.source, domain, c.choice,
+                                             controller=self.agent.controller.another()))
+                self.rows.append((index, c.kind, slots.get(c.ref, -1) if c.ref is not None else -1, c.modifier))
+                world.restore(saved)
         explored = domain.explore(state, options, self.rng)
         if explored is not None:
             return explored
@@ -179,6 +187,7 @@ def sample(domain, seed: int, mode: str, *, explore: float = EXPLORE, rng: Optio
     sampler = Sampler(domain, world, source, mode, rng or random.Random(seed), explore)
     agent = Agent(source, lambda _: sampler, domain.controller, domain.idle)
     agent.reset(seed, mode)
+    sampler.agent = agent
     for _ in range(world.budget):
         if world.step(agent.act(world)).over:
             break

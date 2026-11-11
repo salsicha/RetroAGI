@@ -51,6 +51,12 @@ class _BoxSpace:
 # holding jump through a landing does not jump again. The NES small body is
 # 10x12 pixels and the Goomba damage body 10x6.
 ENEMY_GRAVITY = 0.5
+# Under the game's rules (an enemy's "game_rules", the random levels'; and
+# every mushroom) a walker falls off a ledge as the game's do: this much
+# faster each frame, up to GAME_ENEMY_FALL (fitted to Goombas and Koopas
+# falling in worlds 1-1 to 5-1: within 1.6 pixels of them on average; the
+# 0.5 up to 4.5 written first was 11 off).
+GAME_ENEMY_GRAVITY, GAME_ENEMY_FALL = 0.2, 3.4
 
 # ── Drawing ───────────────────────────────────────────────────────────────────
 #
@@ -1525,7 +1531,7 @@ class MarioScenarioEnv:
     def _update_item(self, item: dict, platform_rects: list) -> None:
         """A mushroom moves on as a walker does (turned by walls, falling
         off ledges), at its own speed."""
-        item["vy"] = min(item["vy"] + ENEMY_GRAVITY, self.max_fall_speed)
+        item["vy"] = min(item["vy"] + GAME_ENEMY_GRAVITY, GAME_ENEMY_FALL)
         item["x"] += item["vx"]
         body = pygame.Rect(item["x"], item["y"], item["w"], item["h"])
         if any(body.colliderect(r) and r.top < body.bottom - 2 for r in platform_rects):
@@ -1563,6 +1569,8 @@ class MarioScenarioEnv:
             if enemy["on_ground"]:
                 enemy["vy"] = HOP_SPEED
             enemy["vy"] += HOP_GRAVITY
+        elif enemy.get("game_rules"):
+            enemy["vy"] = min(enemy["vy"] + GAME_ENEMY_GRAVITY, GAME_ENEMY_FALL)
         else:
             enemy["vy"] += ENEMY_GRAVITY
         if enemy["vy"] > self.max_fall_speed:

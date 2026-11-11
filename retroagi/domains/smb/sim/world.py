@@ -6,7 +6,9 @@ SimWorld plays one level (a scenario: levels.random_level) in the simulator
 SimSource gives the controller its state from the simulator as nes/sources'
 MemorySource does from the real game's memory: what is on screen (question
 blocks not yet hit as their own kind, mushrooms as items), the screen's
-left edge a wall.
+left edge a wall, and each enemy's and item's track: its places while it
+has been in sight (kept by SimWorld in the thing's own record, so they are
+saved and put back with the world's state).
 """
 
 from copy import copy
@@ -17,6 +19,21 @@ from retroagi.framework.interfaces import Step
 
 from .env import MarioScenarioEnv
 from .env_state import restore_env_state, snapshot_env_state
+
+# The places of a thing kept as its track (frames).
+TRACK_FRAMES = 32
+
+
+def in_sight(env, thing: dict) -> bool:
+    """Whether an enemy or item of the simulator is seen: on the screen,
+    and for an enemy alive, awake and, a plant, out of its pipe."""
+    if thing["x"] + thing["w"] <= env.camera_x or thing["x"] >= env.camera_x + env.width:
+        return False
+    if "dead" not in thing:
+        return True  # (an item)
+    awake = thing.get("awake", not thing.get("game_rules"))
+    hidden = thing.get("kind") == "piranha_plant" and thing["exposed"] <= 0
+    return not (thing["dead"] or thing["h"] <= 0 or not awake or hidden)
 
 
 class SimWorld:
@@ -29,12 +46,22 @@ class SimWorld:
 
     def reset(self) -> None:
         self.env.reset(scenario=self.scenario)
+        self._track()
 
     def step(self, action: int) -> Step:
         _, _, terminated, truncated, info = self.env.step(action)
+        self._track()
         if not (terminated or truncated):
             return Step()
         return Step(over=True, died=bool(info["death"]), finished=bool(self.env._goal_credited))
+
+    def _track(self) -> None:
+        """Each enemy's and item's places while it has been in sight, this
+        frame's added (out of sight, its track starts again)."""
+        env = self.env
+        for thing in (*env.enemies, *env.items):
+            seen = thing.get("track", ()) + ((thing["x"], thing["y"]),) if in_sight(env, thing) else ()
+            thing["track"] = seen[-TRACK_FRAMES:]
 
     @property
     def progress(self) -> float:
@@ -107,23 +134,21 @@ class SimSource:
             solids.append(Solid(max(r.left, left), r.top, min(r.right, right), r.bottom, seen, ("platforms", k)))
         enemies = []
         for k, e in enumerate(env.enemies):
-            awake = e.get("awake", not e.get("game_rules"))
+            if not in_sight(env, e):
+                continue  # (a plant down in its pipe among them)
             box = (e["x"], e["y"], e["x"] + e["w"], e["y"] + e["h"])
-            if e["dead"] or e["h"] <= 0 or not awake or box[2] <= left or box[0] >= right:
-                continue
             kind = enemy_kind(e)
             if kind == "plant":
-                if e["exposed"] <= 0:
-                    continue  # down in its pipe: not seen
                 vy = plant_velocity(e)
             else:
                 # (standing, its fall speed is gravity's step the floor stopped)
                 vy = 0.0 if e["on_ground"] else e["vy"]
             enemies.append(Enemy(box, e["speed"] * e["direction"], vy, ("enemies", k),
-                                 stompable=bool(e.get("stompable", True)), kind=kind, type=kind))
+                                 stompable=bool(e.get("stompable", True)), kind=kind, track=e.get("track") or None,
+                                 type=kind))
         items = [Enemy((i["x"], i["y"], i["x"] + i["w"], i["y"] + i["h"]), i["vx"], i["vy"], ("items", k),
-                       stompable=False, type="item")
-                 for k, i in enumerate(env.items) if i["x"] + i["w"] > left and i["x"] < right]
+                       stompable=False, track=i.get("track") or None, type="item")
+                 for k, i in enumerate(env.items) if in_sight(env, i)]
         m = env.mario
         return State(
             body=(m["x"], m["y"], m["x"] + m["w"], m["y"] + m["h"]),

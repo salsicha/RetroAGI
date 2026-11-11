@@ -144,21 +144,43 @@ def test_a_thing_in_the_air_that_does_not_fall_flies_through_everything():
 
 
 def test_super_mario_bros_takes_either_dynamics_model_by_name():
-    domain = registry.load("smb")
-    assert domain.controller().dynamics is RULES
-    observed = registry.load("smb", ("dynamics=observed",))
-    assert isinstance(observed.controller().dynamics, ObservedDynamics)
+    observed = registry.load("smb")
+    assert isinstance(observed.controller().dynamics, ObservedDynamics) and observed.chosen == {"dynamics": "observed"}
     assert observed.controller().dynamics is not observed.controller().dynamics  # (a new one each play)
-    assert registry.used(observed) == ("dynamics=observed",) and domain.chosen == {"dynamics": "rules"}
+    rules = registry.load("smb", ("dynamics=rules",))
+    assert rules.controller().dynamics is RULES and registry.used(rules) == ("dynamics=rules",)
     with pytest.raises(ValueError):
         registry.load("smb", ("dynamics=guessed",))
-    # A practice level plays through with it (the simulator gives no tracks: its own speeds stand).
-    from retroagi.framework.agent import Agent, play
+    # A controller made from another's knows what that one's model has learned, and learns apart from it.
+    first = observed.controller()
+    first.dynamics.seen["a"] = "learned"
+    second = first.another()
+    assert second.dynamics.seen == {"a": "learned"} and second.dynamics.seen is not first.dynamics.seen
+    assert rules.controller().another().dynamics is RULES
 
-    world = observed.practice(100003)
-    agent = Agent(observed.truth_source(), observed.behaviour, observed.controller, observed.idle)
+
+def test_the_simulator_gives_each_thing_its_track_and_puts_it_back_with_a_saved_state():
+    from retroagi.domains.smb.domain import DOMAIN
+    from retroagi.framework.agent import Agent
+
+    world = DOMAIN.practice(100003)
+    world.reset()
+    source = DOMAIN.truth_source()
+    agent = Agent(source, DOMAIN.behaviour, DOMAIN.controller, DOMAIN.idle)
     agent.reset(0, "speed_run")
-    assert play(world, agent, 600)["frames"] > 100
+    enemy = None
+    for _ in range(1500):  # (played until an enemy has been in sight a while)
+        state = source.read(world)
+        enemy = next((e for e in state.enemies if len(e.track or ()) >= 8), None)
+        if enemy is not None or world.step(agent.step(state)).over:
+            break
+    assert enemy is not None and enemy.track[-1] == (enemy.box[0], enemy.box[1]) and enemy.type is not None
+    saved = world.snapshot()
+    world.step(0)
+    longer = next(e for e in source.read(world).enemies if e.ref == enemy.ref).track
+    assert longer[-2] == enemy.track[-1] and len(longer) == min(len(enemy.track) + 1, 32)
+    world.restore(saved)
+    assert next(e for e in source.read(world).enemies if e.ref == enemy.ref).track == enemy.track
 
 
 def test_a_vision_track_gives_its_places_through_a_turn():

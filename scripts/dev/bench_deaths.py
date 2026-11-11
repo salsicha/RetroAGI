@@ -65,7 +65,7 @@ def main(argv=None) -> int:
     causes, plays = Counter(), 0
     for state, group in starts.items():
         world = domain.real_world(index["level"], state)
-        goal = group[-1]["x1"] + PASSED
+        goals = [o["x1"] + PASSED for o in group]
         for mode in domain.modes:
             for seed in range(args.runs):
                 world.reset()
@@ -73,7 +73,9 @@ def main(argv=None) -> int:
                 for _ in range(START_WAITS[seed % len(START_WAITS)]):
                     world.step(agent.idle)
                 plays += 1
-                for _ in range(ATTEMPT_FRAMES):
+                left, frame, until = list(goals), 0, ATTEMPT_FRAMES
+                while frame < until and left:
+                    frame += 1
                     action = agent.act(world)
                     before = true_frame(world.game.env.get_ram(), world.game.start)
                     step = world.step(action)
@@ -86,8 +88,11 @@ def main(argv=None) -> int:
                             print(f"{group[0]['name']:22} {mode:10} seed {seed}: died at x {world.progress:4}: {why}; "
                                   f"during {doing}", flush=True)
                         break
-                    if step.finished or (world.progress >= goal and world.settled):
+                    if step.finished:
                         break
+                    if world.settled and any(world.progress >= goal for goal in left):
+                        # (as the bench: the frames allowed count again from each obstacle passed)
+                        left, until = [goal for goal in left if world.progress < goal], frame + ATTEMPT_FRAMES
         world.close()
     print(f"{index['level']}: {sum(causes.values())} deaths in {plays} plays")
     for why, count in causes.most_common():

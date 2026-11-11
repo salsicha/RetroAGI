@@ -90,6 +90,10 @@ class Controller(Protocol):
         """Told every state, a choice in progress or not (for a dynamics
         model that adapts to what is seen)."""
 
+    def another(self) -> "Controller":
+        """A new controller that knows what this one's model has learned
+        (to try a choice from a saved state as this one would carry it out)."""
+
     def start(self, choice, state) -> None: ...
 
     def press(self, state) -> int: ...

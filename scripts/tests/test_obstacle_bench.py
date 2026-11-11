@@ -99,6 +99,13 @@ def test_one_play_scores_every_obstacle_of_its_start_and_seeds_wait():
     # Dying on the way counts against every obstacle not yet passed.
     first, second = bench.attempts(FakeWorld(speed=2, dies_at=80), StillPlayer(), 0, "speed_run", [near, far])
     assert (first["end"], second["end"]) == ("passed", "died")
+    # The frames allowed count again from each obstacle passed: a slow play stalls only where it stops.
+    far_off = {"x0": 2216, "x1": 2256}
+    first, second = bench.attempts(FakeWorld(speed=2), StillPlayer(), 0, "speed_run", [near, far_off])
+    assert second["end"] == "passed" and second["frames"] > bench.ATTEMPT_FRAMES
+    first, second = bench.attempts(FakeWorld(speed=2), StillPlayer(), 0, "speed_run", [near, {"x0": 9000, "x1": 9040}])
+    assert (first["end"], second["end"]) == ("passed", "stalled")
+    assert second["frames"] == first["frames"] + bench.ATTEMPT_FRAMES
     # A later seed waits first: the world has moved on before the agent acts.
     waited = bench.attempts(FakeWorld(speed=2), StillPlayer(), 1, "speed_run", [near])[0]
     assert waited["frames"] == first["frames"] - bench.START_WAITS[1]

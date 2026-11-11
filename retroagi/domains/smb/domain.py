@@ -47,16 +47,16 @@ class SuperMarioBros:
     space = SPACE
     sources = ("memory", "vision")
     # The parts with alternatives (--use PART=NAME). The controller's model
-    # of how enemies and items move: "rules", written by hand for each kind
-    # of enemy, or "observed", fitted to what is seen of each thing as it
-    # plays (framework/observed_dynamics; a new one each play, with the
-    # game's walkers' fall off a ledge for what it has not yet seen).
+    # of how enemies and items move: "observed", fitted to what is seen of
+    # each thing as it plays (framework/observed_dynamics; a new one each
+    # play, with the game's walkers' fall off a ledge for what it has not
+    # yet seen), or "rules", written by hand for each kind of enemy.
     parts = {"dynamics": {
         "rules": lambda: RULES,
         "observed": lambda: ObservedDynamics(gravity=ENEMY_GRAVITY, fastest=ENEMY_FALL, reach=FEET_BELOW + 2,
                                              wall_depth=WALL_DEPTH, ignored=("edge",)),
     }}
-    chosen = {"dynamics": "rules"}
+    chosen = {"dynamics": "observed"}
 
     def using(self, **choices) -> "SuperMarioBros":
         for part, name in choices.items():

@@ -131,9 +131,21 @@ class MemorySource:
                 items.append(Enemy(tuple(float(v) for v in box), vx, vy, ("slots", k), stompable=False, **seen))
                 continue
             kind = SLOT_KINDS.get(slot["kind"], "walker" if ENEMY_KIND_CLASSES.get(slot["kind"]) == "walker" else "flier")
-            if kind == "plant" and any(s.x0 <= (box[0] + box[2]) / 2 <= s.x1 and s.top <= box[1] for s in self.solids):
-                self.tracks.pop(k, None)
-                continue  # down in its pipe: not seen (its track starts again when it shows)
+            if kind == "plant":
+                # A plant is seen while any of it shows above its pipe: the
+                # game draws it (its drawn box, None while it is down) and
+                # its head is over the pipe's top, some 28 frames before
+                # the box the game collides with, 14 below its head, clears
+                # the pipe (shown only by that box, a plant coming up was
+                # known 2 frames before it reached a Mario landing there;
+                # vision sees its head). Its pipe not among the solids yet
+                # (they are labelled every few frames), it is not seen.
+                # Its track starts again when it shows.
+                under = [s for s in self.solids if s.x0 <= (box[0] + box[2]) / 2 <= s.x1 and s.bottom > box[3]]
+                drawn = slot["drawn"]
+                if not under or drawn is None or all(s.top <= drawn[1] for s in under):
+                    self.tracks.pop(k, None)
+                    continue
             enemies.append(Enemy(tuple(float(v) for v in box), vx, vy, ("slots", k), slot["stompable"], kind=kind,
                                  **seen))
         if labelling:

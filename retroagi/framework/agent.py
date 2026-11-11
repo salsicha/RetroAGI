@@ -6,11 +6,16 @@ controller presses on. When it has ended (its event), and the agent is
 settled enough to decide (state.decidable: in Super Mario Bros, standing
 with its speed known; a plan made in the air would start from a standing
 jump), the chooser picks the next choice and the controller starts it. A
-choice found infeasible as it starts leaves this frame idle: the chooser
-decides again on the next.
+choice the controller finds infeasible as it starts is answered with the
+chooser's next in the same frame, up to TRIES of them: one a frame, the
+agent went on as it was while they were refused (Mario slid into a pit of
+5-1 past seven refused landings).
 """
 
 from typing import Callable, Optional
+
+# Choices refused as they start that the chooser may answer within a frame.
+TRIES = 8
 
 
 class Agent:
@@ -39,11 +44,14 @@ class Agent:
         if controller.choice is None or controller.event is not None:
             if not state.decidable:
                 return self.idle
-            self.last_event = controller.event
-            self.last_choice = self.chooser.decide(state, self.last_event, self.last_choice)
-            controller.start(self.last_choice, state)
-            if controller.event is not None:  # infeasible at once: decide again next frame
-                return self.idle
+            for _ in range(TRIES):
+                self.last_event = controller.event
+                self.last_choice = self.chooser.decide(state, self.last_event, self.last_choice)
+                controller.start(self.last_choice, state)
+                if controller.event is None:
+                    break
+            else:
+                return self.idle  # none could be started: decide again next frame
         return controller.press(state)
 
 

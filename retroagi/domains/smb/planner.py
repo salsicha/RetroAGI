@@ -48,10 +48,13 @@ STAND = 1
 ENEMY_MARGIN = 2
 # Walkers: their feet up to this far below their boxes (pixels: a Goomba's
 # collision box ends 4 above its feet), and how they fall off a ledge
-# (pixels a frame, gained each frame and at most), as the simulator's do.
+# (pixels a frame, gained each frame and at most: the game's, fitted to
+# Goombas and Koopas falling in worlds 1-1 to 5-1, and the simulator's
+# under the game's rules; the 0.5 up to 4.5 written first put a falling
+# Goomba 11 pixels off on average).
 FEET_BELOW = 4
-ENEMY_GRAVITY = 0.5
-ENEMY_FALL = 4.5
+ENEMY_GRAVITY = 0.2
+ENEMY_FALL = 3.4
 # What an enemy is, for its path (enemy_paths): a walker walks and falls off
 # ledges; a hopper (a Paratroopa) hops HOP_SPEED pixels a frame up each time
 # it lands, under HOP_GRAVITY; a plant rises out of its pipe at PLANT_SPEED
@@ -61,6 +64,9 @@ ENEMY_FALL = 4.5
 ENEMY_KINDS = ("walker", "hopper", "plant", "flier")
 HOP_SPEED, HOP_GRAVITY, HOPPER_FEET = -3.25, 0.12, 3
 PLANT_SPEED, PLANT_TOP = 0.5, 4
+# A plant's box is at most this far below its pipe's top while it is seen
+# (its head showing: pixels).
+PLANT_DEEP = 24
 # A stomp bounces Mario up at this vertical speed (the game's $FC).
 STOMP_BOUNCE = -4
 # A stomp needs this much sideways overlap with the enemy (pixels): in 1-1 a
@@ -188,6 +194,9 @@ class RuleDynamics:
 
     def observe(self, things: Sequence, solids: Sequence) -> None:
         pass  # (the rules are fixed: nothing seen changes them)
+
+    def __deepcopy__(self, memo) -> "RuleDynamics":
+        return self  # (and there is nothing learned to copy)
 
 
 RULES = RuleDynamics()
@@ -401,11 +410,14 @@ def _paths(boxes, velocities, kinds, solids, frames):
             for k in range(1, frames + 1):
                 out[e, k] = (x0 + vx * k, y0 + vy * k, x1 + vx * k, y1 + vy * k)
             continue
-        if kinds[e] == 2:  # plant: its pipe is the solid under its middle nearest below its box's top
+        if kinds[e] == 2:
+            # plant: its pipe is the solid under its middle whose top is
+            # nearest its box (above it while only its head shows: its box,
+            # 14 below its head, is still in the pipe)
             middle, pipe = (x0 + x1) / 2, -1.0
             for i in range(solids.shape[0]):
-                if solids[i, 0] <= middle <= solids[i, 2] and solids[i, 1] >= y0 - 1 and (
-                        pipe < 0 or solids[i, 1] < pipe):
+                if solids[i, 0] <= middle <= solids[i, 2] and solids[i, 1] >= y0 - PLANT_DEEP and (
+                        pipe < 0 or abs(solids[i, 1] - y1) < abs(pipe - y1)):
                     pipe = solids[i, 1]
             height = y1 - y0
             top = (pipe - PLANT_TOP - height) if pipe >= 0 else y0

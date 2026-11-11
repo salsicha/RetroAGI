@@ -11,9 +11,11 @@ Play is deterministic, so the tries of one obstacle differ by how long the
 world runs, the agent doing nothing, before it may act (agent.START_WAITS
 by seed): the enemies are then elsewhere in their walks. Obstacles that start
 from the same saved state are scored in one play (the nearer ones passed on
-the way to the farthest), and the result also says how the plays from each
-distinct start went (``passed_by_start``: obstacles sharing a start are not
-independent, and one death there counts against all of them).
+the way to the farthest; the ATTEMPT_FRAMES count again from each one
+passed, so a patient wait at one does not stall the ones after it), and the
+result also says how the plays from each distinct start went
+(``passed_by_start``: obstacles sharing a start are not independent, and
+one death there counts against all of them).
 
     python -m retroagi.framework.bench --domain smb --bench DIR \\
         [--source memory | vision] [--model OUTCOME.pt] [--runs 4] [--output OUT.json]
@@ -36,35 +38,37 @@ from .agent import START_WAITS, Agent
 
 # Progress beyond an obstacle's end where the agent, settled, has passed it.
 PASSED = 24
-# Frames an agent has for one obstacle.
+# Frames an agent has for one obstacle: with none passed for so long, a
+# play has stalled.
 ATTEMPT_FRAMES = 900
 
 
 def attempts(world, player, seed: int, mode: str, obstacles: Sequence[dict]) -> list:
     """One play from the world's start state scored against each of
     ``obstacles`` (all starting from that state): for each its end
-    ("passed", "died", "stalled"), the frames it took and the most progress
-    made by then. A player has ``reset(seed, mode)``, ``act(world) ->
-    action`` and ``idle`` (agent.Agent)."""
+    ("passed", "died", or "stalled" when ATTEMPT_FRAMES went by since the
+    play began or the last obstacle was passed), the frames it took and
+    the most progress made by then. A player has ``reset(seed, mode)``,
+    ``act(world) -> action`` and ``idle`` (agent.Agent)."""
     world.reset()
     player.reset(seed, mode)
     for _ in range(START_WAITS[seed % len(START_WAITS)]):
         world.step(player.idle)
     goals = [o["x1"] + PASSED for o in obstacles]
-    results, furthest = [None] * len(obstacles), 0
-    for frame in range(ATTEMPT_FRAMES):
+    results, furthest, frame, until = [None] * len(obstacles), 0, 0, ATTEMPT_FRAMES
+    while frame < until and not all(r is not None for r in results):
         step = world.step(player.act(world))
+        frame += 1
         furthest = max(furthest, world.progress)
         for k, goal in enumerate(goals):
             if results[k] is not None:
                 continue
             if step.died:
-                results[k] = {"end": "died", "frames": frame + 1, "furthest": furthest}
+                results[k] = {"end": "died", "frames": frame, "furthest": furthest}
             elif step.finished or (world.progress >= goal and world.settled):
-                results[k] = {"end": "passed", "frames": frame + 1, "furthest": furthest}
-        if all(r is not None for r in results):
-            break
-    return [r or {"end": "stalled", "frames": ATTEMPT_FRAMES, "furthest": furthest} for r in results]
+                results[k] = {"end": "passed", "frames": frame, "furthest": furthest}
+                until = frame + ATTEMPT_FRAMES
+    return [r or {"end": "stalled", "frames": frame, "furthest": furthest} for r in results]
 
 
 def run_bench(bench: Path, make_world: Callable, make_player: Callable, modes: Sequence[str], runs: int = 4,
