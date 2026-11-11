@@ -121,14 +121,18 @@ def test_the_teacher_waits_for_a_run_up_rather_than_strand_mario_at_a_wide_pit()
 
 
 @pytest.mark.timeout(600)
-def test_a_one_jump_lesson_only_one_jump_height_wins_is_redrawn():
-    from collections import Counter
-
-    from retroagi.legacy.block_smb.monte_carlo import _winning_holds
+def test_a_one_jump_lesson_only_one_jump_height_wins_is_redrawn(monkeypatch):
+    from retroagi.legacy.block_smb import monte_carlo
 
     # A walker standing on a small raised platform: only one height of jump
     # stomped it, and the lesson was lost when vision placed it 4 rows lower.
-    rejected = Counter()
-    scenario = practice_layout("action_stomp_up_back", 3014, "medium", rejected)
-    assert rejected["one_height"] >= 1
-    assert len(_winning_holds("action_stomp_up_back", scenario)) >= 2
+    # A lesson that is drawn has at least two winning heights...
+    family = "action_stomp_up_back"
+    scenario = practice_layout(family, 3014, "medium")
+    winners = monte_carlo._winning_holds(family, scenario, rooms=True)
+    assert len(winners) >= 2 and monte_carlo._one_action_fault(family, scenario) is None
+    # ...because one that a single height wins is refused, and drawn again.
+    # (The rule itself is checked: which draws it refuses changes whenever
+    # the simulator does, and no draw of this seed needs it any more.)
+    monkeypatch.setattr(monte_carlo, "_winning_holds", lambda *args, **kwargs: winners[:1])
+    assert monte_carlo._one_action_fault(family, scenario) == "one_height"
