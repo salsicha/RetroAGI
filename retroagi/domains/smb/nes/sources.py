@@ -1,21 +1,21 @@
-"""The controller's state in the real game, from game memory or from
-vision, and the player the obstacle bench runs.
+"""The controller's state in the real game (framework/interfaces.
+StateSource), from game memory or from vision.
 
-TruthState builds the state from game memory each frame: Mario's body and
-motion (smb_physics.NESPlayerMotion.from_ram), the solids from the exact
-labels (pixel_labels), the enemies from the game's slots with velocities
-averaged over their last SPEED_FRAMES frames (a Goomba walks half a pixel a
-frame, as 0 and 1 by turns: one frame's move says 0 or 1). PerceivedState
-builds it from what the Full SMB vision shows and the motion estimator
-estimates (smb_perceived.perceived): the difference is what perception
-costs the controller. ScriptedPlayer plays a chooser through the controller,
-deciding only while Mario stands (a plan made in the air would start from
-a standing jump).
+MemorySource builds the state from game memory each frame: Mario's body and
+motion (physics.NESPlayerMotion.from_ram), the solids from the exact labels
+(pixel_labels), the enemies from the game's slots with velocities averaged
+over their last SPEED_FRAMES frames (a Goomba walks half a pixel a frame,
+as 0 and 1 by turns: one frame's move says 0 or 1). VisionSource builds it
+from what the Full SMB vision shows in the screen and the motion estimator
+estimates (perception/state.perceived), and from nothing else: the
+difference between the two is what perception costs the controller. Both
+give None while nothing solid is known yet.
 """
 
 from typing import Optional
 
-from retroagi.domains.smb.controller import Controller, State
+from retroagi.domains.smb.controller import State
+from retroagi.domains.smb.perception.estimator import MotionEstimator
 from retroagi.domains.smb.perception.scene_labels import scene_from_labels
 from retroagi.domains.smb.perception.state import (
     HOP_SAMPLES,
@@ -28,7 +28,6 @@ from retroagi.domains.smb.perception.state import (
 )
 from retroagi.domains.smb.physics import NESPlayerMotion
 from retroagi.domains.smb.planner import Enemy, floor_behind, screen_edge
-from retroagi.domains.smb.scripted_chooser import ScriptedChooser
 
 from .pixel_labels import (
     ENEMY_KIND_CLASSES,
@@ -56,7 +55,7 @@ JUMP = 16
 SLOT_KINDS = {0x0D: "plant", 0x0E: "hopper", 0x33: "flier"}
 
 
-class TruthState:
+class MemorySource:
     """The controller's state from game memory."""
 
     def __init__(self, level: str):
@@ -71,7 +70,11 @@ class TruthState:
         self.previous_state, self.solids, self.seen, self.frame = None, [], {}, 0
         self.labelled_at = (None, 0)
 
-    def read(self, game) -> State:
+    def acted(self, action: int) -> None:
+        pass
+
+    def read(self, world) -> Optional[State]:
+        game = world.game
         ram = game.env.get_ram()
         truth = true_frame(ram, game.start)
         now = game.env.em.get_state()
@@ -126,6 +129,8 @@ class TruthState:
             # The enemies drawn in the labelled frame hide the floor under them.
             self.solids = floor_behind(solids_of(scene_from_labels(labelled.scene), truth["camera"]), enemies)
             self.labelled_at = (truth["camera"], self.frame - 1)
+        if not self.solids:
+            return None  # nothing labelled yet
         return State(
             body=tuple(float(v) for v in truth["mario"]),
             motion=NESPlayerMotion.from_ram(ram, top=truth["mario"][1]),
@@ -136,69 +141,30 @@ class TruthState:
         )
 
 
-class PerceivedState:
-    """The controller's state from the Full SMB vision and the executor's
-    estimates; the button pressed is told back (pressed)."""
+class VisionSource:
+    """The controller's state from the Full SMB vision and the motion
+    estimator; the button pressed is told back (acted)."""
 
     def __init__(self, vision):
         self.vision = vision
+        self.reset()
 
-    def reset(self):
-        from retroagi.domains.smb.perception.estimator import MotionEstimator
-
+    def reset(self) -> None:
         self.feedback, self.scene, self.items = MotionEstimator(), None, ItemTracker()
 
-    def read(self, screen) -> Optional[State]:
+    def read(self, world) -> Optional[State]:
         import torch
 
         with torch.no_grad():
-            self.scene = self.vision.scene([screen])[0]
+            self.scene = self.vision.scene([world.screen])[0]
         self.feedback.observe(self.scene)
         camera = self.feedback.camera_position
         self.items.observe([(b[0] + camera, b[1], b[2] + camera, b[3]) for b in self.scene.power_ups])
-        return perceived(self.feedback, self.scene, self.items)
-
-    def pressed(self, button: int) -> None:
-        if self.scene is not None:
-            self.feedback.executed(button, self.scene)
-
-
-class ScriptedPlayer:
-    """A chooser (``make_chooser(mode)``: the scripted chooser by default,
-    or core/outcome_chooser's) and the controller as an obstacle bench
-    player, on game memory, or on perception with ``vision`` (a Full SMB
-    vision model)."""
-
-    def __init__(self, level: str = "Level1-1", vision=None, make_chooser=None):
-        self.source = TruthState(level) if vision is None else PerceivedState(vision)
-        self.controller = Controller()
-        self.make_chooser = make_chooser or ScriptedChooser
-
-    def reset(self, seed: int, mode: str) -> None:
-        self.source.reset()
-        self.chooser = self.make_chooser(mode)
-        self.controller = Controller()
-        self.last_event, self.last_choice = None, None
-
-    def act(self, screen, game) -> int:
-        if isinstance(self.source, TruthState):
-            return self._act(self.source.read(game))
-        button = self._act(self.source.read(screen))
-        self.source.pressed(button)
-        return button
-
-    def _act(self, state: Optional[State]) -> int:
+        state = perceived(self.feedback, self.scene, self.items)
         if state is None or all(s.kind == "edge" for s in state.solids):
-            return 0  # nothing labelled yet
-        if (self.controller.choice is None or self.controller.event is not None) and not (
-            state.grounded and state.ready
-        ):
-            return 0  # decisions are made standing, Mario's speed known
-        if self.controller.choice is None or self.controller.event is not None:
-            self.last_event = self.controller.event
-            choice = self.chooser.decide(state, self.last_event, self.last_choice)
-            self.controller.start(choice, state)
-            self.last_choice = choice
-            if self.controller.event is not None:  # infeasible at once: decide again next frame
-                return 0
-        return self.controller.press(state)
+            return None  # Mario or anything solid not seen yet
+        return state
+
+    def acted(self, action: int) -> None:
+        if self.scene is not None:
+            self.feedback.executed(action, self.scene)

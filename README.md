@@ -1,33 +1,42 @@
 # RetroAGI
 
-A vision-based agent for Super Mario Bros.
+A vision-based agent for Super Mario Bros, built as a game-neutral framework
+with the game as its first domain: an adaptive controller plus
+interchangeable models, composed through declared interfaces
+([the framework](docs/framework.md)).
 
 ## Current design: choose and control
 
-Since 2026-11-07 the agent is being rebuilt around sparse decisions and a
-fast controller ([the plan](docs/choose-and-control-plan.md)):
+Since 2026-11-07 the agent is built around sparse decisions and a fast
+controller ([the plan](docs/choose-and-control-plan.md)). Five parts, each
+behind an interface in `retroagi/framework/interfaces.py`:
 
-1. **The executor** (`domains/smb/controller.py`, `domains/smb/planner.py`): a
-   model-based controller run every frame. It takes one choice at a time:
-   jump onto a thing, stomp or pass an enemy, run to a place, wait. It plans
-   the jump (run-up frames and how long the button is held) with the NES
-   motion model against what it sees, re-plans before takeoff and corrects
-   the flight in the air, and reports how the choice ended (landed,
-   stomped, arrived, a threat, infeasible).
-2. **The outcome network** (`framework/outcome_network.py`): from the state,
-   one pass predicts the outcome of every candidate choice at once (the
-   chance of dying, of being infeasible, of leaving Mario stuck, of
+1. **A state source** turns the world into the state the others read: in
+   the real game from vision alone (`domains/smb/perception/`,
+   `domains/smb/nes/sources.py`), in the simulator from its truth.
+2. **The choice space** (`domains/smb/choices.py`) lists what can be done
+   now: jump onto a thing, stomp or pass an enemy, run to a place, wait,
+   bump a block, collect an item.
+3. **The outcome network** (`framework/outcome_network.py`): from the
+   state, one pass predicts the outcome of every candidate choice at once
+   (the chance of dying, of being infeasible, of leaving Mario stuck, of
    reaching the flag, and the progress, frames and points). It learns from
-   outcomes measured, not taught: on random Block SMB levels every
-   candidate is played from saved states by the executor
-   (`framework/sampling.py`).
-3. **The chooser** (`framework/chooser.py`): the game's three rules on
-   those predictions, in order: don't die, progress to the right, get coins
-   and power-ups. A hand-written scripted chooser
-   (`domains/smb/scripted_chooser.py`) is kept to compare against.
+   outcomes measured, not taught: in practice worlds every candidate is
+   played from saved states by the controller (`framework/sampling.py`).
+4. **The chooser** (`framework/chooser.py`): fixed priorities on those
+   predictions, in order: don't die, progress to the right, get coins and
+   power-ups. A hand-written chooser (`domains/smb/scripted_chooser.py`) is
+   kept to compare against.
+5. **The controller** (`domains/smb/controller.py`, `planner.py`): a
+   model-based controller run every frame. It takes one choice at a time,
+   plans the jump (run-up frames and how long the button is held) with the
+   NES motion model against what it sees, re-plans before takeoff and
+   corrects the flight in the air, and reports how the choice ended
+   (landed, stomped, arrived, a threat, infeasible).
 
-Nothing learns on Full SMB: training data comes from random levels built
-in Block SMB from the real game's pieces and rules.
+Nothing learns on the real game: training data comes from random levels
+built in the Block SMB simulator from the real game's pieces and rules
+(`domains/smb/sim/`).
 
 Where it stands (2026-11-10), with outcome_20261109d (the default) and
 outcome_20261110h (trained with World 5-1's enemies):
@@ -48,19 +57,21 @@ The outcome network was trained only on Block SMB random levels; nothing
 learns on the real game. Full-level results shift from change to change.
 
 ```bash
-# score a player on the 24 obstacles of 1-1
-python -m retroagi.domains.smb.nes.obstacle_bench --bench data/full_smb_obstacles/Level1-1 --player scripted_vision
+# score an agent on the 24 obstacles of 1-1, from vision
+python -m retroagi.framework.bench --domain smb --bench data/full_smb_obstacles/Level1-1 --source vision --model data/outcome/outcome_20261109d.pt
+# play a whole level
+python -m retroagi.framework.play --domain smb --level Level1-1 --source vision --model data/outcome/outcome_20261109d.pt
 # the scripted chooser, or the outcome network's, on fresh random levels
-python -m retroagi.domains.smb.sim.levels --levels 100 --first-seed 100000 [--model data/outcome/outcome_20261109d.pt]
+python -m retroagi.framework.practice --domain smb --levels 100 --first-seed 100000 [--model data/outcome/outcome_20261109d.pt]
 # sample outcomes, then train the outcome network
-python -m retroagi.framework.sampling --levels 2000 --workers 14 --output data/datasets/block_smb/outcomes_NEW
-python -m retroagi.framework.training --data data/datasets/block_smb/outcomes_NEW --fresh data/datasets/block_smb/outcomes_fresh_20261108 --output artifacts/block_smb/outcome_NEW
+python -m retroagi.framework.sampling --domain smb --levels 2000 --workers 14 --output data/datasets/block_smb/outcomes_NEW
+python -m retroagi.framework.training --domain smb --data data/datasets/block_smb/outcomes_NEW --fresh data/datasets/block_smb/outcomes_fresh_NEW --output artifacts/block_smb/outcome_NEW
 ```
 
 ## Earlier design: the layered agent
 
 This is the design the rebuild replaces; its code and trainers are still in
-the repository. The hierarchy is **strategy → tactic → skill → predictive
+the repository (`retroagi/legacy`). The hierarchy is **strategy → tactic → skill → predictive
 executor**:
 
 1. **Strategy:** externally selected `speed_run` or `max_points` objective.
@@ -154,36 +165,28 @@ for what was decided, why, and what is still to be built.
 
 ```text
 retroagi/
-  legacy/core/
-    vision.py, scene_vision.py   # the vision transformer, its training and measurements
-    smb_pixel_types.py           # the pixel types and the objects built from them
-    smb_scene_labels.py          # true objects for training labels
-    smb_observer.py              # turns a screen into the report the layers read
-    tokens.py                    # strategy, tactics and spatial skill commands
-    layered_policy.py            # the tactic and skill layers and their memories
-    smb_agent.py                 # the agent: screens in, buttons out
-    smb_executor.py              # turns a skill command into buttons, frame by frame
-    smb_ground_control.py        # run commands: 8-frame predictive control with braking
-    smb_trajectory.py            # jump commands: hold-length search and flight correction
-    smb_spatial_feedback.py      # tracks the command's target and reports its progress
-    smb_physics.py               # Mario's NES motion, shared by both games
-    smb_planner.py               # the executor's jump planner (compiled)
-    smb_controller.py            # the executor: one choice at a time, every frame
-    smb_choices.py               # the candidate choices and the state's tokens
+  framework/                     # game-neutral: imports no domain
+    interfaces.py                # what a domain supplies; what the parts ask of each other
+    agent.py                     # the loop: state, chooser, controller, one action a frame
     outcome_network.py           # predicts every choice's outcome in one pass
-    outcome_chooser.py           # the three rules on those predictions
-  legacy/
-    block_smb/                   # the Block SMB game, layout families, teachers
-                                 # and the layer trainer (layered_train.py);
-                                 # game_levels.py: random levels of the game's pieces;
-                                 # outcome_sampling.py, outcome_train.py
-    full_smb/                    # emulator play, frame labels from game memory,
-                                 # the Full SMB evaluation of trained layers, the
-                                 # 1-1 obstacle bench and the scripted chooser
+    chooser.py                   # the fixed priorities on those predictions
+    sampling.py, training.py     # outcomes measured in practice worlds; the network trained on them
+    practice.py, bench.py, play.py   # practice worlds, obstacle benches, whole levels
+  domains/smb/                   # Super Mario Bros
+    domain.py                    # the game as the framework sees it
+    controller.py, planner.py    # one choice at a time, every frame; the jump planner (compiled)
+    physics.py                   # Mario's NES motion
+    choices.py                   # the candidate choices and the state's tokens
+    scripted_chooser.py          # the hand-written chooser
+    perception/                  # the vision transformer, tracks, motion estimate, vision to state
+    sim/                         # Block SMB: the simulator and random levels of the game's pieces
+    nes/                         # the real game: emulator, game memory, frame labels, obstacle benches
+  legacy/                        # the retired layered agent: its layers, teachers and curriculum
 scripts/
   vit/                           # train the two vision transformers
   vision/                        # measure the two vision transformers
-  tests/                         # the test suite
+  dev/                           # compare two recordings of behaviour (refactoring check)
+  tests/                         # the test suite (tests/legacy: the retired agent's)
 ```
 
 ## Supported Platforms

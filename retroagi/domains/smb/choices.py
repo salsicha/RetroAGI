@@ -1,9 +1,10 @@
 """The choices the chooser picks from and the state as the outcome network
 reads it (docs/choose-and-control-plan.md phases 3 and 4), the same in
-Block SMB and the real game.
+Block SMB and the real game: Super Mario Bros' choice space (framework/
+interfaces.ChoiceSpace).
 
 A choice is a verb, the thing it is about and a modifier, carried out by the
-executor (smb_controller.Controller):
+controller (controller.Controller):
 - "land" on a surface on screen, near, in the middle or far along it;
 - "stomp" an enemy on screen, or "pass" it, beyond it (modifier 0) or back
   on Mario's side (1);
@@ -12,11 +13,15 @@ executor (smb_controller.Controller):
 - "bump" a block over Mario's reach from below (a question block gives a coin
   or a mushroom; big Mario breaks a brick);
 - "collect" an item on screen (a mushroom).
-candidates lists them for a state; state_tokens turns the state into the
-network's tokens and says which slot each thing took.
+SPACE.candidates lists them for a state; SPACE.tokens turns the state into
+the network's tokens and says which slot each thing took; the rest of
+SPACE tells the chooser what it needs to remember what it tried where.
 """
 
 import numpy as np
+
+from retroagi.framework.interfaces import Candidate
+from retroagi.framework.outcome_network import ChoiceSpec, Kind, TokenGroup
 
 from .controller import Choice, State
 from .planner import ENEMY_KINDS, Goal
@@ -39,11 +44,41 @@ BUMP_REACH = 96
 SURFACE_SLOTS, ENEMY_SLOTS, ITEM_SLOTS = 24, 8, 2
 SURFACE_KINDS = ("ground", "pipe", "block", "question", "moving", "edge")
 MARIO_WIDTH, SURFACE_WIDTH, ENEMY_WIDTH, ITEM_WIDTH = 7, 4 + len(SURFACE_KINDS), 7 + len(ENEMY_KINDS), 6
+# The network's inputs are scaled to about one: x by the screen's width, y
+# by its height, speeds by 4 pixels a frame.
+X, Y, SPEED = 256.0, 240.0, 4.0
+# The token groups (Mario's own token gives the choices about no thing:
+# GENERAL) and the kinds of choice, in KINDS' order: each kind's variants on
+# its group's heads (a surface's: the three landings, then the bump; an
+# enemy's: the stomp, then the two passes).
+SPEC = ChoiceSpec(
+    groups=(
+        TokenGroup("mario", 0, MARIO_WIDTH, len(GENERAL), (X, Y, X, Y, SPEED, SPEED, 1.0)),
+        TokenGroup("surfaces", SURFACE_SLOTS, SURFACE_WIDTH, 4, (X, Y, X, Y) + (1.0,) * len(SURFACE_KINDS),
+                   present=(4, SURFACE_WIDTH)),
+        TokenGroup("enemies", ENEMY_SLOTS, ENEMY_WIDTH, 3, (X, Y, X, Y, SPEED, SPEED, 1.0) + (1.0,) * len(ENEMY_KINDS),
+                   present=(0, ENEMY_WIDTH)),
+        TokenGroup("items", ITEM_SLOTS, ITEM_WIDTH, 1, (X, Y, X, Y, SPEED, SPEED), present=(0, ITEM_WIDTH)),
+    ),
+    kinds=(
+        Kind("land", 1, 0, 3),
+        Kind("stomp", 2, 0, 1),
+        Kind("pass", 2, 1, 2),
+        Kind("run", 0, 0, 3),
+        Kind("wait", 0, 3, 2),
+        Kind("bump", 1, 3, 1),
+        Kind("collect", 3, 0, 1),
+    ),
+)
+# The chooser's memory of what it tried where: a spot is SPOT pixels square;
+# NEW_GROUND pixels beyond Mario's furthest so far everything is forgotten.
+SPOT = 8
+NEW_GROUND = 16
 
 
-def state_tokens(state: State) -> tuple:
-    """(mario [MARIO_WIDTH], surfaces [SURFACE_SLOTS, SURFACE_WIDTH], enemies
-    [ENEMY_SLOTS, ENEMY_WIDTH], items [ITEM_SLOTS, ITEM_WIDTH], slot of each
+def tokens(state: State) -> tuple:
+    """([mario [MARIO_WIDTH], surfaces [SURFACE_SLOTS, SURFACE_WIDTH], enemies
+    [ENEMY_SLOTS, ENEMY_WIDTH], items [ITEM_SLOTS, ITEM_WIDTH]], slot of each
     thing's ref): x relative to Mario's left side, y as on screen (his
     height says whether he is big); Mario's speeds (pixels a frame) and
     whether he stands; each surface's kind; each enemy's velocity, whether
@@ -70,12 +105,12 @@ def state_tokens(state: State) -> tuple:
     for k, i in enumerate(sorted(state.items, key=lambda i: abs(i.box[0] - x))[:ITEM_SLOTS]):
         items[k] = (i.box[0] - x, i.box[1], i.box[2] - x, i.box[3], i.vx, i.vy)
         slots[i.ref] = k
-    return mario, surfaces, enemies, items, slots
+    return [mario, surfaces, enemies, items], slots
 
 
 def candidates(state: State) -> list:
-    """Every candidate choice from ``state``: (Choice, kind, the ref of its
-    thing or None, modifier)."""
+    """Every candidate choice from ``state`` (framework Candidates: the
+    Choice, its kind, the ref of its thing or None, its modifier)."""
     body = state.body
     mx = (body[0] + body[2]) / 2
     out = []
@@ -84,22 +119,64 @@ def candidates(state: State) -> list:
     reach.sort(key=lambda s: max(s.x0 - mx, mx - s.x1, 0.0))
     for s in reach[:MAX_SURFACES]:
         for m, prefer in enumerate(PREFERS):
-            out.append((Choice("jump", Goal("land", s.ref, s.x0, s.x1, prefer=prefer, top=s.top)), 0, s.ref, m))
+            out.append(Candidate(Choice("jump", Goal("land", s.ref, s.x0, s.x1, prefer=prefer, top=s.top)), 0, s.ref, m))
     for e in sorted(state.enemies, key=lambda e: abs((e.box[0] + e.box[2]) / 2 - mx))[:MAX_ENEMIES]:
         beyond = 1 if (e.box[0] + e.box[2]) / 2 >= mx else -1
-        out.append((Choice("jump", Goal("stomp", e.ref)), 1, e.ref, 0))
-        out.append((Choice("jump", Goal("pass", e.ref, side=beyond)), 2, e.ref, 0))
-        out.append((Choice("jump", Goal("pass", e.ref, side=-beyond)), 2, e.ref, 1))
-    out.append((Choice("run", x=mx + RUN_SHORT, keep_speed=True), 3, None, 0))
-    out.append((Choice("run", x=mx + RUN_LONG, keep_speed=True), 3, None, 1))
-    out.append((Choice("run", x=mx - RUN_BACK), 3, None, 2))
+        out.append(Candidate(Choice("jump", Goal("stomp", e.ref)), 1, e.ref, 0))
+        out.append(Candidate(Choice("jump", Goal("pass", e.ref, side=beyond)), 2, e.ref, 0))
+        out.append(Candidate(Choice("jump", Goal("pass", e.ref, side=-beyond)), 2, e.ref, 1))
+    out.append(Candidate(Choice("run", x=mx + RUN_SHORT, keep_speed=True), 3, None, 0))
+    out.append(Candidate(Choice("run", x=mx + RUN_LONG, keep_speed=True), 3, None, 1))
+    out.append(Candidate(Choice("run", x=mx - RUN_BACK), 3, None, 2))
     for m, frames in enumerate(WAITS):
-        out.append((Choice("wait", frames=frames), 4, None, m))
+        out.append(Candidate(Choice("wait", frames=frames), 4, None, m))
     above = [s for s in state.solids if s.kind in ("block", "question") and s.bottom <= body[1]
              and s.bottom >= body[3] - BUMP_REACH and s.x1 > mx - BEHIND and s.x0 < mx + AHEAD]
     above.sort(key=lambda s: abs((s.x0 + s.x1) / 2 - mx))
     for s in above[:MAX_BUMPS]:
-        out.append((Choice("jump", Goal("bump", s.ref, s.x0, s.x1, top=s.bottom)), 5, s.ref, 0))
+        out.append(Candidate(Choice("jump", Goal("bump", s.ref, s.x0, s.x1, top=s.bottom)), 5, s.ref, 0))
     for i in sorted(state.items, key=lambda i: abs((i.box[0] + i.box[2]) / 2 - mx))[:ITEM_SLOTS]:
-        out.append((Choice("jump", Goal("collect", i.ref)), 6, i.ref, 0))
+        out.append(Candidate(Choice("jump", Goal("collect", i.ref)), 6, i.ref, 0))
     return out
+
+
+class Choices:
+    """Super Mario Bros' choice space (framework/interfaces.ChoiceSpace)."""
+
+    spec = SPEC
+    new_ground = NEW_GROUND
+    candidates = staticmethod(candidates)
+    tokens = staticmethod(tokens)
+
+    @staticmethod
+    def place(state: State) -> tuple:
+        """(Mario's x, the spot he stands at)."""
+        x = state.body[0]
+        return x, (round(x / SPOT), round(state.body[3] / SPOT))
+
+    @staticmethod
+    def signature(candidate: Candidate, state: State) -> tuple:
+        """What a choice is, the same from one decision to the next: its
+        kind and modifier, and for a landing where it lands (its slot moves
+        as the camera scrolls)."""
+        goal = candidate.choice.goal
+        if goal is not None and goal.kind in ("land", "bump"):
+            return candidate.kind, candidate.modifier, round(goal.x0 / SPOT)
+        return candidate.kind, candidate.modifier
+
+    @staticmethod
+    def waits(candidate: Candidate) -> bool:
+        return candidate.choice.verb == "wait"
+
+    @staticmethod
+    def still(candidate: Candidate) -> bool:
+        """About no enemy (a landing, a run, a bump): whether the controller
+        can carry it out from a spot does not change as enemies move."""
+        return KINDS[candidate.kind] in ("land", "run", "bump")
+
+    @staticmethod
+    def changing(state: State) -> bool:
+        return bool(state.enemies)
+
+
+SPACE = Choices()

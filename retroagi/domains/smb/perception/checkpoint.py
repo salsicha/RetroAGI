@@ -25,7 +25,7 @@ StateDict = Mapping[str, Any]
 def collect_code_revision_metadata(repo_root: Optional[Path] = None) -> dict[str, Any]:
     """Return best-effort source revision metadata for checkpoint traceability."""
 
-    root = Path(repo_root) if repo_root is not None else Path(__file__).resolve().parents[2]
+    root = Path(repo_root) if repo_root is not None else Path(__file__).resolve().parents[4]
     return dict(_collect_code_revision_metadata(str(root)))
 
 

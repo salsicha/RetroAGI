@@ -1,9 +1,10 @@
 """Random levels of the real game's pieces in Block SMB
 (domains/smb/sim/levels.py, docs/choose-and-control-plan.md phase 2)."""
 
-from retroagi.domains.smb.scripted_chooser import ScriptedChooser
-from retroagi.domains.smb.sim.env import MarioScenarioEnv
-from retroagi.domains.smb.sim.levels import FLOOR, SCROLL_X, BlockTruthState, play, random_level
+from retroagi.domains.smb.domain import DOMAIN
+from retroagi.domains.smb.sim.levels import FLOOR, SCROLL_X, random_level
+from retroagi.domains.smb.sim.world import SimSource, SimWorld
+from retroagi.framework import practice
 
 
 def test_a_seed_always_makes_the_same_level_of_the_games_pieces():
@@ -33,10 +34,10 @@ def test_a_seed_always_makes_the_same_level_of_the_games_pieces():
 
 
 def test_the_state_shows_only_the_screen_and_its_left_edge():
-    level = random_level(3)
-    env = MarioScenarioEnv(world_width=level["world_width"])
-    env.reset(scenario=level)
-    state = BlockTruthState().read(env)
+    world = SimWorld(random_level(3))
+    world.reset()
+    env = world.env
+    state = SimSource().read(world)
     assert state.grounded and state.body[3] == FLOOR
     assert all(s.x1 <= env.camera_x + env.width for s in state.solids)
     assert [s.kind for s in state.solids].count("edge") == 1
@@ -45,8 +46,8 @@ def test_the_state_shows_only_the_screen_and_its_left_edge():
 
 
 def test_the_scripted_chooser_finishes_a_random_level():
-    result = play(random_level(1), ScriptedChooser("speed_run"))
-    assert result["end"] == "finished"
+    rows = practice.run(DOMAIN, [1])
+    assert rows[0]["mode"] == "speed_run" and rows[0]["end"] == "finished"
 
 
 def test_the_levels_hold_5_1s_plants_paratroopas_and_cannons():

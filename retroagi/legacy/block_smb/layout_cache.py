@@ -11,8 +11,11 @@ def code_fingerprint() -> str:
     digest = hashlib.sha256()
     root = Path(__file__).resolve().parents[2]
     unused = {"layered_train.py", "cli.py", "vision.py", "vision_frames.py"}
-    paths = [*root.glob("legacy/block_smb/*.py"), *root.glob("core/smb_*.py")]
-    paths.extend(root / "core" / name for name in ("actions.py", "tokens.py"))
+    # The curriculum's own code, and the game's they are certified against:
+    # its motion and controller, the simulator, perception.
+    paths = [*root.glob("legacy/block_smb/*.py"), *root.glob("legacy/core/smb_*.py"), root / "legacy/core/tokens.py",
+             *root.glob("domains/smb/*.py"), *root.glob("domains/smb/sim/*.py"),
+             *root.glob("domains/smb/perception/*.py")]
     for path in sorted(paths):
         if path.name not in unused:
             digest.update(path.name.encode())

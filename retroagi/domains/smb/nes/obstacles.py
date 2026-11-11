@@ -26,7 +26,7 @@ back to it, vision misread the cut-off things beside him); otherwise the
 nearest usable kept state before it is taken (memory can read "standing" a
 frame before a fall, and the enemies of one group are still about at the
 next one's start).
-It is passed when Mario stands PASSED pixels beyond its end (obstacle_bench).
+It is passed when Mario stands PASSED pixels beyond its end (framework/bench.py).
 """
 
 import json

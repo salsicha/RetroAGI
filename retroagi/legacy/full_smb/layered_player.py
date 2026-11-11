@@ -1,14 +1,14 @@
-"""The layered agent on the obstacle bench (obstacle_bench.run_bench).
+"""The layered agent on the obstacle bench (framework/bench.run_bench).
 
     python -m retroagi.legacy.full_smb.layered_player --bench DIR \\
         --checkpoint AGENT.pt --tracker TRACKER.pt [--runs 4] [--output OUT.json]
 """
 
 import argparse
-import json
 from pathlib import Path
 
-from retroagi.domains.smb.nes.obstacle_bench import run_bench
+from retroagi.domains.smb.nes.world import NESWorld
+from retroagi.framework.bench import report, run_bench
 
 
 class LayeredPlayer:
@@ -39,9 +39,9 @@ class LayeredPlayer:
         self.torch.manual_seed(1000 * (mode == "max_points") + seed)
         self.agents.reset(0, StrategyToken(mode, 1))
 
-    def act(self, screen, game) -> int:
+    def act(self, world) -> int:
         with self.torch.no_grad():
-            return self.agents.act([screen], [0], sample=("skill", "tactic"))[0].button
+            return self.agents.act([world.screen], [0], sample=("skill", "tactic"))[0].button
 
 
 def main(argv=None) -> int:
@@ -53,10 +53,9 @@ def main(argv=None) -> int:
     parser.add_argument("--only", nargs="*", default=())
     parser.add_argument("--output", type=Path)
     args = parser.parse_args(argv)
-    results = run_bench(args.bench, lambda: LayeredPlayer(args.checkpoint, args.tracker), args.runs, only=args.only)
-    print(f"obstacles passed on average: {results['passed']:.2f}")
-    if args.output:
-        args.output.write_text(json.dumps(results, indent=1) + "\n")
+    results = run_bench(args.bench, NESWorld, lambda: LayeredPlayer(args.checkpoint, args.tracker),
+                        ("speed_run", "max_points"), args.runs, only=args.only)
+    report(results, args.output)
     return 0
 
 

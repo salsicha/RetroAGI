@@ -98,6 +98,12 @@ class State:
     # boxes and velocities.
     items: list = field(default_factory=list)
 
+    @property
+    def decidable(self) -> bool:
+        """Whether a choice can be made now: Mario stands and his motion is
+        known (a plan made in the air would start from a standing jump)."""
+        return self.grounded and self.ready
+
 
 def on_the_way(state: State, enemy: Enemy) -> bool:
     """Whether ``enemy`` is on Mario's way: its feet within LEVEL of his, or

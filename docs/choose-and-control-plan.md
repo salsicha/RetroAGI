@@ -83,7 +83,7 @@ Each phase ends with a measurement that decides whether to go on.
 
 - **Phase 0 (2026-11-07, done).** data/full_smb_obstacles/Level1-1: 24
   obstacles from the first Goomba to the flag, each with a checked start
-  state (retroagi/domains/smb/nes/obstacles.py, obstacle_bench.py). The
+  state (retroagi/domains/smb/nes/obstacles.py, retroagi/framework/bench.py). The
   learned agent of the old design (tactic_20261104) passes 60%.
 - **Phase 1 (2026-11-07, done with game memory).** The jump planner
   (retroagi/domains/smb/planner.py) and controller (smb_controller.py), driven
@@ -163,9 +163,9 @@ Each phase ends with a measurement that decides whether to go on.
   and the flag. Goombas follow the game's rules (wake on screen, walk left
   at half a pixel a frame, turn at walls, fall off ledges) and the camera
   keeps Mario where the real game does (his left side at 115 on screen, a
-  new level setting `scroll_x`; other layouts keep 85). BlockTruthState
-  gives the controller what is on screen, as game memory does in the real
-  game; `python -m retroagi.domains.smb.sim.levels --levels 100`
+  new level setting `scroll_x`; other layouts keep 85). SimSource
+  (sim/world.py) gives the controller what is on screen, as game memory does
+  in the real game; `python -m retroagi.framework.practice --domain smb --levels 100`
   plays the scripted chooser through them (0.5 ms a frame). On 100 levels
   it finished 99 speed runs and 98 max-points runs (from 92 and 98 at
   first). What the levels showed:

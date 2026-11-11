@@ -53,8 +53,8 @@ Built and measured with the scripted chooser standing in for the chooser
 - from game memory, 24/24 obstacles and 1-1 finished in both modes; from
   vision alone, 0.98 of the obstacles and the speed run finished (35fb5d2,
   43fb55f);
-- random Block SMB levels from 1-1's pieces (legacy/block_smb/
-  game_levels.py): 99 of 100 finished in the speed run, 98 in max points;
+- random Block SMB levels from 1-1's pieces (domains/smb/sim/
+  levels.py): 99 of 100 finished in the speed run, 98 in max points;
   the fixes they needed left 1-1 at 24/24 from game memory and 0.92 from
   vision (max points at Goomba pairs).
 Not built yet: outcome sampling (phase 3) and the outcome network and its

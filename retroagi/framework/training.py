@@ -1,15 +1,16 @@
-"""Train the outcome network (framework/outcome_network.py) on sampled outcomes
-(outcome_sampling.py) and measure it on outcomes sampled on fresh levels.
+"""Train the outcome network (outcome_network.py) on sampled outcomes
+(sampling.py) and measure it on outcomes sampled in fresh practice worlds.
 
 Each step takes BATCH sampled choices at random, runs the network on their
 states and compares its predictions for those choices with what happened:
-the chances (death during the choice or after it, infeasible, reaching the
-flag) by cross-entropy, the amounts (progress, frames, points, at the
-network's SCALES) by a Huber loss on choices the executor could carry out.
-The measures, per kind of choice: how well the death chance ranks deaths
-first (the area under the ROC curve), its mean error, how often
-"infeasible" and "stuck" are called right, and the progress error in
-pixels.
+the chances (death during the choice or after it, infeasible, finishing the
+task, stuck) by cross-entropy, the amounts (progress, frames, points, at
+the network's SCALES) by a Huber loss on choices the controller could carry
+out. The measures, per kind of choice: how well the death chance ranks
+deaths first (the area under the ROC curve), its mean error, how often
+"infeasible" and "stuck" are called right, and the progress error.
+
+    python -m retroagi.framework.training --domain smb --data FOLDER --fresh FOLDER --output FOLDER
 """
 
 import json
@@ -19,29 +20,36 @@ import numpy as np
 import torch
 from torch import nn
 
-from retroagi.domains.smb.choices import KINDS
-
+from . import registry
 from .devices import select_device
-from .outcome_network import AMOUNTS, CHANCES, SCALES, OutcomeConfig, OutcomeNetwork, pick
-from .sampling import ENDS, OUTCOME_FIELDS, load
+from .outcome_network import (
+    AMOUNTS,
+    CHANCES,
+    SCALES,
+    ChoiceSpec,
+    OutcomeConfig,
+    OutcomeNetwork,
+    pick,
+    save,
+)
+from .sampling import OUTCOME_FIELDS, load
 
 BATCH = 2048
 STEPS = 20_000
 LEARNING_RATE = 3e-4
-INFEASIBLE = ENDS.index("infeasible")
 
 
-def targets(outcomes: np.ndarray) -> np.ndarray:
+def targets(outcomes: np.ndarray, ends: tuple) -> np.ndarray:
     """[N, PREDICTIONS] from the sampled OUTCOME_FIELDS: death (during or
-    after), infeasible (the executor ended it before its first frame: found
-    infeasible, or a run blocked at once; a blocked run counted as feasible
+    after), infeasible (the controller ended it before its first frame:
+    found infeasible, or blocked at once; a blocked run counted as feasible
     was picked again and again against a wall), finished, stuck, then
     progress, frames and points at the network's SCALES."""
     f = {name: outcomes[:, k] for k, name in enumerate(OUTCOME_FIELDS)}
     nothing = (f["frames"] == 0) & (f["died"] == 0) & (f["finished"] == 0)
     return np.stack([
         np.maximum(f["died"], f["died_after"]),
-        ((f["end"] == INFEASIBLE) | nothing).astype(np.float32),
+        ((f["end"] == ends.index("infeasible")) | nothing).astype(np.float32),
         f["finished"],
         f["stuck"],
         f["progress"] / SCALES[0],
@@ -51,26 +59,24 @@ def targets(outcomes: np.ndarray) -> np.ndarray:
 
 
 class Data:
-    """A folder of shards on ``device``: the states' tokens, the choices
-    (state, kind, slot, modifier) and their targets."""
+    """A folder of shards on ``device``: the states' tokens (one tensor per
+    token group of ``spec``), the choices (state, kind, slot, modifier) and
+    their targets."""
 
-    def __init__(self, folder: str, device):
+    def __init__(self, folder: str, spec: ChoiceSpec, ends: tuple, device):
         d = load(folder)
-        self.mario = torch.as_tensor(d["mario"], device=device)
-        self.surfaces = torch.as_tensor(d["surfaces"], device=device)
-        self.enemies = torch.as_tensor(d["enemies"], device=device)
-        self.items = torch.as_tensor(d["items"], device=device)
+        self.spec = spec
+        self.tokens = [torch.as_tensor(d[g.name], device=device) for g in spec.groups]
         self.choices = torch.as_tensor(d["choices"].astype(np.int64), device=device)
-        self.targets = torch.as_tensor(targets(d["outcomes"]), device=device)
+        self.targets = torch.as_tensor(targets(d["outcomes"], ends), device=device)
 
     def __len__(self):
         return len(self.choices)
 
     def outputs(self, model, rows):
         c = self.choices[rows]
-        s = c[:, 0]
-        out = model(self.mario[s], self.surfaces[s], self.enemies[s], self.items[s])
-        return pick(out, c[:, 1], c[:, 2], c[:, 3]), self.targets[rows]
+        out = model(*(t[c[:, 0]] for t in self.tokens))
+        return pick(self.spec, out, c[:, 1], c[:, 2], c[:, 3]), self.targets[rows]
 
 
 def loss_of(predicted, target):
@@ -105,7 +111,8 @@ def measure(model, data: Data, batch: int = 8192) -> dict:
     kinds = data.choices[:, 1].cpu().numpy()
     chance = 1 / (1 + np.exp(-p[:, list(CHANCES)]))
     out = {}
-    for name, sel in [("all", np.ones(len(p), bool))] + [(k, kinds == i) for i, k in enumerate(KINDS)]:
+    names = data.spec.kind_names()
+    for name, sel in [("all", np.ones(len(p), bool))] + [(k, kinds == i) for i, k in enumerate(names)]:
         if not sel.any():
             continue
         feasible = sel & (t[:, 1] < 0.5)
@@ -116,17 +123,18 @@ def measure(model, data: Data, batch: int = 8192) -> dict:
             "death_error": float(np.abs(chance[sel, 0] - t[sel, 0]).mean()),
             "infeasible_right": float(((chance[sel, 1] > 0.5) == (t[sel, 1] > 0.5)).mean()),
             "stuck_right": float(((chance[sel, 3] > 0.5) == (t[sel, 3] > 0.5)).mean()),
-            "progress_error_px": float(np.abs(p[feasible, 4] - t[feasible, 4]).mean() * SCALES[0]) if feasible.any() else None,
+            "progress_error": float(np.abs(p[feasible, 4] - t[feasible, 4]).mean() * SCALES[0]) if feasible.any() else None,
         }
     return out
 
 
-def train(data_folder: str, eval_folder: str, output: str, steps: int = STEPS, batch: int = BATCH,
+def train(domain, data_folder: str, eval_folder: str, output: str, steps: int = STEPS, batch: int = BATCH,
           seed: int = 0, config: OutcomeConfig = OutcomeConfig()) -> dict:
     torch.manual_seed(seed)
     device = select_device("auto")
-    data, fresh = Data(data_folder, device), Data(eval_folder, device)
-    model = OutcomeNetwork(config).to(device)
+    spec = domain.space.spec
+    data, fresh = Data(data_folder, spec, domain.ends, device), Data(eval_folder, spec, domain.ends, device)
+    model = OutcomeNetwork(spec, config).to(device)
     optimizer = torch.optim.AdamW(model.parameters(), lr=LEARNING_RATE)
     schedule = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, steps)
     Path(output).mkdir(parents=True, exist_ok=True)
@@ -146,31 +154,24 @@ def train(data_folder: str, eval_folder: str, output: str, steps: int = STEPS, b
             print(f"step {step} loss {float(loss):.4f} fresh: death auc {a['death_auc']:.3f} "
                   f"error {a['death_error']:.3f} infeasible right {a['infeasible_right']:.3f} "
                   f"stuck right {a['stuck_right']:.3f} "
-                  f"progress {a['progress_error_px']:.1f} px", flush=True)
-    torch.save({"config": config.__dict__, "model": model.state_dict(), "log": log}, f"{output}/outcome.pt")
+                  f"progress {a['progress_error']:.1f}", flush=True)
+    save(model, f"{output}/outcome.pt", log)
     Path(f"{output}/measures.json").write_text(json.dumps(log[-1], indent=1))
     return log[-1]
-
-
-def load_model(path: str, device="cpu") -> OutcomeNetwork:
-    saved = torch.load(path, map_location=device)
-    config = {"enemy_width": saved["model"]["enemy_in.weight"].shape[1], **saved["config"]}
-    model = OutcomeNetwork(OutcomeConfig(**config)).to(device)
-    model.load_state_dict(saved["model"])
-    return model.eval()
 
 
 def main(argv=None) -> int:
     import argparse
 
     parser = argparse.ArgumentParser(description="Train the outcome network on sampled outcomes")
+    parser.add_argument("--domain", default="smb")
     parser.add_argument("--data", required=True)
-    parser.add_argument("--fresh", required=True, help="outcomes sampled on levels not trained on")
+    parser.add_argument("--fresh", required=True, help="outcomes sampled in practice worlds not trained on")
     parser.add_argument("--output", required=True)
     parser.add_argument("--steps", type=int, default=STEPS)
     parser.add_argument("--batch", type=int, default=BATCH)
     args = parser.parse_args(argv)
-    final = train(args.data, args.fresh, args.output, args.steps, args.batch)
+    final = train(registry.load(args.domain), args.data, args.fresh, args.output, args.steps, args.batch)
     print(json.dumps(final["fresh"], indent=1))
     return 0
 
