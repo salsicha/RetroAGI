@@ -18,7 +18,7 @@ from retroagi.framework.chooser import OutcomeChooser
 
 from .choices import KINDS, RUN_BACK, RUN_LONG, SPACE
 from .controller import Choice, Controller
-from .planner import Goal
+from .planner import RULES, Goal
 from .scripted_chooser import ScriptedChooser
 
 # What a point is worth, in pixels of progress a frame, in each way to play.
@@ -44,9 +44,12 @@ class SuperMarioBros:
             "finished", "edge")
     space = SPACE
     sources = ("memory", "vision")
+    # The controller's model of how enemies and items move (hand-written
+    # rules by kind; replace it to try an identified or a learned one).
+    dynamics = RULES
 
     def controller(self) -> Controller:
-        return Controller()
+        return Controller(self.dynamics)
 
     def chooser(self, predictor, mode: str) -> OutcomeChooser:
         return OutcomeChooser(predictor, self.space, POINT_VALUE[mode])

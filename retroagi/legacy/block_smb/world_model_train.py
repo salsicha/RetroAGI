@@ -328,7 +328,7 @@ def _forward(policy, episodes, device, tried_weight=1.0, collect=None):
                     collect.append(("tried", episodes[i]["family"], predicted["mean"][j], records[j], torch.sigmoid(predicted["success"][j]), -1.0, 0.0))
         hidden, cell = hidden.clone(), cell.clone()
         hidden[active], cell[active] = stepped
-    total = sum(l * w for l, w in zip(losses, weights)) / max(1.0, sum(weights))
+    total = sum(loss * w for loss, w in zip(losses, weights)) / max(1.0, sum(weights))
     return total
 
 

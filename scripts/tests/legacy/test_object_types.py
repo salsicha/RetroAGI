@@ -72,7 +72,9 @@ def test_a_vision_model_with_a_type_head_reports_the_type_it_sees():
     model = SceneVisionTransformer(dim=16, depth=1, heads=4, object_types=OBJECT_TYPE_SLOTS)
     heads = model.heads(np.zeros((1, 240, 256, 3), np.uint8))
     targets = scene_targets(_labels({1: 5}))
-    one = lambda index, size: torch.nn.functional.one_hot(torch.as_tensor(index), size).float() * 20
+    def one(index, size):
+        return torch.nn.functional.one_hot(torch.as_tensor(index), size).float() * 20
+
     heads = {name: value.detach() for name, value in heads.items()}
     heads["pixel_logits"] = one(torch.as_tensor(targets["types"]).long(), 10).permute(2, 0, 1)[None]
     heads["kind_logits"] = one(torch.as_tensor(targets["kind"]).clamp_min(0), 4).permute(2, 0, 1)[None]

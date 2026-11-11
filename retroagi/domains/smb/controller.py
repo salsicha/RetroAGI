@@ -34,6 +34,7 @@ from .planner import (
     BLOCK_KINDS,
     BUTTON,
     HORIZON,
+    RULES,
     Enemy,
     Goal,
     Plan,
@@ -176,9 +177,11 @@ def stopping_distance(motion: NESPlayerMotion, direction: int) -> float:
 
 class Controller:
     """One choice at a time; ``press(state)`` gives this frame's button and
-    sets ``event`` when the choice has ended."""
+    sets ``event`` when the choice has ended. ``dynamics``: its model of how
+    the other things move (planner.RULES, written by hand, by default)."""
 
-    def __init__(self):
+    def __init__(self, dynamics=RULES):
+        self.dynamics = dynamics
         self.choice: Optional[Choice] = None
         self.plan: Optional[Plan] = None
         self.frame = 0
@@ -203,7 +206,7 @@ class Controller:
             target = (thing.box[0] + thing.box[2]) / 2 if thing else middle
             direction = 1 if target >= middle else -1
         self.plan = plan_jump(goal, state.motion, state.body, state.solids, state.enemies, direction,
-                              latest_takeoff=latest_takeoff, items=state.items)
+                              latest_takeoff=latest_takeoff, items=state.items, dynamics=self.dynamics)
         # The plan's first button is pressed this frame (or, from start, the
         # first press).
         self.plan_frame = max(0, self.frame - 1)
@@ -236,7 +239,8 @@ class Controller:
                 # pass over two Koopas, vision's one, failed in the run-up,
                 # and Mario coasted into them).
                 fallback = plan_jump(None, state.motion, state.body, state.solids, state.enemies,
-                                     plan.direction, latest_takeoff=plan.pre_run - step, items=state.items)
+                                     plan.direction, latest_takeoff=plan.pre_run - step, items=state.items,
+                                     dynamics=self.dynamics)
                 if fallback is None:
                     return 0
                 self.plan, self.plan_frame, self.event = fallback, max(0, self.frame - 1), None
@@ -278,7 +282,7 @@ class Controller:
         hold_left = next((k for k, b in enumerate(rest) if b not in (2, 4, 5)), len(rest))
         aim = (plan.outcome.body[0] + plan.outcome.body[2]) / 2
         flight = plan_flight(goal, state.motion, state.body, state.solids, state.enemies, plan.direction,
-                             hold_left, aim, items=state.items)
+                             hold_left, aim, items=state.items, dynamics=self.dynamics)
         if flight is None or flight.buttons == rest[:len(flight.buttons)]:
             return plan, step
         if flight.outcome.stomped is None:

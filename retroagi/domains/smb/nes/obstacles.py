@@ -27,6 +27,8 @@ nearest usable kept state before it is taken (memory can read "standing" a
 frame before a fall, and the enemies of one group are still about at the
 next one's start).
 It is passed when Mario stands PASSED pixels beyond its end (framework/bench.py).
+
+    python -m retroagi.domains.smb.nes.obstacles --level Level5-1
 """
 
 import json
@@ -38,11 +40,11 @@ from retroagi.domains.smb.perception.pixel_types import TYPE_ID
 from retroagi.domains.smb.perception.scene_labels import scene_from_labels
 
 from .pixel_labels import PLAYER_FLOAT_STATE, Unexplained, label_frame, state_blocks
+from .truth import true_frame
+from .vision_frames import _dying, played_frames
 
 # [Player_X_Speed]
 PLAYER_X_SPEED = 0x57
-from .truth import true_frame
-from .vision_frames import _dying, played_frames
 
 # Pixels of Mario's progress between kept states.
 BUCKET = 16
@@ -292,3 +294,24 @@ def save_bench(level: str, level_map: LevelMap, states: dict, folder: Path) -> l
     index = {"level": level, "obstacles": saved, "map": asdict(level_map)}
     (folder / "index.json").write_text(json.dumps(index, indent=1) + "\n")
     return saved
+
+
+def main(argv=None) -> int:
+    import argparse
+
+    parser = argparse.ArgumentParser(description="Map a level's obstacles and save a start state before each")
+    parser.add_argument("--level", required=True, help="a saved level start, e.g. Level5-1")
+    parser.add_argument("--output", type=Path, default=None, help="the bench folder (data/full_smb_obstacles/LEVEL)")
+    parser.add_argument("--seeds", type=int, nargs="*", default=(1, 2, 3), help="one sweep of the level per seed")
+    args = parser.parse_args(argv)
+    folder = args.output or Path("data/full_smb_obstacles") / args.level
+    level_map, states = sweeps(args.level, tuple(args.seeds))
+    saved = save_bench(args.level, level_map, states, folder)
+    starts = len({o["start_x"] for o in saved})
+    print(f"{args.level}: {len(saved)} obstacles from {starts} distinct starts; the level seen to x "
+          f"{level_map.furthest_x}, its end at {level_map.finish_x}")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

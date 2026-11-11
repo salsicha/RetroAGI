@@ -71,6 +71,8 @@ class FakeWorld:
 
 
 class StillPlayer:
+    idle = 0
+
     def reset(self, seed, mode):
         pass
 
@@ -80,8 +82,23 @@ class StillPlayer:
 
 def test_passing_dying_and_stalling():
     obstacle = {"x0": 450, "x1": 482}
-    passed = bench.attempt(FakeWorld(speed=2), StillPlayer(), 0, "speed_run", obstacle)
+    (passed,) = bench.attempts(FakeWorld(speed=2), StillPlayer(), 0, "speed_run", [obstacle])
     assert passed["end"] == "passed" and passed["frames"] == (482 + bench.PASSED - 400) // 2
-    assert bench.attempt(FakeWorld(speed=2, dies_at=10), StillPlayer(), 0, "speed_run", obstacle)["end"] == "died"
-    stalled = bench.attempt(FakeWorld(speed=0), StillPlayer(), 0, "speed_run", obstacle)
+    (died,) = bench.attempts(FakeWorld(speed=2, dies_at=10), StillPlayer(), 0, "speed_run", [obstacle])
+    assert died["end"] == "died"
+    (stalled,) = bench.attempts(FakeWorld(speed=0), StillPlayer(), 0, "speed_run", [obstacle])
     assert stalled == {"end": "stalled", "frames": bench.ATTEMPT_FRAMES, "furthest": 400}
+
+
+def test_one_play_scores_every_obstacle_of_its_start_and_seeds_wait():
+    near, far = {"x0": 450, "x1": 482}, {"x0": 600, "x1": 640}
+    # The near one is passed on the way to the far one, as in a play of its own.
+    first, second = bench.attempts(FakeWorld(speed=2), StillPlayer(), 0, "speed_run", [near, far])
+    assert first == bench.attempts(FakeWorld(speed=2), StillPlayer(), 0, "speed_run", [near])[0]
+    assert second["end"] == "passed" and second["frames"] > first["frames"]
+    # Dying on the way counts against every obstacle not yet passed.
+    first, second = bench.attempts(FakeWorld(speed=2, dies_at=80), StillPlayer(), 0, "speed_run", [near, far])
+    assert (first["end"], second["end"]) == ("passed", "died")
+    # A later seed waits first: the world has moved on before the agent acts.
+    waited = bench.attempts(FakeWorld(speed=2), StillPlayer(), 1, "speed_run", [near])[0]
+    assert waited["frames"] == first["frames"] - bench.START_WAITS[1]

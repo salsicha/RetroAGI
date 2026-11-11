@@ -90,12 +90,13 @@ benches from game memory and from vision.
 
 ## What is not general yet
 
-- **The dynamics model is written by hand.** Mario's motion is transcribed
-  from the game (`domains/smb/physics.py`), and each kind of enemy moves by
-  a hand-written rule in the planner. Nothing is identified or learned from
-  what the agent sees. This is where adaptive control has to go: the
-  `Dynamics` interface is declared, but the planner does not yet take a
-  dynamics object.
+- **The dynamics model is written by hand.** The controller takes its model
+  of how enemies and items move as a part that can be swapped
+  (`planner.RULES`, `Controller(dynamics=...)`), but the only one there is
+  a hand-written rule per kind of enemy. Mario's own motion is transcribed
+  from the game (`domains/smb/physics.py`) and compiled into the planner.
+  Nothing is identified or learned from what the agent sees yet: this is
+  where adaptive control has to go.
 - **Perception is trained on labels read from this game's memory**, and the
   collision boxes inside drawn sprites are entered by hand.
 - **The simulator is a hand copy of the game's rules**; where it differs

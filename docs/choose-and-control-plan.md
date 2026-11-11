@@ -390,3 +390,28 @@ Each phase ends with a measurement that decides whether to go on.
   A check before each long sampling run now compares how sampled choices
   end with the last set (runs ending at an edge fell from 35% to 13% once
   pipes stopped counting as pits).
+- **The redesign: a game-neutral framework with the game as a domain,
+  2026-11-11.** The user's goal for the project: general to any game and
+  later any robot, a combination of adaptive control and interchangeable
+  models, composable. The code was rebuilt to that shape without changing
+  what the agent does (play is deterministic: random levels, sampled
+  outcomes and the 1-1 and 5-1 benches, from game memory and from vision,
+  reproduce the recordings made before the redesign):
+  - `retroagi/framework` knows no game. It declares what a domain supplies
+    (interfaces.py: a world, a state source, a choice space, a controller, a
+    dynamics model) and provides the rest: the agent loop, the outcome
+    network (its shape from the domain's choice space, saved with it), the
+    chooser, outcome sampling, training, practice, the obstacle bench.
+  - `retroagi/domains/smb` is Super Mario Bros behind those interfaces:
+    controller and planner, choices, perception, the simulator (sim/) and
+    the real game (nes/).
+  - `retroagi/legacy` holds the retired layered agent and its curriculum;
+    the live side imports nothing from it (a test keeps it so).
+  - The controller's model of how enemies and items move is now a part
+    that can be replaced (planner.RULES is the hand-written one).
+  - The bench's repeated tries now differ (each waits a few frames more
+    before the agent acts: the seeds had made no difference, play being
+    deterministic), obstacles sharing a start state are scored in one
+    play, and results are also reported by distinct start with an
+    interval (scripts/dev/bench_table.py).
+  See docs/framework.md for the design and for what is not general yet.

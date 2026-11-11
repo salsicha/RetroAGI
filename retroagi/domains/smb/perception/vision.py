@@ -2,6 +2,7 @@
 
 from typing import Any, Mapping, Optional
 
+import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -14,6 +15,8 @@ from .vision_contract import VisionOutput, VisionSpec
 
 def image_tensor(observation: Any, device: Optional[torch.device] = None) -> torch.Tensor:
     """Convert HWC/BHWC or CHW/BCHW image data to normalized BCHW tensors."""
+    if isinstance(observation, (list, tuple)):
+        observation = np.asarray(observation)  # (a list of pictures, one by one, is far slower)
     image = torch.as_tensor(observation, device=device)
     if image.ndim == 3:
         image = image.unsqueeze(0)

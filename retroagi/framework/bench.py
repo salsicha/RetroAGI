@@ -7,6 +7,14 @@ obstacle's saved state the agent plays until it is settled PASSED beyond
 the obstacle's end (passed), dies (died) or ATTEMPT_FRAMES pass (stalled).
 Nothing learns.
 
+Play is deterministic, so the tries of one obstacle differ by how long the
+world runs, the agent doing nothing, before it may act (agent.START_WAITS
+by seed): the enemies are then elsewhere in their walks. Obstacles that start
+from the same saved state are scored in one play (the nearer ones passed on
+the way to the farthest), and the result also says how the plays from each
+distinct start went (``passed_by_start``: obstacles sharing a start are not
+independent, and one death there counts against all of them).
+
     python -m retroagi.framework.bench --domain smb --bench DIR \\
         [--source memory | vision] [--model OUTCOME.pt] [--runs 4] [--output OUT.json]
 
@@ -24,6 +32,7 @@ from pathlib import Path
 from typing import Callable, Sequence
 
 from . import registry
+from .agent import START_WAITS, Agent
 
 # Progress beyond an obstacle's end where the agent, settled, has passed it.
 PASSED = 24
@@ -31,63 +40,78 @@ PASSED = 24
 ATTEMPT_FRAMES = 900
 
 
-def attempt(world, player, seed: int, mode: str, obstacle: dict) -> dict:
-    """One try at ``obstacle`` from the world's start state: its end
+def attempts(world, player, seed: int, mode: str, obstacles: Sequence[dict]) -> list:
+    """One play from the world's start state scored against each of
+    ``obstacles`` (all starting from that state): for each its end
     ("passed", "died", "stalled"), the frames it took and the most progress
-    made. A player has ``reset(seed, mode)`` and ``act(world) -> action``
-    (agent.Agent)."""
+    made by then. A player has ``reset(seed, mode)``, ``act(world) ->
+    action`` and ``idle`` (agent.Agent)."""
     world.reset()
     player.reset(seed, mode)
-    goal = obstacle["x1"] + PASSED
-    furthest = 0
+    for _ in range(START_WAITS[seed % len(START_WAITS)]):
+        world.step(player.idle)
+    goals = [o["x1"] + PASSED for o in obstacles]
+    results, furthest = [None] * len(obstacles), 0
     for frame in range(ATTEMPT_FRAMES):
         step = world.step(player.act(world))
         furthest = max(furthest, world.progress)
-        if step.died:
-            return {"end": "died", "frames": frame + 1, "furthest": furthest}
-        if step.finished or (world.progress >= goal and world.settled):
-            return {"end": "passed", "frames": frame + 1, "furthest": furthest}
-    return {"end": "stalled", "frames": ATTEMPT_FRAMES, "furthest": furthest}
+        for k, goal in enumerate(goals):
+            if results[k] is not None:
+                continue
+            if step.died:
+                results[k] = {"end": "died", "frames": frame + 1, "furthest": furthest}
+            elif step.finished or (world.progress >= goal and world.settled):
+                results[k] = {"end": "passed", "frames": frame + 1, "furthest": furthest}
+        if all(r is not None for r in results):
+            break
+    return [r or {"end": "stalled", "frames": ATTEMPT_FRAMES, "furthest": furthest} for r in results]
 
 
 def run_bench(bench: Path, make_world: Callable, make_player: Callable, modes: Sequence[str], runs: int = 4,
               only: Sequence[str] = ()) -> dict:
     """Every obstacle of ``bench`` tried ``runs`` times in each mode (seeds 0
     to runs - 1); ``only``: obstacle names to try (all when empty).
-    ``make_world(level, saved state)`` gives the world an obstacle is played
-    in."""
+    ``make_world(level, saved state)`` gives the world a start is played in."""
     index = json.loads((bench / "index.json").read_text())
     player = make_player()
-    results = {"level": index["level"], "runs": runs, "obstacles": []}
-    for obstacle in index["obstacles"]:
-        if only and obstacle["name"] not in only:
-            continue
-        world = make_world(index["level"], (bench / f"{obstacle['name']}.state").read_bytes())
-        tries = {}
+    wanted = [o for o in index["obstacles"] if not only or o["name"] in only]
+    starts = {}  # saved state -> the obstacles that start from it
+    for obstacle in wanted:
+        starts.setdefault((bench / f"{obstacle['name']}.state").read_bytes(), []).append(obstacle)
+    scored, by_start = {}, []
+    for state, group in starts.items():
+        world = make_world(index["level"], state)
+        tries = {o["name"]: {mode: [] for mode in modes} for o in group}
         try:
             for mode in modes:
-                tries[mode] = [attempt(world, player, seed, mode, obstacle) for seed in range(runs)]
+                for seed in range(runs):
+                    for obstacle, result in zip(group, attempts(world, player, seed, mode, group)):
+                        tries[obstacle["name"]][mode].append(result)
         finally:
             world.close()
-        ends = Counter(t["end"] for mode_tries in tries.values() for t in mode_tries)
-        total = sum(ends.values())
-        results["obstacles"].append({**obstacle, "passed": ends["passed"] / max(1, total),
-                                     "ends": dict(ends), "tries": tries})
-        print(f"{obstacle['name']:24} passed {ends['passed']:2}/{total}  died {ends['died']:2}  "
-              f"stalled {ends['stalled']:2}", flush=True)
-    passed = [o["passed"] for o in results["obstacles"]]
-    results["passed"] = sum(passed) / max(1, len(passed))
-    return results
+        for obstacle in group:
+            ends = Counter(t["end"] for mode_tries in tries[obstacle["name"]].values() for t in mode_tries)
+            total = sum(ends.values())
+            scored[obstacle["name"]] = {**obstacle, "passed": ends["passed"] / max(1, total), "ends": dict(ends),
+                                        "tries": tries[obstacle["name"]]}
+            print(f"{obstacle['name']:24} passed {ends['passed']:2}/{total}  died {ends['died']:2}  "
+                  f"stalled {ends['stalled']:2}", flush=True)
+        by_start.append(scored[group[-1]["name"]]["passed"])  # the farthest obstacle: the whole play
+    obstacles = [scored[o["name"]] for o in wanted]
+    passed = [o["passed"] for o in obstacles]
+    return {"level": index["level"], "runs": runs, "obstacles": obstacles,
+            "passed": sum(passed) / max(1, len(passed)),
+            "starts": len(by_start), "passed_by_start": sum(by_start) / max(1, len(by_start))}
 
 
 def report(results: dict, output) -> None:
-    print(f"obstacles passed on average: {results['passed']:.2f}")
+    print(f"obstacles passed on average: {results['passed']:.2f}"
+          f" (the plays from {results['starts']} distinct starts: {results['passed_by_start']:.2f})")
     if output:
         Path(output).write_text(json.dumps(results, indent=1) + "\n")
 
 
 def main(argv=None) -> int:
-    from .agent import Agent
     from .chooser import network_choosers
 
     parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])

@@ -16,6 +16,8 @@ class LayeredPlayer:
     the checkpoint's layers and world model, its collision trackers; the
     tactic and skill choices sampled from seeded randomness."""
 
+    idle = 0  # (the action that does nothing)
+
     def __init__(self, checkpoint: str, tracker: str, device: str = "cuda",
                  vision: str = "data/full_vit/full_vit_scene.pth"):
         import torch

@@ -46,10 +46,19 @@ class Agent:
         return controller.press(state)
 
 
-def play(world, agent: Agent, frames: int) -> dict:
-    """``agent`` (already reset) through ``world`` from its start: how it
-    ended ("finished", "died" or "timeout") and the frames taken."""
+# Frames a play may wait before the agent acts, by seed: play is
+# deterministic, so repeated plays differ only by this (the first starts at
+# once). The other things in the world are then elsewhere in their motion.
+START_WAITS = (0, 6, 12, 18)
+
+
+def play(world, agent: Agent, frames: int, wait: int = 0) -> dict:
+    """``agent`` (already reset) through ``world`` from its start, after
+    ``wait`` frames of doing nothing: how it ended ("finished", "died" or
+    "timeout") and the frames taken."""
     world.reset()
+    for _ in range(wait):
+        world.step(agent.idle)
     for frame in range(frames):
         step = world.step(agent.act(world))
         if step.over:
