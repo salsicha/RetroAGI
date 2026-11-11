@@ -496,7 +496,7 @@ parameterized scenario families with exact semantic and symbolic ground truth.
 - [x] Require fixed-scenario pass rate `1.0` plus held-out Monte Carlo gates
       before using a Block SMB checkpoint as a Full SMB transfer source.
 
-Result: `retroagi/stages/block_smb/monte_carlo.py` defines
+Result: `retroagi/legacy/block_smb/monte_carlo.py` defines
 `block_smb_mc_v1`, deterministic train/validation/test/stress sampling, exact
 oracle action metadata, reachability validation, coverage summaries, held-out
 gates, and transfer-source gate helpers. The distribution includes chained

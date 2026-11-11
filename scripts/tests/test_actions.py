@@ -6,8 +6,8 @@ from types import SimpleNamespace
 import numpy as np
 import torch
 
-from retroagi.core.actions import SMBAction, full_smb_action
-from retroagi.core.interfaces import VisionOutput
+from retroagi.domains.smb.actions import SMBAction, full_smb_action
+from retroagi.domains.smb.perception.vision_contract import VisionOutput
 
 
 class TestSMBActionVocabulary(unittest.TestCase):

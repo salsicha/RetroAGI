@@ -9,8 +9,8 @@ import numpy as np
 import pytest
 import torch
 
-from retroagi.core.smb_pixel_types import TYPE_ID
-from retroagi.core.smb_scene_labels import (
+from retroagi.domains.smb.perception.pixel_types import TYPE_ID
+from retroagi.domains.smb.perception.scene_labels import (
     Gap,
     SceneLabels,
     Surface,
@@ -19,7 +19,7 @@ from retroagi.core.smb_scene_labels import (
     scene_targets,
     structure_from_types,
 )
-from retroagi.stages.block_smb.env import MarioScenarioEnv
+from retroagi.domains.smb.sim.env import MarioScenarioEnv
 
 G, B, Q, P, E, M, L = (
     TYPE_ID[name]
@@ -272,7 +272,7 @@ def test_block_plant_inside_its_pipe_is_not_reported(phase, shown):
 
 
 def test_a_floor_is_cut_where_an_enemy_stands_on_it():
-    from retroagi.core.smb_scene_labels import EnemyView, split_at_enemies
+    from retroagi.domains.smb.perception.scene_labels import EnemyView, split_at_enemies
 
     floor = (Surface(8, 200, 208, False),)
     walker = EnemyView((60, 194, 76, 208), "walker")

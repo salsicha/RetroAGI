@@ -99,10 +99,10 @@ played again; `--generate-only true` makes and saves a dataset without
 learning.
 
 ```bash
-python -m retroagi.stages.block_smb.collision_train --source <policy> --output artifacts/block_smb/collision
+python -m retroagi.legacy.block_smb.collision_train --source <policy> --output artifacts/block_smb/collision
 retroagi-block-smb train-layer --learner skill --init <policy> --output artifacts/block_smb/skill
 retroagi-block-smb train-layer --learner tactic --init artifacts/block_smb/skill/best.pt --output artifacts/block_smb/tactic
-python -m retroagi.stages.block_smb.dataset_train --source artifacts/block_smb/skill/best.pt --tracker artifacts/block_smb/collision/tracker.pt --rounds artifacts/block_smb/skill/episodes artifacts/block_smb/tactic/episodes --collision artifacts/block_smb/collision/dataset --output artifacts/block_smb/predictions
+python -m retroagi.legacy.block_smb.dataset_train --source artifacts/block_smb/skill/best.pt --tracker artifacts/block_smb/collision/tracker.pt --rounds artifacts/block_smb/skill/episodes artifacts/block_smb/tactic/episodes --collision artifacts/block_smb/collision/dataset --output artifacts/block_smb/predictions
 ```
 
 - **Skill layer:** trains on 41 local maneuver families, each under one
@@ -134,7 +134,7 @@ checkpoint it was trained with (with that file's SHA-256).
 
 ```bash
 retroagi-block-smb exam-layer --checkpoint artifacts/block_smb/tactic/passed.pt
-python -m retroagi.stages.full_smb.layered_eval --checkpoint artifacts/block_smb/tactic/passed.pt
+python -m retroagi.legacy.full_smb.layered_eval --checkpoint artifacts/block_smb/tactic/passed.pt
 ```
 
 The first plays fresh held-out Block SMB layouts with the whole agent; the

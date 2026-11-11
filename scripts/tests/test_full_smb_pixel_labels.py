@@ -9,10 +9,10 @@ from collections import Counter
 
 import numpy as np
 
-from retroagi.core.smb_pixel_types import TYPE_ID
-from retroagi.stages.full_smb import pixel_labels as P
-from retroagi.stages.full_smb.play import POLICY_TEST_LEVELS
-from retroagi.stages.full_smb.vision_frames import LEVELS, played_frames
+from retroagi.domains.smb.nes import pixel_labels as P
+from retroagi.domains.smb.nes.game import POLICY_TEST_LEVELS
+from retroagi.domains.smb.nes.vision_frames import LEVELS, played_frames
+from retroagi.domains.smb.perception.pixel_types import TYPE_ID
 
 
 def _cartridge_available() -> bool:
@@ -144,7 +144,7 @@ class TestRealFrames(unittest.TestCase):
     def test_the_player_stands_still_as_the_agent_does(self):
         # Half the plays begin standing at the start (vision made up pipes
         # beside a standing Mario): his place unchanged over the first frames.
-        from retroagi.stages.full_smb.vision_frames import START_STANDING_SHARE
+        from retroagi.domains.smb.nes.vision_frames import START_STANDING_SHARE
 
         def stood(seed):
             places = []

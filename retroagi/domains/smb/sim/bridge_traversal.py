@@ -1,0 +1,161 @@
+"""Collision-footprint walking windows for flat moving-bridge crossings.
+
+The predictor uses the engine's NES motion model, platform reversal, integer
+rectangles, and carry rules. It certifies continuous support for walking;
+actual boarding/landing remains authoritative for policy jumps.
+"""
+
+import copy
+from dataclasses import dataclass, replace
+
+from retroagi.domains.smb.physics import NESPlayerMotion
+
+
+@dataclass
+class BridgeWalkState:
+    x: float
+    motion: NESPlayerMotion
+    width: int
+    bridge_x: float
+    bridge_width: int
+    direction: int
+    speed: float
+    low: float
+    high: float
+    left_end: int
+    right_start: int
+
+    def support(self) -> str | None:
+        left = int(self.x)
+        right = left + self.width
+        support = "left" if left < self.left_end else None
+        if right > round(self.bridge_x) and left < round(self.bridge_x) + self.bridge_width:
+            support = "bridge"
+        if right > self.right_start:
+            support = "right"
+        return support
+
+    def stably_boarded(self) -> bool:
+        return (
+            self.support() == "bridge"
+            and self.x >= round(self.bridge_x) + 4
+            and self.x + self.width <= round(self.bridge_x) + self.bridge_width - 4
+        )
+
+    def advance(self, walking: bool) -> str | None:
+        dx, _, _ = self.motion.advance(
+            direction=1 if walking else 0, jump=False, grounded=True, y=0, run=walking
+        )
+        old = round(self.bridge_x)
+        self.bridge_x += self.speed * self.direction
+        if self.bridge_x <= self.low:
+            self.bridge_x, self.direction = self.low, 1
+        elif self.bridge_x >= self.high:
+            self.bridge_x, self.direction = self.high, -1
+        self.x += dx
+        support = self.support()
+        if support == "bridge":
+            self.x += round(self.bridge_x) - old
+        return support
+
+    def copy(self) -> "BridgeWalkState":
+        return replace(self, motion=copy.deepcopy(self.motion))
+
+    def can_walk_to(self, target: str) -> bool:
+        probe = self.copy()
+        for _ in range(48):
+            support = probe.advance(True)
+            if support is None:
+                return False
+            if support == target and (target != "bridge" or probe.stably_boarded()):
+                return True
+        return False
+
+
+def bridge_walk_state(env) -> BridgeWalkState | None:
+    if not env.mario.get("on_ground"):
+        return None
+    bridge = next((p for p in env.platforms if p.get("moving")), None)
+    if bridge is None:
+        return None
+    floor_y = bridge["rect"].top
+    if abs(env.mario["y"] + env.mario["h"] - floor_y) > 1e-4:
+        return None
+    floors = [p["rect"] for p in env.platforms if not p.get("moving") and p["rect"].top == floor_y]
+    left = [r for r in floors if r.left < bridge["move_min"]]
+    right = [r for r in floors if r.left > bridge["move_min"]]
+    if not left or not right:
+        return None
+    return BridgeWalkState(
+        env.mario["x"],
+        copy.deepcopy(env.motion),
+        env.mario["w"],
+        bridge["move_x"],
+        bridge["rect"].w,
+        bridge["move_dir"],
+        bridge["move_speed"],
+        bridge["move_min"],
+        bridge["move_max"],
+        max(r.right for r in left),
+        min(r.left for r in right),
+    )
+
+
+def bridge_safe_wait_frames(env, horizon: int = 64) -> list[int]:
+    """Safe numbers of NOOP frames before walking to the next support."""
+    state = bridge_walk_state(env)
+    if state is None or state.support() == "right":
+        return []
+    target = (
+        "right"
+        if state.support() == "bridge" and state.x >= round(state.bridge_x) + 4
+        else "bridge"
+    )
+    safe = []
+    for wait in range(horizon + 1):
+        if state.can_walk_to(target):
+            safe.append(wait)
+        if state.advance(False) is None:
+            break
+    return safe
+
+
+def bridge_phase(env, opening_wait: bool) -> str:
+    if env._bridge_crossed:
+        return "finish"
+    state = bridge_walk_state(env)
+    if state is not None and state.support() == "right":
+        return "exit"
+    if state is not None and state.support() == "bridge" and state.x >= round(state.bridge_x) + 4:
+        return "exit" if 1 in bridge_safe_wait_frames(env) else "ride"
+    # Approaching on the shore is not a commitment to board. Recheck the
+    # actual boarding window even after walking has ended an initial wait.
+    if state is not None and state.support() == "left":
+        if state.left_end - state.x - state.width > 32:
+            return "approach"
+        return "board" if 0 in bridge_safe_wait_frames(env) else "wait"
+    return "board"
+
+
+def bridge_oracle(scenario: dict, max_steps: int = 320) -> tuple[list[int], int]:
+    """Validate wait, board, ride, and exit with real physics for generation."""
+    from .env import MarioScenarioEnv
+
+    env = MarioScenarioEnv()
+    actions = []
+    opening_wait = 0
+    phase = "wait"
+    try:
+        env.reset(scenario=scenario)
+        for frame in range(max_steps):
+            phase = bridge_phase(env, True)
+            action = 1 if phase in ("approach", "board", "exit", "finish") else 0
+            if phase == "board" and not opening_wait:
+                opening_wait = frame
+            _, _, done, truncated, _ = env.step(action)
+            actions.append(action)
+            if done or truncated:
+                break
+        return actions, opening_wait
+    finally:
+        env.close()

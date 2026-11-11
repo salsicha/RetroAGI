@@ -6,8 +6,8 @@ from types import SimpleNamespace
 
 import numpy as np
 
-from retroagi.stages.full_smb import obstacle_bench as ob
-from retroagi.stages.full_smb.obstacles import (
+from retroagi.domains.smb.nes import obstacle_bench as ob
+from retroagi.domains.smb.nes.obstacles import (
     APPROACH,
     BUCKET,
     WAKE_LEAD,

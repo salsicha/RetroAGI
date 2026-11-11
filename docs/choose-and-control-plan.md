@@ -83,11 +83,11 @@ Each phase ends with a measurement that decides whether to go on.
 
 - **Phase 0 (2026-11-07, done).** data/full_smb_obstacles/Level1-1: 24
   obstacles from the first Goomba to the flag, each with a checked start
-  state (retroagi/stages/full_smb/obstacles.py, obstacle_bench.py). The
+  state (retroagi/domains/smb/nes/obstacles.py, obstacle_bench.py). The
   learned agent of the old design (tactic_20261104) passes 60%.
 - **Phase 1 (2026-11-07, done with game memory).** The jump planner
-  (retroagi/core/smb_planner.py) and controller (smb_controller.py), driven
-  by a scripted chooser reading game memory (stages/full_smb/
+  (retroagi/domains/smb/planner.py) and controller (smb_controller.py), driven
+  by a scripted chooser reading game memory (legacy/full_smb/
   scripted_chooser.py), pass all 24 obstacles in both modes and finish 1-1
   from its start: speed run 2,990 frames, max points 3,473 (score 500). The
   motion model's predicted paths matched the game frame for frame; what had
@@ -155,7 +155,7 @@ Each phase ends with a measurement that decides whether to go on.
   Left: 11_enemies_1682 stalls in half its runs; max points on perception
   over the whole level. Next: phase 2, random levels in Block SMB.
 - **Phase 2, 2026-11-08: random levels of the game's pieces.**
-  retroagi/stages/block_smb/game_levels.py builds a level from a seed out
+  retroagi/domains/smb/sim/levels.py builds a level from a seed out
   of 1-1's pieces, in the game's pixels (16-pixel tiles, the floor at 208):
   pits 2 to 4 tiles, pipes 2 to 4 tiles tall, staircases up and down with a
   valley or a pit between, brick rows at the game's two heights (Goombas
@@ -165,7 +165,7 @@ Each phase ends with a measurement that decides whether to go on.
   keeps Mario where the real game does (his left side at 115 on screen, a
   new level setting `scroll_x`; other layouts keep 85). BlockTruthState
   gives the controller what is on screen, as game memory does in the real
-  game; `python -m retroagi.stages.block_smb.game_levels --levels 100`
+  game; `python -m retroagi.domains.smb.sim.levels --levels 100`
   plays the scripted chooser through them (0.5 ms a frame). On 100 levels
   it finished 99 speed runs and 98 max-points runs (from 92 and 98 at
   first). What the levels showed:
@@ -192,11 +192,11 @@ Each phase ends with a measurement that decides whether to go on.
   max points on vision at Goomba pairs. Next: phase 3, outcome sampling
   from saved states on these levels.
 - **Phase 3, 2026-11-08: outcome sampling.** The choices
-  (retroagi/core/smb_choices.py): land near, middle or far on each of the
+  (retroagi/domains/smb/choices.py): land near, middle or far on each of the
   8 nearest surfaces, stomp each of the 4 nearest enemies or pass it
   beyond or back, run 32 or 96 pixels forward keeping speed or 48 back,
   wait 8 or 24 frames (about 20 to 35 at a decision). At every decision
-  point on a random level, retroagi/stages/block_smb/outcome_sampling.py
+  point on a random level, retroagi/framework/sampling.py
   saves the simulator's state and plays every candidate from it through
   the executor, then puts the state back, recording: how the choice ended,
   death during it or after it (buttons released, until Mario has stood 16
@@ -216,17 +216,17 @@ Each phase ends with a measurement that decides whether to go on.
   or two columns wide (2.7 million an hour with the stuck probes), packed
   in 8 parts.
 - **Phase 4, 2026-11-08: the outcome network and the three-rule chooser.**
-  retroagi/core/outcome_network.py: a small transformer over the state's
+  retroagi/framework/outcome_network.py: a small transformer over the state's
   tokens (Mario, 24 surfaces, 8 enemies, x relative to Mario); a head on
   each surface's token gives its three landings, a head on each enemy's
   its stomp and two passes, a head on Mario's the runs and waits; each
   choice: the chance of death (during or soon after), of being infeasible,
   of reaching the flag, of leaving Mario stuck, and its progress, frames
   and points. Trained in 9 minutes on the V100
-  (stages/block_smb/outcome_train.py; data/outcome/outcome_20261108.pt).
+  (framework/training.py; data/outcome/outcome_20261108.pt).
   On 190,661 choices sampled on 100 fresh levels: deaths ranked at 0.989
   (ROC area), infeasible called right 98.3%, stuck 95.2%, progress within
-  3.4 pixels. retroagi/core/outcome_chooser.py applies the rules: keep
+  3.4 pixels. retroagi/framework/chooser.py applies the rules: keep
   feasible choices with death chance at most 5% (or within 2 points of the
   safest), then those not likely to leave Mario stuck, then the most
   progress a frame (in max points a point is worth 0.2 pixels a frame). It

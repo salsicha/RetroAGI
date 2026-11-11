@@ -4,10 +4,10 @@ import json
 import unittest
 from pathlib import Path
 
-from retroagi.stages.block_smb.env import MarioScenarioEnv
-from retroagi.stages.block_smb.env_state import restore_env_state, snapshot_env_state
+from retroagi.domains.smb.sim.env import MarioScenarioEnv
+from retroagi.domains.smb.sim.env_state import restore_env_state, snapshot_env_state
 
-SCENARIO_DIR = Path("retroagi/stages/block_smb/scenarios")
+SCENARIO_DIR = Path("retroagi/domains/smb/sim/scenarios")
 
 
 def load_scenario(name: str) -> dict:

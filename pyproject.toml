@@ -50,13 +50,13 @@ dev = [
 ]
 
 [project.scripts]
-retroagi-block-smb = "retroagi.stages.block_smb.cli:main"
+retroagi-block-smb = "retroagi.legacy.block_smb.cli:main"
 
 [tool.setuptools.packages.find]
 include = ["retroagi*"]
 
 [tool.setuptools.package-data]
-"retroagi.stages.block_smb" = ["scenarios/*.json"]
+"retroagi.domains.smb.sim" = ["scenarios/*.json"]
 
 [tool.pytest.ini_options]
 addopts = ["-ra", "--strict-config", "--strict-markers", "--timeout=60"]

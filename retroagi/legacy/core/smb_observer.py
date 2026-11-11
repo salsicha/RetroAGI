@@ -1,0 +1,331 @@
+"""The one reader that turns pictures into everything a policy receives.
+
+A policy observes the game only through its game's vision transformer.
+VisionObserver takes screens (and nothing else: no game, no memory, no
+simulator) and returns, per screen, the SceneObservation the vision
+transformer reports and the policy's three inputs packed from it:
+
+- src_c: one row of numbers in named spans (C_SPANS): Mario (present, drawn
+  box, facing, standing / in the air / on a moving platform), then fixed-length
+  lists of enemies, coins, power-ups, moving platforms, pipes, blocks,
+  surfaces and gaps, each slot "present" plus the thing's position relative
+  to Mario; then each enemy slot's object type as vision tells it (its
+  OBJECT_TYPE_SLOTS number plus one; 0 not told), in what was spare room
+  (2026-10-21: rows recorded before hold 0 there). There is no speed, no
+  motion and nothing from earlier frames: anything over time is the policy's
+  own memory.
+- src_a, src_b: a code for each of 8 (A) and 16 (B) vertical screen bands,
+  the most important thing drawn in the band (COLUMN_CODES).
+
+Both games use this module unchanged, so a Block SMB policy reads Full SMB
+exactly as it read Block SMB. List lengths (SCENE_SLOTS) come from the slot
+survey (scripts/vision/survey_scene_slots.py): the larger of the two games'
+99.9th percentile of things on screen at once. When a list overflows, the
+things nearest Mario are kept.
+"""
+
+from dataclasses import dataclass
+
+import numpy as np
+import torch
+
+from retroagi.domains.smb.perception.pixel_types import SCREEN_SHAPE, visible_window
+from retroagi.domains.smb.perception.scene_labels import (
+    ENEMY_KINDS,
+    OBJECT_TYPE_SLOTS,
+    SUPPORTS,
+    Box,
+    SceneObservation,
+)
+from retroagi.domains.smb.perception.scene_lists import SCENE_SLOTS, _reference, packed_lists
+
+# Numbers per slot: present, then the position relative to Mario, then extras.
+_SLOT_WIDTH = {
+    "enemies": 5 + len(ENEMY_KINDS),
+    "coins": 5,
+    "power_ups": 5,
+    "moving_platforms": 5,
+    "pipes": 5,
+    "blocks": 6,
+    "surfaces": 5,
+    "gaps": 3,
+}
+MARIO_WIDTH = 6 + len(SUPPORTS)  # present, box (4), facing right, support one-hot
+# The policy's three inputs (StageSpec): A has 8 bands, B 16, and C is 16 x 22.
+SEQ_LEN_A, SEQ_LEN_B, RATIO_BC = 8, 16, 22
+SEQ_LEN_C = SEQ_LEN_B * RATIO_BC
+
+
+def _spans() -> dict[str, tuple[int, int]]:
+    spans, offset = {}, 0
+    for name, width in (
+        ("c_mario", MARIO_WIDTH),
+        *((f"c_{name}", SCENE_SLOTS[name] * _SLOT_WIDTH[name]) for name in SCENE_SLOTS),
+        ("c_enemy_types", SCENE_SLOTS["enemies"]),
+    ):
+        spans[name] = (offset, offset + width)
+        offset += width
+    if offset > SEQ_LEN_C:
+        raise ValueError(f"the scene needs {offset} numbers but C holds {SEQ_LEN_C}")
+    spans["c_reserved"] = (offset, SEQ_LEN_C)
+    return spans
+
+
+C_SPANS = _spans()
+
+# Column codes for src_a / src_b, most important first: a band's code is the
+# first of these drawn in it. 0 means nothing (or no Mario to compare with).
+COLUMN_CODES = (
+    "nothing",
+    "mario",
+    "walker",
+    "plant",
+    "other_enemy",
+    "gap",
+    "moving_platform",
+    "power_up",
+    "coin",
+    "high_step_up",
+    "step_up",
+    "level",
+    "step_down",
+    "block_overhead",
+    "defeated_enemy",
+)
+CODE = {name: index for index, name in enumerate(COLUMN_CODES)}
+# Surfaces this many pixels above Mario's feet are a high step (beyond a
+# small hop); within LEVEL_BAND of his feet they are level with him.
+HIGH_STEP = 36
+LEVEL_BAND = 4
+
+
+@dataclass(frozen=True)
+class PolicyInput:
+    """Everything a policy receives for one screen; nothing about the game itself."""
+
+    src_a: torch.Tensor  # [8] long column codes
+    src_b: torch.Tensor  # [16] long column codes
+    src_c: torch.Tensor  # [SEQ_LEN_C] float, laid out by C_SPANS
+    scene: SceneObservation
+
+
+def observation_layout() -> dict:
+    """The layout of the policy's inputs, stored with checkpoints and compared on load."""
+    return {
+        "version": 3,
+        "scene_slots": dict(SCENE_SLOTS),
+        "c_spans": {name: list(span) for name, span in C_SPANS.items()},
+        "column_codes": list(COLUMN_CODES),
+        "enemy_kinds": list(ENEMY_KINDS),
+        "object_type_slots": OBJECT_TYPE_SLOTS,
+        "supports": list(SUPPORTS),
+        "seq_len": [SEQ_LEN_A, SEQ_LEN_B, SEQ_LEN_C],
+    }
+
+
+def before_enemy_types(saved: dict) -> bool:
+    """Whether ``saved`` is the layout from before the enemies' object types
+    (version 2): the same in every span, the types' room then spare (zeros)."""
+    now = observation_layout()
+    spans = dict(now["c_spans"])
+    spans["c_reserved"] = [spans.pop("c_enemy_types")[0], SEQ_LEN_C]
+    earlier = {**now, "version": 2, "c_spans": spans}
+    earlier.pop("object_type_slots")
+    return saved == earlier
+
+
+# ── Packing ───────────────────────────────────────────────────────────────────
+
+
+def _relative_box(box: Box, mx: float, my: float) -> list[float]:
+    width, height = SCREEN_SHAPE[1], SCREEN_SHAPE[0]
+    return [
+        (box[0] - mx) / width,
+        (box[1] - my) / height,
+        (box[2] - mx) / width,
+        (box[3] - my) / height,
+    ]
+
+
+def row_objects(row) -> dict:
+    """What a C row (pack_c) says of Mario, the enemies and the moving
+    platforms, in screen pixels: {"mario": his box or None, "enemies": [(slot,
+    box, kind, type)], "moving_platforms": [(slot, box)]} (type -1: not told).
+    Recorded rows are read back with it (float16 rows within a pixel)."""
+    row = np.asarray(row, np.float32)
+    width, height = SCREEN_SHAPE[1], SCREEN_SHAPE[0]
+    start = C_SPANS["c_mario"][0]
+    mario = None
+    if row[start] > 0.5:
+        x0, y0, x1, y1 = row[start + 1 : start + 5]
+        mario = (x0 * width, y0 * height, x1 * width, y1 * height)
+    # Boxes are relative to Mario's centre (_reference): the screen's centre
+    # without him.
+    if mario is None:
+        mx, my = width / 2, height / 2
+    else:
+        mx, my = (mario[0] + mario[2]) / 2, (mario[1] + mario[3]) / 2
+
+    def box_of(values):
+        x0, y0, x1, y1 = values
+        return (x0 * width + mx, y0 * height + my, x1 * width + mx, y1 * height + my)
+
+    out = {"mario": mario, "enemies": [], "moving_platforms": []}
+    begin, _ = C_SPANS["c_enemies"]
+    types, _ = C_SPANS["c_enemy_types"]
+    slot_width = _SLOT_WIDTH["enemies"]
+    for slot in range(SCENE_SLOTS["enemies"]):
+        values = row[begin + slot * slot_width : begin + (slot + 1) * slot_width]
+        if values[0] > 0.5:
+            kind = ENEMY_KINDS[int(np.argmax(values[5 : 5 + len(ENEMY_KINDS)]))]
+            out["enemies"].append((slot, box_of(values[1:5]), kind, int(round(row[types + slot])) - 1))
+    begin, _ = C_SPANS["c_moving_platforms"]
+    slot_width = _SLOT_WIDTH["moving_platforms"]
+    for slot in range(SCENE_SLOTS["moving_platforms"]):
+        values = row[begin + slot * slot_width : begin + (slot + 1) * slot_width]
+        if values[0] > 0.5:
+            out["moving_platforms"].append((slot, box_of(values[1:5])))
+    return out
+
+
+def pack_c(scene: SceneObservation) -> np.ndarray:
+    """The C row for one scene (C_SPANS)."""
+    row = np.zeros(SEQ_LEN_C, np.float32)
+    mx, my, feet = _reference(scene)
+    width, height = SCREEN_SHAPE[1], SCREEN_SHAPE[0]
+
+    start = C_SPANS["c_mario"][0]
+    if scene.mario.box is not None:
+        x0, y0, x1, y1 = scene.mario.box
+        row[start : start + 5] = (1.0, x0 / width, y0 / height, x1 / width, y1 / height)
+    row[start + 5] = float(scene.mario.facing_right)
+    row[start + 6 + SUPPORTS.index(scene.mario.support)] = 1.0
+
+    def fill(name, entries):
+        begin, _ = C_SPANS[f"c_{name}"]
+        slot = _SLOT_WIDTH[name]
+        for index, values in enumerate(entries):
+            row[begin + index * slot : begin + (index + 1) * slot] = values
+
+    lists = packed_lists(scene)
+    fill(
+        "enemies",
+        [
+            [
+                1.0,
+                *_relative_box(e.box, mx, my),
+                *np.eye(len(ENEMY_KINDS))[ENEMY_KINDS.index(e.kind)],
+            ]
+            for e in lists["enemies"]
+        ],
+    )
+    begin, _ = C_SPANS["c_enemy_types"]
+    for index, e in enumerate(lists["enemies"]):
+        row[begin + index] = float(e.type + 1)
+    for name in ("coins", "power_ups", "moving_platforms", "pipes"):
+        fill(name, [[1.0, *_relative_box(box, mx, my)] for box in lists[name]])
+    fill(
+        "blocks",
+        [
+            [1.0, *_relative_box(b.box, mx, my), float(b.kind == "question_block")]
+            for b in lists["blocks"]
+        ],
+    )
+    fill(
+        "surfaces",
+        [
+            [
+                1.0,
+                (s.x0 - mx) / width,
+                (s.x1 - mx) / width,
+                (s.top - feet) / height,
+                float(s.moving),
+            ]
+            for s in lists["surfaces"]
+        ],
+    )
+    fill("gaps", [[1.0, (g.x0 - mx) / width, (g.x1 - mx) / width] for g in lists["gaps"]])
+    return row
+
+
+def column_codes(scene: SceneObservation, bands: int) -> np.ndarray:
+    """The most important thing drawn in each of ``bands`` equal vertical screen bands."""
+    width = SCREEN_SHAPE[1]
+    band_width = width / bands
+    found = [[] for _ in range(bands)]
+
+    def mark(x0: float, x1: float, code: str) -> None:
+        first = max(0, int(x0 // band_width))
+        last = min(bands - 1, int((max(x0, x1 - 1)) // band_width))
+        for band in range(first, last + 1):
+            found[band].append(CODE[code])
+
+    _, _, feet = _reference(scene)
+    if scene.mario.box is not None:
+        mark(scene.mario.box[0], scene.mario.box[2], "mario")
+    for enemy in scene.enemies:
+        code = {"walker": "walker", "plant": "plant", "other": "other_enemy"}.get(
+            enemy.kind, "defeated_enemy"
+        )
+        mark(enemy.box[0], enemy.box[2], code)
+    for gap in scene.gaps:
+        mark(gap.x0, gap.x1, "gap")
+    for box in scene.moving_platforms:
+        mark(box[0], box[2], "moving_platform")
+    for box in scene.power_ups:
+        mark(box[0], box[2], "power_up")
+    for box in scene.coins:
+        mark(box[0], box[2], "coin")
+    for surface in scene.surfaces:
+        rise = feet - surface.top
+        if scene.mario.box is None or abs(rise) <= LEVEL_BAND:
+            code = "level"
+        elif rise > HIGH_STEP:
+            code = "high_step_up"
+        elif rise > 0:
+            code = "step_up"
+        else:
+            code = "step_down"
+        mark(surface.x0, surface.x1, code)
+    for block in scene.blocks:
+        if scene.mario.box is not None and block.box[3] <= scene.mario.box[1]:
+            mark(block.box[0], block.box[2], "block_overhead")
+    return np.array([min(codes) if codes else CODE["nothing"] for codes in found], np.int64)
+
+
+def policy_input(scene: SceneObservation) -> PolicyInput:
+    """A scene packed into the policy's three inputs."""
+    return PolicyInput(
+        src_a=torch.from_numpy(column_codes(scene, SEQ_LEN_A)),
+        src_b=torch.from_numpy(column_codes(scene, SEQ_LEN_B)),
+        src_c=torch.from_numpy(pack_c(scene)),
+        scene=scene,
+    )
+
+
+class VisionObserver:
+    """A game's scene vision transformer, and the packing every policy shares.
+
+    observe() takes pictures, only pictures: [N, 240, 256, 3] uint8 screens (a
+    single [240, 256, 3] screen is one picture). Like every picture the vision
+    transformers learned from, only the part the NES shows is used
+    (smb_pixel_types.visible_window).
+    """
+
+    def __init__(self, vision):
+        self.vision = vision
+        self.vision.eval()
+
+    @torch.no_grad()
+    def observe(self, screens) -> list[SceneObservation]:
+        screens = np.asarray(screens)
+        if screens.ndim == 3:
+            screens = screens[None]
+        if screens.shape[1:] != (*SCREEN_SHAPE, 3) or screens.dtype != np.uint8:
+            raise ValueError(
+                f"observe takes uint8 screens [N, 240, 256, 3], got {screens.shape} {screens.dtype}"
+            )
+        return self.vision.scene(np.stack([visible_window(screen) for screen in screens]))
+
+    def policy_inputs(self, screens) -> list[PolicyInput]:
+        return [policy_input(scene) for scene in self.observe(screens)]

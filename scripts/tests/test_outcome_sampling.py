@@ -1,13 +1,13 @@
-"""Outcome sampling (stages/block_smb/outcome_sampling.py,
+"""Outcome sampling (framework/sampling.py,
 docs/choose-and-control-plan.md phase 3): every candidate choice played
 from a saved state by the executor, its outcome measured."""
 
-from retroagi.core.smb_controller import Choice
-from retroagi.stages.block_smb.env import MarioScenarioEnv
-from retroagi.stages.block_smb.env_state import restore_env_state, snapshot_env_state
-from retroagi.stages.block_smb.game_levels import FLOOR, SCROLL_X, BlockTruthState
-from retroagi.core.smb_choices import ENEMY_SLOTS, KINDS, SURFACE_SLOTS, candidates, state_tokens
-from retroagi.stages.block_smb.outcome_sampling import ENDS, OUTCOME_FIELDS, outcome, sample_level
+from retroagi.domains.smb.choices import ENEMY_SLOTS, KINDS, SURFACE_SLOTS, candidates, state_tokens
+from retroagi.domains.smb.controller import Choice
+from retroagi.domains.smb.sim.env import MarioScenarioEnv
+from retroagi.domains.smb.sim.env_state import restore_env_state, snapshot_env_state
+from retroagi.domains.smb.sim.levels import FLOOR, SCROLL_X, BlockTruthState
+from retroagi.framework.sampling import ENDS, OUTCOME_FIELDS, outcome, sample_level
 
 DIED, DIED_AFTER, FRAMES, PROGRESS = (OUTCOME_FIELDS.index(f) for f in ("died", "died_after", "frames", "progress"))
 

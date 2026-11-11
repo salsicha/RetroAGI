@@ -4,9 +4,9 @@ import unittest
 
 import torch
 
-from retroagi.core.interfaces import VisionOutput, VisionSpec
-from retroagi.core.smb_pixel_types import PIXEL_TYPES
-from retroagi.stages.block_smb.env import MarioScenarioEnv
+from retroagi.domains.smb.perception.pixel_types import PIXEL_TYPES
+from retroagi.domains.smb.perception.vision_contract import VisionOutput, VisionSpec
+from retroagi.domains.smb.sim.env import MarioScenarioEnv
 
 
 class StaticBlockVision:

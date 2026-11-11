@@ -32,7 +32,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[2]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
-from retroagi.core.smb_scene_labels import (
+from retroagi.domains.smb.perception.scene_labels import (
     SceneObservation,
     scene_counts,
     scene_from_labels,
@@ -115,7 +115,7 @@ def draw(image: np.ndarray, scene: SceneObservation, path: Path, scale: int = 3)
 
 
 def block_survey(frames: int, seed: int, workers: int, pictures: Path | None) -> dict:
-    from retroagi.stages.block_smb.vision_frames import family_layouts, frame_stream
+    from retroagi.legacy.block_smb.vision_frames import family_layouts, frame_stream
 
     with ProcessPoolExecutor(workers) as pool:
         layouts = family_layouts("train", seed, 2, executor=pool)
@@ -136,7 +136,7 @@ def block_survey(frames: int, seed: int, workers: int, pictures: Path | None) ->
 
 
 def _full_play(level: str, seed: int, every: int, picture_dir: str | None):
-    from retroagi.stages.full_smb.vision_frames import labelled_frames
+    from retroagi.domains.smb.nes.vision_frames import labelled_frames
 
     refusals = Counter()
     counts, collisions = [], Counter()
@@ -153,7 +153,7 @@ def _full_play(level: str, seed: int, every: int, picture_dir: str | None):
 
 
 def full_survey(plays: int, every: int, seed: int, workers: int, pictures: Path | None) -> dict:
-    from retroagi.stages.full_smb.vision_frames import LEVELS
+    from retroagi.domains.smb.nes.vision_frames import LEVELS
 
     rng = random.Random(seed)
     jobs = [(level, rng.randrange(2**31), every) for level in LEVELS for _ in range(plays)]

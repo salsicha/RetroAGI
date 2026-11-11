@@ -1,10 +1,10 @@
-"""The scripted chooser (stages/full_smb/scripted_chooser.py): its choices
+"""The scripted chooser (domains/smb/scripted_chooser.py): its choices
 from a hand-made state."""
 
-from retroagi.core.smb_controller import Choice, State
-from retroagi.core.smb_physics import NESPlayerMotion
-from retroagi.core.smb_planner import Goal, Solid
-from retroagi.stages.full_smb.scripted_chooser import CLOSER, EDGE, ScriptedChooser
+from retroagi.domains.smb.controller import Choice, State
+from retroagi.domains.smb.physics import NESPlayerMotion
+from retroagi.domains.smb.planner import Goal, Solid
+from retroagi.domains.smb.scripted_chooser import CLOSER, EDGE, ScriptedChooser
 
 FLOOR = Solid(0, 208, 200, 240, "ground", ("ground", 0))
 BEYOND = Solid(248, 208, 400, 240, "ground", ("ground", 1))
@@ -44,7 +44,7 @@ def test_a_staircase_down_is_run_off_not_jumped():
 
 
 def test_an_enemy_beyond_a_pipe_waits_for_the_pipe():
-    from retroagi.core.smb_planner import Enemy
+    from retroagi.domains.smb.planner import Enemy
 
     pipe = Solid(150, 176, 182, 240, "pipe", ("pipes", 0))
     goomba = Enemy((230, 194, 246, 208), -0.5, 0.0, ("slots", 0))
@@ -64,7 +64,7 @@ def test_a_pipes_end_is_jumped_down_from_not_run_off():
 
 
 def test_an_infeasible_pass_tries_a_jump_back_then_runs_away():
-    from retroagi.core.smb_planner import Enemy
+    from retroagi.domains.smb.planner import Enemy
 
     goomba = Enemy((140, 194, 156, 208), -0.5, 0.0, ("slots", 0))
     state = State(body=(115, 192, 125, 208), motion=NESPlayerMotion(), grounded=True,

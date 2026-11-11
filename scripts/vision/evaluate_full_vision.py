@@ -5,7 +5,7 @@ saved start by the random player, with seeds training does not use.
 Labels are read from game memory (pixel_labels.label_frame); frames memory
 cannot fully explain are refused and counted, never measured. The
 measurements and the printed table are the shared ones
-(retroagi.core.scene_vision.evaluate_scene_vision and scene_report), so both
+(retroagi.domains.smb.perception.scene_vision.evaluate_scene_vision and scene_report), so both
 games' evaluations report the same numbers with the same meaning. Each
 frame's found scene is compared with its true scene (smb_scene_labels):
 
@@ -36,10 +36,10 @@ PROJECT_ROOT = Path(__file__).resolve().parents[2]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
-from retroagi.core.devices import select_device
-from retroagi.core.scene_vision import evaluate_scene_vision, scene_report
-from retroagi.stages.full_smb.vision import DEFAULT_FULL_VIT_CHECKPOINT, load_full_vit_checkpoint
-from retroagi.stages.full_smb.vision_frames import LEVELS, labelled_frames
+from retroagi.domains.smb.nes.vision import DEFAULT_FULL_VIT_CHECKPOINT, load_full_vit_checkpoint
+from retroagi.domains.smb.nes.vision_frames import LEVELS, labelled_frames
+from retroagi.domains.smb.perception.scene_vision import evaluate_scene_vision, scene_report
+from retroagi.framework.devices import select_device
 
 PLAY_FRAMES = 9_000
 

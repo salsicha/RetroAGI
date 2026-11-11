@@ -2,7 +2,7 @@
 Watch MarioScenarioEnv beside its exact per-pixel labels.
 
 Labels come from MarioScenarioEnv.render_labels(), which draws the frame's own
-shapes with each shape's pixel type (retroagi.core.smb_pixel_types) instead of
+shapes with each shape's pixel type (retroagi.domains.smb.perception.pixel_types) instead of
 its colour, so they are exact by construction.
 """
 
@@ -13,8 +13,8 @@ import numpy as np
 import pygame
 
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from retroagi.core.smb_pixel_types import PIXEL_TYPES
-from retroagi.stages.block_smb.env import MarioScenarioEnv
+from retroagi.domains.smb.perception.pixel_types import PIXEL_TYPES
+from retroagi.domains.smb.sim.env import MarioScenarioEnv
 
 # High-contrast colour per pixel type, in PIXEL_TYPES order.
 VISUALIZATION_COLORS = np.array(

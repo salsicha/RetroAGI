@@ -4,7 +4,7 @@ planner's goals and its "infeasible" answer, and the controller's runs."""
 
 from copy import copy
 
-from retroagi.core.smb_controller import (
+from retroagi.domains.smb.controller import (
     Choice,
     Controller,
     State,
@@ -12,9 +12,15 @@ from retroagi.core.smb_controller import (
     pit_ahead,
     stopping_distance,
 )
-from retroagi.core.smb_perceived import _collision_box, solids_of
-from retroagi.core.smb_physics import NESPlayerMotion
-from retroagi.core.smb_planner import (
+from retroagi.domains.smb.perception.scene_labels import (
+    BlockView,
+    MarioView,
+    SceneObservation,
+    Surface,
+)
+from retroagi.domains.smb.perception.state import _collision_box, solids_of
+from retroagi.domains.smb.physics import NESPlayerMotion
+from retroagi.domains.smb.planner import (
     INSET,
     Enemy,
     Goal,
@@ -27,7 +33,6 @@ from retroagi.core.smb_planner import (
     rollout,
     screen_edge,
 )
-from retroagi.core.smb_scene_labels import BlockView, MarioView, SceneObservation, Surface
 
 FLOOR = Solid(0, 208, 4000, 240, "ground", ("surfaces", 0))
 STANDING = (100.0, 192.0, 112.0, 208.0)  # Mario's body on the floor
@@ -107,7 +112,7 @@ def test_a_run_stops_at_its_x():
 
 
 def test_a_walker_turns_back_at_a_wall():
-    from retroagi.core.smb_planner import enemy_paths
+    from retroagi.domains.smb.planner import enemy_paths
 
     # Walking right at half a pixel a frame into a pipe 20 pixels away: it
     # comes back, as the game turns walkers.
@@ -120,7 +125,7 @@ def test_a_walker_turns_back_at_a_wall():
 def test_the_compiled_motion_matches_the_motion_model():
     import random
 
-    from retroagi.core.smb_planner import _MOTION_FIELDS, _advance, _motion_array
+    from retroagi.domains.smb.planner import _MOTION_FIELDS, _advance, _motion_array
 
     rng = random.Random(0)
     for trial in range(300):
@@ -330,8 +335,8 @@ def test_hoppers_plants_and_fliers_have_their_own_paths():
 
 
 def test_a_hoppers_speed_is_its_recent_moves_plus_gravity():
-    from retroagi.core.smb_perceived import hopper_speed
-    from retroagi.core.smb_planner import HOP_GRAVITY
+    from retroagi.domains.smb.perception.state import hopper_speed
+    from retroagi.domains.smb.planner import HOP_GRAVITY
 
     # Falling ever faster: the last four moves 1, 2, 2, 3 (mean 2) are its
     # speed two and a half frames ago.

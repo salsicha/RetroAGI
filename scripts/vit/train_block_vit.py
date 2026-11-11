@@ -3,11 +3,11 @@
 Frames are what the policy sees: all Monte Carlo families on the train split
 at every difficulty, played with teacher, perturbed, delayed and random
 routes, plus procedurally generated levels, some with drawn power-ups
-(retroagi/stages/block_smb/vision_frames.py). Worker processes play fresh
+(retroagi/legacy/block_smb/vision_frames.py). Worker processes play fresh
 episodes throughout training, so frames rarely repeat. Labels are the
 simulator's own drawing (MarioScenarioEnv.scene_labels()), exact by
 construction. The model and the training loop are the shared ones
-(retroagi.core.vision.SceneVisionTransformer, retroagi.core.scene_vision):
+(retroagi.domains.smb.perception.vision.SceneVisionTransformer, retroagi.domains.smb.perception.scene_vision):
 pixel types, objects, enemy kinds and Mario's facing and support, trained
 together. Progress is monitored on held-out train-split layouts; the
 validation split is kept for scripts/vision/evaluate_block_vision.py.
@@ -34,7 +34,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[2]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
-from retroagi.core.config import (
+from retroagi.domains.smb.perception.config import (
     CheckpointConfig,
     EnvironmentConfig,
     EvaluationConfig,
@@ -42,8 +42,8 @@ from retroagi.core.config import (
     ModelConfig,
     TrainingConfig,
 )
-from retroagi.core.devices import select_device
-from retroagi.core.scene_vision import (
+from retroagi.domains.smb.perception.pixel_types import PIXEL_TYPES
+from retroagi.domains.smb.perception.scene_vision import (
     epoch_line,
     frame_targets,
     pixel_type_weights,
@@ -52,9 +52,9 @@ from retroagi.core.scene_vision import (
     stack_targets,
     train_scene_vision,
 )
-from retroagi.core.smb_pixel_types import PIXEL_TYPES
-from retroagi.stages.block_smb.vision import DEFAULT_BLOCK_VIT_CHECKPOINT, BlockVisionTransformer
-from retroagi.stages.block_smb.vision_frames import family_layouts, frame_stream, layout_frames
+from retroagi.framework.devices import select_device
+from retroagi.legacy.block_smb.vision import DEFAULT_BLOCK_VIT_CHECKPOINT, BlockVisionTransformer
+from retroagi.legacy.block_smb.vision_frames import family_layouts, frame_stream, layout_frames
 
 DEFAULT_OUTPUT = PROJECT_ROOT / DEFAULT_BLOCK_VIT_CHECKPOINT
 DEFAULT_SEED = 7

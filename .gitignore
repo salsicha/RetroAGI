@@ -69,3 +69,4 @@ data/*_vit/*_before_20261011*
 # numba's compiled caches
 *.nbi
 *.nbc
+/artifacts/refactor_*/

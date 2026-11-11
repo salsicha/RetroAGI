@@ -48,8 +48,8 @@ robot.
 | Stage names | `retroagi/core/stage_resolution.py` (`synthetic`, `block`, `full`, plus optional rungs) | Becomes fidelity rung names; add `photoreal` and `real`. |
 | Promotion plans and gates | `retroagi/core/game_promotion.py` (`GamePromotionPlan`, metric/artifact/runtime gates) | Becomes the rung-to-rung promotion machinery. |
 | Backend adapters | `retroagi/core/backends.py` (`BackendAdapter`, `GymnasiumBackendAdapter`, `BackendCapabilitySpec`, capability probes) | Becomes the simulator/robot driver interface; capabilities gain new fields (below). |
-| Stage lifecycle and tensors | `retroagi/core/interfaces.py` (`StageAdapter`, `StageBatch`, `VisionEncoder`) | Kept; batch contents come from the scene and sensor contracts. |
-| Generic action specs | `retroagi/core/actions.py` (`ActionSpec`, `ContinuousControlSpec`) | Already supports continuous axes; becomes the base of the embodiment's action space. |
+| Stage lifecycle and tensors | `retroagi/domains/smb/perception/vision_contract.py` (`StageAdapter`, `StageBatch`, `VisionEncoder`) | Kept; batch contents come from the scene and sensor contracts. |
+| Generic action specs | `retroagi/domains/smb/actions.py` (`ActionSpec`, `ContinuousControlSpec`) | Already supports continuous axes; becomes the base of the embodiment's action space. |
 | Temporal spans | `retroagi/core/temporal.py` (`TemporalGoal`, `HierarchicalTransition`) | Kept as the universal episode log, including real-robot logs. |
 | Perception, signals, rewards, tasks | `retroagi/core/perception.py`, `signals.py`, `rewards.py`, `tasks.py` | Kept as domain-declared schemas. |
 | Checkpoint-owned runtime contract | `retroagi/core/smb_runtime.py` (`SMBRuntimeContract`) | Generalizes into the embodiment contract. |
@@ -59,12 +59,12 @@ robot.
 
 | Assumption | Where | What it must become |
 | --- | --- | --- |
-| Six discrete actions; jump/walk/wait primitives with a 16-step duration menu | `core/actions.py` (`SMBAction`, `SMBAdaptiveController`), `core/models.py` (`MotorPrimitiveController`, `DEFAULT_PRIMITIVE_DURATION_BINS`) | Primitives declared by the domain, including continuous parameters. |
-| Controller logic about button presses, releases, and landings | `core/actions.py` (`resolve_landing`, re-jump suppression) | A generic committed-primitive executor with domain-declared termination events and handoff rules. |
+| Six discrete actions; jump/walk/wait primitives with a 16-step duration menu | `domains/smb/actions.py` (`SMBAction`, `SMBAdaptiveController`), `core/models.py` (`MotorPrimitiveController`, `DEFAULT_PRIMITIVE_DURATION_BINS`) | Primitives declared by the domain, including continuous parameters. |
+| Controller logic about button presses, releases, and landings | `domains/smb/actions.py` (`resolve_landing`, re-jump suppression) | A generic committed-primitive executor with domain-declared termination events and handoff rules. |
 | Fixed tactic stances and skill types | `core/models.py` (`TACTIC_STANCES`), `core/skills.py` (`SKILL_GOAL_TYPES`) | Vocabularies declared by the domain. |
 | Feature positions with physical meaning baked in (e.g., "slots 9-12 are support") | `core/models.py` (`_MOTOR_PRIMITIVE_SUPPORT_SPANS`, `_TERMINAL_SPANS`, `_PROGRESS_SLOTS`) | Roles declared by the scene contract and looked up by name. |
 | Seven Mario modules inside the shared core | `core/smb_*.py` | Moved into a Mario domain package. |
-| Teachers that freeze the simulator, try every parameter, and restore | `stages/block_smb/local_traversal.py` (`safe_jump_holds`), `policy_recovery.py`, `piranha_tactics.py` | A teacher toolkit whose teachers declare the backend capabilities they need. |
+| Teachers that freeze the simulator, try every parameter, and restore | `legacy/block_smb/local_traversal.py` (`safe_jump_holds`), `policy_recovery.py`, `piranha_tactics.py` | A teacher toolkit whose teachers declare the backend capabilities they need. |
 
 ## Design Rules Learned From This Project
 
@@ -277,7 +277,7 @@ Every teacher's output is replayed through the shared executor
 
 ### 10. Families, curriculum, and exams
 
-Kept as framework machinery (today in `stages/block_smb/monte_carlo.py` and
+Kept as framework machinery (today in `legacy/block_smb/monte_carlo.py` and
 `train.py`):
 
 - family generators with easy, medium, and hard tiers;

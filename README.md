@@ -7,24 +7,24 @@ A vision-based agent for Super Mario Bros.
 Since 2026-11-07 the agent is being rebuilt around sparse decisions and a
 fast controller ([the plan](docs/choose-and-control-plan.md)):
 
-1. **The executor** (`core/smb_controller.py`, `core/smb_planner.py`): a
+1. **The executor** (`domains/smb/controller.py`, `domains/smb/planner.py`): a
    model-based controller run every frame. It takes one choice at a time:
    jump onto a thing, stomp or pass an enemy, run to a place, wait. It plans
    the jump (run-up frames and how long the button is held) with the NES
    motion model against what it sees, re-plans before takeoff and corrects
    the flight in the air, and reports how the choice ended (landed,
    stomped, arrived, a threat, infeasible).
-2. **The outcome network** (`core/outcome_network.py`): from the state,
+2. **The outcome network** (`framework/outcome_network.py`): from the state,
    one pass predicts the outcome of every candidate choice at once (the
    chance of dying, of being infeasible, of leaving Mario stuck, of
    reaching the flag, and the progress, frames and points). It learns from
    outcomes measured, not taught: on random Block SMB levels every
    candidate is played from saved states by the executor
-   (`stages/block_smb/outcome_sampling.py`).
-3. **The chooser** (`core/outcome_chooser.py`): the game's three rules on
+   (`framework/sampling.py`).
+3. **The chooser** (`framework/chooser.py`): the game's three rules on
    those predictions, in order: don't die, progress to the right, get coins
    and power-ups. A hand-written scripted chooser
-   (`stages/full_smb/scripted_chooser.py`) is kept to compare against.
+   (`domains/smb/scripted_chooser.py`) is kept to compare against.
 
 Nothing learns on Full SMB: training data comes from random levels built
 in Block SMB from the real game's pieces and rules.
@@ -49,12 +49,12 @@ learns on the real game. Full-level results shift from change to change.
 
 ```bash
 # score a player on the 24 obstacles of 1-1
-python -m retroagi.stages.full_smb.obstacle_bench --bench data/full_smb_obstacles/Level1-1 --player scripted_vision
+python -m retroagi.domains.smb.nes.obstacle_bench --bench data/full_smb_obstacles/Level1-1 --player scripted_vision
 # the scripted chooser, or the outcome network's, on fresh random levels
-python -m retroagi.stages.block_smb.game_levels --levels 100 --first-seed 100000 [--model data/outcome/outcome_20261109d.pt]
+python -m retroagi.domains.smb.sim.levels --levels 100 --first-seed 100000 [--model data/outcome/outcome_20261109d.pt]
 # sample outcomes, then train the outcome network
-python -m retroagi.stages.block_smb.outcome_sampling --levels 2000 --workers 14 --output data/datasets/block_smb/outcomes_NEW
-python -m retroagi.stages.block_smb.outcome_train --data data/datasets/block_smb/outcomes_NEW --fresh data/datasets/block_smb/outcomes_fresh_20261108 --output artifacts/block_smb/outcome_NEW
+python -m retroagi.framework.sampling --levels 2000 --workers 14 --output data/datasets/block_smb/outcomes_NEW
+python -m retroagi.framework.training --data data/datasets/block_smb/outcomes_NEW --fresh data/datasets/block_smb/outcomes_fresh_20261108 --output artifacts/block_smb/outcome_NEW
 ```
 
 ## Earlier design: the layered agent
@@ -154,7 +154,7 @@ for what was decided, why, and what is still to be built.
 
 ```text
 retroagi/
-  core/
+  legacy/core/
     vision.py, scene_vision.py   # the vision transformer, its training and measurements
     smb_pixel_types.py           # the pixel types and the objects built from them
     smb_scene_labels.py          # true objects for training labels
@@ -172,7 +172,7 @@ retroagi/
     smb_choices.py               # the candidate choices and the state's tokens
     outcome_network.py           # predicts every choice's outcome in one pass
     outcome_chooser.py           # the three rules on those predictions
-  stages/
+  legacy/
     block_smb/                   # the Block SMB game, layout families, teachers
                                  # and the layer trainer (layered_train.py);
                                  # game_levels.py: random levels of the game's pieces;
@@ -227,7 +227,7 @@ checkout to a trained agent. In short:
    with it:
    ```bash
    retroagi-block-smb exam-layer --checkpoint artifacts/block_smb/tactic/passed.pt
-   python -m retroagi.stages.full_smb.layered_eval --checkpoint artifacts/block_smb/tactic/passed.pt
+   python -m retroagi.legacy.full_smb.layered_eval --checkpoint artifacts/block_smb/tactic/passed.pt
    ```
 4. Run the test suite:
    ```bash

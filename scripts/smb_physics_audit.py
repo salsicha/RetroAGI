@@ -4,9 +4,9 @@ import argparse
 import json
 from pathlib import Path
 
-from retroagi.core.smb_physics import NESPlayerMotion
-from retroagi.stages.block_smb.env import MarioScenarioEnv
-from retroagi.stages.full_smb.play import FullSMBGame
+from retroagi.domains.smb.nes.game import FullSMBGame
+from retroagi.domains.smb.physics import NESPlayerMotion
+from retroagi.domains.smb.sim.env import MarioScenarioEnv
 
 
 def audit():

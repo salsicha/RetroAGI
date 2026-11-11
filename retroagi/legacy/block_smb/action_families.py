@@ -1,0 +1,548 @@
+"""The action layer's families: scenes that each need a single action.
+
+Each scene asks for one isolated maneuver. The teacher supplies spatial skill
+commands to the action learner. The tactic labels below are used when these
+scenes train skill. The additional mirrored families at the end cover raised
+platforms/enemies and immediate jumps down to a lower landing.
+
+| Family | The one action | Tactic | Parameters (every value is swept) |
+|---|---|---|---|
+| action_walk | walk right to the goal | advance | distance |
+| action_walk_back | walk back left to the goal behind | retreat | distance |
+| action_jump_gap | jump a pit from a standstill, landing between it and a second pit or an enemy | advance | pit width, distance to the edge, what follows and how far |
+| action_climb | jump up onto a step ahead from a standstill | climb_forward | step height, distance to the step |
+| action_climb_back | jump up onto a step behind from a standstill | climb_backward | step height, distance to the step |
+| action_descend | walk off a ledge ahead down to the floor | descend_forward | drop height, distance to the edge |
+| action_descend_back | walk off a ledge behind down to the floor | descend_backward | drop height, distance to the edge |
+| action_stomp | land on an enemy walking toward Mario | advance | its distance, its speed |
+| action_wait | stand still on a moving platform that carries Mario to the goal | hold_ground | how far it travels, its speed |
+| action_climb_pipe | jump up onto a pipe ahead from a standstill, sometimes a walker coming from behind | climb_forward | pipe height and width, distance to it, the walker's distance and speed |
+| action_stomp_down | jump down from a pipe or a step onto a walker on the floor below | advance | height, the walker's distance, speed and way |
+| action_run_jump_gap | run up to a pit and jump it running | advance | pit width, how far back Mario starts, the landing's width |
+
+action_climb_pipe and action_stomp_down are Full SMB 1-1's (user,
+2026-10-25: missing families found from the Full SMB failures): its pipes
+(32, 48 and 64 pixels tall) were not climbed, and its Goombas walk between
+them below Mario on their tops. action_run_jump_gap is too (user,
+2026-10-28): 1-1's first pit is reached running from the last pipe, and the
+skill ran into it; every other pit lesson starts Mario near the edge.
+
+The scenes going back to the left fit in one screen: the camera never
+scrolls back, so the whole scene must be in view from the start.
+
+Difficulty splits each family's main parameter into three ranges. The ranges
+stay inside what a jump from a standstill reaches (about 50 pixels forward and
+66 up), so every combination is a scene the action can finish; the sampler
+still checks the teacher's route and leaves out any that it can't. The
+exception is action_run_jump_gap, whose pits need the run.
+
+Each generator returns (scenario, parameters, authored actions); the teacher's
+route under the layout's tactics replaces the authored actions
+(monte_carlo._generate_family_scenario).
+"""
+
+from typing import Any
+
+from retroagi.domains.smb.sim.tactic_schedule import segment
+
+from .threat_variety import (
+    best_jump_room,
+    follow_up,
+    reachable_span,
+    standing_reach,
+    start_distance,
+)
+
+FLOOR = 220
+MARIO_WIDTH = 10
+# Generators place Mario for a 16-pixel-tall body (monte_carlo._finish_layout).
+STANDING = FLOOR - 20
+
+ACTION_FAMILIES = (
+    "action_walk",
+    "action_walk_back",
+    "action_jump_gap",
+    "action_climb",
+    "action_climb_back",
+    "action_descend",
+    "action_descend_back",
+    "action_stomp",
+    "action_wait",
+    "action_jump_gap_back",
+    "action_platform_up",
+    "action_platform_up_back",
+    "action_stomp_back",
+    "action_stomp_up",
+    "action_stomp_up_back",
+    "action_jump_down",
+    "action_jump_down_back",
+    "action_climb_pipe",
+    "action_stomp_down",
+    "action_run_jump_gap",
+)
+
+# The main parameter's range at each difficulty.
+DISTANCES = {"easy": (24, 80), "medium": (81, 140), "hard": (141, 200)}
+GAPS = {"easy": (8, 20), "medium": (21, 30), "hard": (31, 40)}
+STEPS = {"easy": (8, 24), "medium": (25, 40), "hard": (41, 56)}
+DROPS = {"easy": (8, 32), "medium": (33, 56), "hard": (57, 80)}
+STOMP_SPEEDS = {"easy": (0.4, 0.53), "medium": (0.54, 0.66), "hard": (0.67, 0.8)}
+TRAVELS = {"easy": (48, 64), "medium": (65, 88), "hard": (89, 112)}
+# Pipe heights (1-1's are 32, 48 and 64), within a jump from a standstill.
+PIPE_HEIGHTS = {"easy": (24, 32), "medium": (33, 48), "hard": (49, 64)}
+# Pits reached running (1-1's are 32 and 48 wide), and how far back Mario
+# starts from the edge: up to as far as the teacher plans a run-up and a
+# running jump (controller_teacher.PIT_AHEAD, 128 pixels from his middle),
+# so that the run-up is one run (from farther every layout began with the
+# same 127-pixel run, most of its runs, and the labels collapsed); a full
+# run is 2.5 pixels a frame after about 70. 1-1's first pit is 160 pixels
+# past the last pipe.
+# Each jump's length follows the pit's width: the widths recorded (easy
+# and medium) spread wide enough that no one length is most of a round's
+# jumps (the gate on teacher labels).
+RUN_GAPS = {"easy": (24, 44), "medium": (45, 56), "hard": (57, 64)}
+RUN_IN = (48, 120)
+
+
+def _walk(rng, difficulty: str, back: bool) -> tuple[dict, dict, list]:
+    distance = rng.randint(*DISTANCES[difficulty])
+    start = 40 + distance if back else 40
+    goal = 40 if back else 40 + distance
+    scenario = {
+        "world_width": 40 + distance + 64,
+        "mario": [start, STANDING],
+        "platforms": [[0, FLOOR, 40 + distance + 64, 20]],
+        "goal": [goal, STANDING, 16, 20],
+    }
+    return scenario, {"distance": distance, "difficulty_bin": difficulty}, [3 if back else 1]
+
+
+def action_walk(rng, difficulty: str):
+    return _walk(rng, difficulty, back=False)
+
+
+def action_walk_back(rng, difficulty: str):
+    return _walk(rng, difficulty, back=True)
+
+
+def action_jump_gap(rng, difficulty: str, world=None, edges=(96, 136)):
+    width = rng.randint(*GAPS[difficulty])
+    edge = rng.randint(*edges)
+    # From Mario's front to the edge: right at it, up to as far as a jump from
+    # a standstill (about 50 pixels) still clears the pit.
+    distance = start_distance(rng, 40 - width)
+    far = edge + width
+    world = world or far + 176
+    scenario = {
+        "world_width": world,
+        "mario": [edge - MARIO_WIDTH - distance, STANDING],
+        "platforms": [[0, FLOOR, edge, 20], [far, FLOOR, world - far, 20]],
+        "goal_requires_support": True,
+        # One jump, from where Mario stands (no run-up first).
+        "action_jump_direction": 1,
+    }
+    # A second pit or an enemy bounds the landing; the goal is the floor
+    # between the two threats. The jump keeping the most room from both pits
+    # and what follows covers the pit and the room: the room's width is drawn
+    # so that this jump is spread over every jump that clears the pit.
+    room = best_jump_room(rng, 16, 80, standing_reach(0) - width)
+    kind, room, detail = follow_up(rng, scenario, 1, far, 1, window=(room, room))
+    scenario["goal"] = [far, STANDING, room, 20]
+    parameters = {
+        "gap_width": width,
+        "edge_x": edge,
+        "edge_distance": distance,
+        "then": kind,
+        "landing_room": room,
+        "then_size": detail,
+        "difficulty_bin": difficulty,
+    }
+    return scenario, parameters, [2]
+
+
+def action_climb(rng, difficulty: str):
+    height = rng.randint(*STEPS[difficulty])
+    # The step's place and width, and how far Mario starts from it, vary: the
+    # landing on its top is a different distance away in each scene.
+    step = rng.randint(96, 136)
+    distance = start_distance(rng, 24)  # from Mario's front to the step
+    width = reachable_span(rng, 20, 96, 2 * (standing_reach(height) - 3 - distance - 5))
+    scenario = {
+        "world_width": step + width + 80,
+        "mario": [step - MARIO_WIDTH - distance, STANDING],
+        "platforms": [[0, FLOOR, step + width + 80, 20], [step, FLOOR - height, width, height]],
+        # Landing anywhere on the step completes the climb: a tall step's
+        # landing can be at its near edge, and walking on from there would be
+        # a second move (advance) in a one-tactic lesson.
+        "goal": [step, FLOOR - height - 20, width, 20],
+        "goal_requires_support": True,
+        # One jump, from where Mario stands (no run-up or step back first).
+        "action_jump_direction": 1,
+    }
+    parameters = {
+        "step_height": height,
+        "step_x": step,
+        "step_width": width,
+        "step_distance": distance,
+        "difficulty_bin": difficulty,
+    }
+    return scenario, parameters, [2]
+
+
+def action_climb_back(rng, difficulty: str):
+    height = rng.randint(*STEPS[difficulty])
+    step = rng.randint(24, 56)
+    distance = start_distance(rng, 24)  # from Mario's back to the step
+    width = reachable_span(rng, 20, 72, 2 * (standing_reach(height) - 3 - distance - 5))
+    world = step + width + 120
+    scenario = {
+        "world_width": world,
+        "mario": [step + width + distance, STANDING],
+        "platforms": [[0, FLOOR, world, 20], [step, FLOOR - height, width, height]],
+        "goal": [step, FLOOR - height - 20, width, 20],  # anywhere on the step
+        "goal_requires_support": True,
+        # One jump, from where Mario stands (no step away or toward it first).
+        "action_jump_direction": -1,
+    }
+    parameters = {
+        "step_height": height,
+        "step_x": step,
+        "step_width": width,
+        "step_distance": distance,
+        "difficulty_bin": difficulty,
+    }
+    return scenario, parameters, [4]
+
+
+def action_descend(rng, difficulty: str):
+    height = rng.randint(*DROPS[difficulty])
+    edge = 120
+    distance = rng.randint(0, 24)  # from Mario's front to the ledge's edge
+    # The goal covers the floor where a walk off the ledge lands, however high.
+    scenario = {
+        "world_width": edge + 160,
+        "mario": [edge - MARIO_WIDTH - distance, FLOOR - height - 20],
+        "platforms": [[0, FLOOR, edge + 160, 20], [0, FLOOR - height, edge, height]],
+        "goal": [edge + 8, STANDING, 120, 20],
+        "goal_requires_support": True,
+    }
+    parameters = {"drop_height": height, "edge_distance": distance, "difficulty_bin": difficulty}
+    return scenario, parameters, [1]
+
+
+def action_descend_back(rng, difficulty: str):
+    height = rng.randint(*DROPS[difficulty])
+    edge, world = 136, 256
+    distance = rng.randint(0, 24)  # from Mario's back to the ledge's edge
+    # The goal covers the floor where a walk off the ledge lands, however high.
+    scenario = {
+        "world_width": world,
+        "mario": [edge + distance, FLOOR - height - 20],
+        "platforms": [[0, FLOOR, world, 20], [edge, FLOOR - height, world - edge, height]],
+        "goal": [edge - 128, STANDING, 120, 20],
+        "goal_requires_support": True,
+    }
+    parameters = {"drop_height": height, "edge_distance": distance, "difficulty_bin": difficulty}
+    return scenario, parameters, [3]
+
+
+def action_climb_pipe(rng, difficulty: str):
+    """action_climb onto a pipe: drawn as one, as narrow as a level's; in
+    half the scenes a walker comes at Mario from behind (in Full SMB 1-1,
+    pressed against its 64-pixel pipes with Goombas walking up behind him,
+    the skill ran into the pipe instead of jumping onto it: user,
+    2026-10-26)."""
+    height = rng.randint(*PIPE_HEIGHTS[difficulty])
+    pipe = rng.randint(96, 136)
+    distance = start_distance(rng, 24)  # from Mario's front to the pipe
+    width = rng.randint(28, 36)
+    scenario = {
+        "world_width": pipe + width + 80,
+        "mario": [pipe - MARIO_WIDTH - distance, STANDING],
+        "platforms": [[0, FLOOR, pipe + width + 80, 20], [pipe, FLOOR - height, width, height]],
+        "platform_kinds": [None, "pipe"],
+        "goal": [pipe, FLOOR - height - 20, width, 20],  # anywhere on its top
+        "goal_requires_support": True,
+        "action_jump_direction": 1,
+    }
+    parameters = {
+        "pipe_height": height,
+        "pipe_x": pipe,
+        "pipe_width": width,
+        "pipe_distance": distance,
+        "difficulty_bin": difficulty,
+    }
+    if rng.random() < 0.5:
+        # Coming from behind, far enough that one jump from where Mario
+        # stands is still on time.
+        behind = rng.randint(32, 72)
+        speed = round(rng.uniform(*STOMP_SPEEDS[difficulty]), 3)
+        start = scenario["mario"][0] - behind - 12
+        scenario["enemies"] = [[max(0, start), 206, 0, pipe - 12, speed, 1]]
+        parameters.update(walker_behind=behind, walker_speed=speed)
+    return scenario, parameters, [2]
+
+
+def action_stomp_down(rng, difficulty: str):
+    """Mario on a pipe (or a step) with a walker on the floor below, coming at
+    the pipe or going away (turning at it, as a Goomba turns at a pipe): one
+    jump down onto it."""
+    height = rng.randint(*PIPE_HEIGHTS[difficulty])
+    pipe = rng.randint(48, 96)
+    width = rng.randint(28, 40)
+    edge = pipe + width
+    distance = start_distance(rng, 8)  # from Mario's front to the pipe's far edge
+    gap = rng.randint(8, 48)  # from the pipe's edge to the walker
+    speed = round(rng.uniform(*STOMP_SPEEDS[difficulty]), 3)
+    way = rng.choice((-1, 1))
+    enemy_x = edge + gap
+    scenario = {
+        "world_width": 256,
+        "mario": [edge - MARIO_WIDTH - distance, FLOOR - height - 20],
+        "platforms": [[0, FLOOR, 256, 20], [pipe, FLOOR - height, width, height]],
+        "platform_kinds": [None, rng.choice(("pipe", None))],
+        "enemies": [[enemy_x, 206, edge, 256, speed, way]],
+        "goal": [enemy_x - 2, 186, 16, 20],
+        "goal_on_stomp": True,
+        "action_jump_direction": 1,
+    }
+    parameters = {
+        "height": height,
+        "pipe_x": pipe,
+        "pipe_width": width,
+        "edge_distance": distance,
+        "enemy_gap": gap,
+        "enemy_speed": speed,
+        "enemy_way": way,
+        "difficulty_bin": difficulty,
+    }
+    return scenario, parameters, [2]
+
+
+def action_stomp(rng, difficulty: str):
+    distance = rng.randint(24, 72)  # from Mario's front to the enemy
+    speed = round(rng.uniform(*STOMP_SPEEDS[difficulty]), 3)
+    mario_x = rng.randint(24, 100)
+    enemy_x = mario_x + MARIO_WIDTH + distance
+    world = enemy_x + 120
+    scenario = {
+        "world_width": world,
+        "mario": [mario_x, STANDING],
+        "platforms": [[0, FLOOR, world, 20]],
+        # Walking left, toward Mario, over the whole floor.
+        "enemies": [[enemy_x, 206, 0, world, speed, -1]],
+        "goal": [enemy_x - 2, 186, 16, 20],
+        "goal_on_stomp": True,
+    }
+    parameters = {
+        "mario_x": mario_x,
+        "enemy_distance": distance,
+        "enemy_speed": speed,
+        "difficulty_bin": difficulty,
+    }
+    return scenario, parameters, [2]
+
+
+def action_wait(rng, difficulty: str):
+    travel = rng.randint(*TRAVELS[difficulty])
+    speed = round(rng.uniform(0.5, 1.0), 3)
+    shore, width, offset = 40, 48, 16  # Mario stands 16 pixels into the platform
+    start = shore
+    end = start + travel
+    scenario = {
+        "world_width": end + width + 80,
+        "mario": [start + offset, STANDING],
+        # The left shore, then a pit; the platform starts against the shore.
+        "platforms": [
+            [0, FLOOR, shore, 20],
+            {"x": start, "y": FLOOR, "w": width, "h": 10, "moving": [start, end, speed]},
+        ],
+        # Where Mario is when the platform reaches the end of its travel.
+        "goal": [end + offset - 3, STANDING, MARIO_WIDTH + 6, 20],
+        "goal_requires_support": True,
+        "tactics": [segment("hold_area", 1, area=1)],
+    }
+    parameters = {"travel": travel, "platform_speed": speed, "difficulty_bin": difficulty}
+    return scenario, parameters, [0]
+
+
+def _mirror(scenario):
+    """Reflect a one-screen maneuver, including enemy motion and its goal."""
+    import copy
+
+    reflected = copy.deepcopy(scenario)
+    world = scenario["world_width"]
+    reflected["mario"][0] = world - scenario["mario"][0] - MARIO_WIDTH
+    for platform in reflected["platforms"]:
+        platform[0] = world - platform[0] - platform[2]
+    goal = reflected["goal"]
+    goal[0] = world - goal[0] - goal[2]
+    for enemy in reflected.get("enemies", []):
+        enemy[0] = world - enemy[0] - 10
+        enemy[2], enemy[3] = world - enemy[3], world - enemy[2]
+        enemy[5] = -enemy[5]
+    reflected["action_jump_direction"] = -1
+    return reflected
+
+
+def action_jump_gap_back(rng, difficulty):
+    # Backward scenes fit in one screen: the camera never scrolls back.
+    scenario, params, _ = action_jump_gap(rng, difficulty, world=256, edges=(64, 96))
+    return _mirror(scenario), params, [4]
+
+
+def action_stomp_back(rng, difficulty):
+    scenario, params, _ = action_stomp(rng, difficulty)
+    scenario["world_width"] = 256
+    scenario["platforms"][0][2] = 256
+    scenario["enemies"][0][3] = 256
+    return _mirror(scenario), params, [4]
+
+
+def _raised(rng, difficulty, *, enemy=False, back=False):
+    height = rng.randint(*({"easy": (8, 16), "medium": (17, 28), "hard": (29, 40)}[difficulty]))
+    # From Mario's front to the step, and the raised platform's size: the
+    # landing (its middle, or the enemy on it) is a different distance away
+    # in each scene.
+    distance = start_distance(rng, 24)
+    step = rng.randint(96, 128)
+    width = reachable_span(rng, 24, 104, 2 * (standing_reach(height) - 3 - distance - 5))
+    top = FLOOR - height
+    scenario = {
+        "world_width": 256,
+        "mario": [step - MARIO_WIDTH - distance, STANDING],
+        "platforms": [[0, FLOOR, 256, 20], [step, top, width, 8]],
+        "goal": [step + 4, top - 20, width - 8, 20],
+        "goal_requires_support": True,
+        "action_jump_direction": 1,
+    }
+    params = {
+        "height": height,
+        "distance": distance,
+        "step_x": step,
+        "width": width,
+        "difficulty_bin": difficulty,
+    }
+    if enemy:
+        speed = rng.choice((0.0, 0.4, 0.8))
+        # Within a jump from a standstill (about 50 pixels).
+        place = step + rng.randint(8, max(8, min(width - 18, 40 - distance)))
+        scenario["enemies"] = [[place, top - 14, step, step + width, speed, rng.choice((-1, 1))]]
+        params["enemy_x"] = place
+        scenario["goal_on_stomp"] = True
+        params["enemy_speed"] = speed
+    return (_mirror(scenario) if back else scenario), params, [4 if back else 2]
+
+
+def action_platform_up(rng, difficulty):
+    return _raised(rng, difficulty)
+
+
+def action_platform_up_back(rng, difficulty):
+    return _raised(rng, difficulty, back=True)
+
+
+def action_stomp_up(rng, difficulty):
+    return _raised(rng, difficulty, enemy=True)
+
+
+def action_stomp_up_back(rng, difficulty):
+    return _raised(rng, difficulty, enemy=True, back=True)
+
+
+def _jump_down(rng, difficulty, back=False):
+    drop = rng.randint(*DROPS[difficulty])
+    gap = rng.randint(8, 24)
+    edge = rng.randint(72, 112)
+    # From Mario's front to the ledge's edge, and a second pit or an enemy on
+    # the floor below at a varied distance past the first pit: the landing is
+    # bounded on both sides.
+    distance = start_distance(rng, 16)
+    far = edge + gap
+    scenario = {
+        "world_width": 256,
+        "mario": [edge - MARIO_WIDTH - distance, FLOOR - drop - 20],
+        "platforms": [[0, FLOOR - drop, edge, 12], [far, FLOOR, 256 - far, 20]],
+        "goal_requires_support": True,
+        "action_jump_direction": 1,
+    }
+    kind, room, detail = follow_up(rng, scenario, 1, far, 1, window=(32, 80))
+    scenario["goal"] = [far, STANDING, room, 20]
+    params = {
+        "drop_height": drop,
+        "gap_width": gap,
+        "edge_x": edge,
+        "edge_distance": distance,
+        "then": kind,
+        "landing_room": room,
+        "then_size": detail,
+        "difficulty_bin": difficulty,
+    }
+    return (_mirror(scenario) if back else scenario), params, [4 if back else 2]
+
+
+def action_jump_down(rng, difficulty):
+    return _jump_down(rng, difficulty)
+
+
+def action_jump_down_back(rng, difficulty):
+    return _jump_down(rng, difficulty, back=True)
+
+
+def action_run_jump_gap(rng, difficulty: str):
+    """A pit Mario reaches running: he starts far back from its edge on a
+    floor, the far floor goes on; landing anywhere on its first stretch wins.
+    No jump is forced from where he stands: the teacher runs up and jumps
+    (its run-ups keep their speed), as a run through 1-1 would."""
+    width = rng.randint(*RUN_GAPS[difficulty])
+    distance = rng.randint(*RUN_IN)  # from Mario's front to the edge
+    x0 = rng.randint(24, 48)
+    edge = x0 + MARIO_WIDTH + distance
+    far = edge + width
+    room = rng.randint(64, 128)
+    world = far + room + 96
+    scenario = {
+        "world_width": world,
+        "mario": [x0, STANDING],
+        "platforms": [[0, FLOOR, edge, 20], [far, FLOOR, world - far, 20]],
+        "goal": [far, STANDING, room, 20],
+        "goal_requires_support": True,
+    }
+    parameters = {
+        "gap_width": width,
+        "edge_x": edge,
+        "edge_distance": distance,
+        "landing_room": room,
+        "difficulty_bin": difficulty,
+    }
+    return scenario, parameters, [1] * (distance // 2) + [2] * 16 + [1] * 40
+
+
+GENERATORS = {
+    "action_walk": action_walk,
+    "action_walk_back": action_walk_back,
+    "action_jump_gap": action_jump_gap,
+    "action_climb": action_climb,
+    "action_climb_back": action_climb_back,
+    "action_descend": action_descend,
+    "action_descend_back": action_descend_back,
+    "action_stomp": action_stomp,
+    "action_wait": action_wait,
+    "action_jump_gap_back": action_jump_gap_back,
+    "action_platform_up": action_platform_up,
+    "action_platform_up_back": action_platform_up_back,
+    "action_stomp_back": action_stomp_back,
+    "action_stomp_up": action_stomp_up,
+    "action_stomp_up_back": action_stomp_up_back,
+    "action_jump_down": action_jump_down,
+    "action_jump_down_back": action_jump_down_back,
+    "action_climb_pipe": action_climb_pipe,
+    "action_stomp_down": action_stomp_down,
+    "action_run_jump_gap": action_run_jump_gap,
+}
+
+
+def action_family_scenario(family: str, rng, difficulty: str) -> tuple[dict, Any, list]:
+    # A layout with an enemy is watched before the first decision
+    # (monte_carlo._generate_family_scenario).
+    return GENERATORS[family](rng, difficulty)

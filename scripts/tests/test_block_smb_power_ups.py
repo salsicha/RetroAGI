@@ -1,8 +1,14 @@
 """Question blocks, mushrooms and big Mario in Block SMB (env.py), as the game
 has them."""
 
-from retroagi.stages.block_smb.env import BIG_H, COIN_POINTS, HURT_FRAMES, MUSHROOM_POINTS, MarioScenarioEnv
-from retroagi.stages.block_smb.env_state import restore_env_state, snapshot_env_state
+from retroagi.domains.smb.sim.env import (
+    BIG_H,
+    COIN_POINTS,
+    HURT_FRAMES,
+    MUSHROOM_POINTS,
+    MarioScenarioEnv,
+)
+from retroagi.domains.smb.sim.env_state import restore_env_state, snapshot_env_state
 
 FLOOR = 208
 
@@ -153,7 +159,7 @@ def cannon_scene(mario_x):
 
 
 def test_a_cannon_fires_bullet_bills_toward_mario_through_everything():
-    from retroagi.stages.block_smb.env import BULLET_SPEED, CANNON_FRAMES
+    from retroagi.domains.smb.sim.env import BULLET_SPEED, CANNON_FRAMES
 
     env = cannon_scene(40)
     for _ in range(CANNON_FRAMES[0]):
@@ -180,7 +186,7 @@ def test_a_cannon_fires_bullet_bills_toward_mario_through_everything():
 
 
 def test_a_piranha_plant_rises_as_the_games_and_stays_down_while_mario_is_near():
-    from retroagi.stages.block_smb.piranha import EXPOSED_FRAMES, HIDDEN_FRAMES, RISE_FRAMES
+    from retroagi.domains.smb.sim.piranha import EXPOSED_FRAMES, HIDDEN_FRAMES, RISE_FRAMES
 
     def plant_scene(mario_x):
         env = MarioScenarioEnv(world_width=1024)

@@ -7,7 +7,7 @@ import os
 
 os.environ.setdefault("SDL_VIDEODRIVER", "dummy")
 
-from retroagi.stages.block_smb.env import MarioScenarioEnv
+from retroagi.domains.smb.sim.env import MarioScenarioEnv
 
 FLOOR = 220
 

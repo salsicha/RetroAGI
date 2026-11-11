@@ -1,15 +1,9 @@
 """Random levels of the real game's pieces in Block SMB
-(stages/block_smb/game_levels.py, docs/choose-and-control-plan.md phase 2)."""
+(domains/smb/sim/levels.py, docs/choose-and-control-plan.md phase 2)."""
 
-from retroagi.stages.block_smb.env import MarioScenarioEnv
-from retroagi.stages.block_smb.game_levels import (
-    FLOOR,
-    SCROLL_X,
-    BlockTruthState,
-    play,
-    random_level,
-)
-from retroagi.stages.full_smb.scripted_chooser import ScriptedChooser
+from retroagi.domains.smb.scripted_chooser import ScriptedChooser
+from retroagi.domains.smb.sim.env import MarioScenarioEnv
+from retroagi.domains.smb.sim.levels import FLOOR, SCROLL_X, BlockTruthState, play, random_level
 
 
 def test_a_seed_always_makes_the_same_level_of_the_games_pieces():

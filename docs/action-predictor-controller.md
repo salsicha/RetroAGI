@@ -3,8 +3,8 @@
 Status: approved (2026-10-10) and built (2026-10-11): the skill chooses only
 actions. Sections 2 and 3 are superseded (2026-10-16): the action predictor
 is replaced by the world model (the policy's LSTM, run once per action after
-the skill chooses it, `core/world_model.py`), and the target tracker by the
-collision trackers (collision time, place, stomp or hit, `core/target_tracker.py`),
+the skill chooses it, `legacy/core/world_model.py`), and the target tracker by the
+collision trackers (collision time, place, stomp or hit, `legacy/core/target_tracker.py`),
 both reading the executor's first-order kinematics and trained on recorded
 truth. The adaptation network's design (section 4) is proposed, to confirm. The
 current design is described in the [architecture and training
@@ -60,7 +60,7 @@ jumps over, onto or across things are jumps to where they land
 
 An action is a verb and the object it is aimed at, one of the objects the
 vision sees (a surface, an enemy, the edge of a gap). The verbs
-(`core/action_tokens.py`):
+(`legacy/core/action_tokens.py`):
 
 | Verb | Object | Meaning |
 |---|---|---|
@@ -80,7 +80,7 @@ others are masked.
 The skill keeps its transformer; its output heads become a verb choice and a
 pointer that picks one of its scene tokens. It no longer outputs x and y.
 
-**The teacher's actions** (`stages/block_smb/teacher_actions.py`, training
+**The teacher's actions** (`legacy/block_smb/teacher_actions.py`, training
 labels only). Each command the teacher chooses is named by what its trial
 did:
 
@@ -299,7 +299,7 @@ work out later:
    on" to 18 pixels: the rest needs the threats around it.
 3. Build the target tracker; train it on logged object positions; measure
    its error at each time ahead and how fast it notices a change. Built
-   (2026-10-10, `core/target_tracker.py`, `stages/block_smb/tracker_train.py`):
+   (2026-10-10, `legacy/core/target_tracker.py`, `legacy/block_smb/tracker_train.py`):
    on synthetic walkers it learns where they turn (64 frames ahead: 5 to 8
    pixels off, against 26 for steady motion) and its check notices a turn
    within 4 frames. Trained on the same episodes' tracked objects (450

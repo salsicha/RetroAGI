@@ -3,8 +3,8 @@
 import unittest
 from pathlib import Path
 
-from retroagi.stages.block_smb import env as block_env
-from retroagi.stages.block_smb.env import MarioScenarioEnv
+from retroagi.domains.smb.sim import env as block_env
+from retroagi.domains.smb.sim.env import MarioScenarioEnv
 
 SCENARIOS_DIR = Path(block_env.__file__).with_name("scenarios")
 

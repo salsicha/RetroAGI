@@ -1,0 +1,427 @@
+"""Spatial commands, isolated action inputs, and directional maneuver coverage."""
+
+import os
+
+os.environ.setdefault("SDL_VIDEODRIVER", "dummy")
+
+import numpy as np
+import pytest
+import torch
+
+from retroagi.domains.smb.sim.env import MarioScenarioEnv
+from retroagi.domains.smb.sim.env_state import snapshot_env_state
+from retroagi.legacy.block_smb.action_families import ACTION_FAMILIES
+from retroagi.legacy.block_smb.layered_train import (
+    EpisodeTask,
+    LayeredTrainConfig,
+    _Lane,
+    _teacher_given,
+    learner_families,
+    learner_losses,
+)
+from retroagi.legacy.block_smb.monte_carlo import (
+    BLOCK_SMB_MC_FAMILIES,
+    sample_block_smb_monte_carlo_scenario,
+)
+from retroagi.legacy.block_smb.teacher_tokens import episode_teacher, teacher_plan, teacher_skill
+from retroagi.legacy.core.layered_policy import LayeredSMBPolicy, choose
+from retroagi.legacy.core.tokens import SkillToken, encode_skill
+
+
+def test_skill_chooses_an_action_and_the_executor_gets_a_relative_pixel_destination():
+    from retroagi.legacy.core.action_tokens import POINTER_TOKENS, VERBS, ActionToken, pointer_index
+    from retroagi.legacy.core.layered_policy import POINTER_START
+
+    assert encode_skill(SkillToken("jump", -64, 32)).tolist() == [0, 1, 0, -0.25, 0.125]
+    assert encode_skill(SkillToken("hold", 80, -40)).tolist() == [0, 0, 1, 0, 0]
+    for mode, x, y in [("advance", 0, 0), ("run", 257, 0), ("jump", 1.5, 0)]:
+        with pytest.raises(ValueError):
+            SkillToken(mode, x, y)
+    logits = {
+        "verb": torch.full((len(VERBS),), -9.0),
+        "pointer": torch.full((POINTER_TOKENS,), -9.0),
+    }
+    logits["verb"][VERBS.index("jump")] = 9
+    logits["pointer"][pointer_index(("surfaces", 1)) - POINTER_START] = 9
+    assert choose("skill", logits)[0] == ActionToken("jump", ("surfaces", 1))
+
+
+@pytest.mark.timeout(600)
+# Not action_run_jump_gap: its pit is reached running, a run first.
+@pytest.mark.parametrize("family", [f for f in ACTION_FAMILIES[9:] if f != "action_run_jump_gap"])
+@pytest.mark.parametrize("difficulty", ["easy", "medium", "hard"])
+def test_new_maneuvers_are_immediate_directional_jumps_with_spatial_landings(family, difficulty):
+    sample = sample_block_smb_monte_carlo_scenario(
+        split="validation",
+        seed=3,
+        sample_index=0,
+        family=family,
+        difficulty=difficulty,
+    )
+    env = MarioScenarioEnv()
+    try:
+        env.reset(scenario=sample.scenario)
+        state = episode_teacher(sample.scenario)
+        plan, _ = teacher_plan(env, state)
+        before = snapshot_env_state(env)
+        target = teacher_skill(env, state, plan)
+        assert env.mario == {**before["mario"], "_platform": env.mario.get("_platform")}
+        assert env.steps == before["steps"]
+        assert target.mode == "jump"
+        side = -1 if family.endswith("back") else 1
+        assert plan.action == (4 if side < 0 else 2)
+        assert target.x * side > 0
+        if "up" in family:
+            assert target.y < 0
+        if "down" in family:
+            assert target.y > 0
+        for button in sample.oracle["actions"]:
+            if env.step(button)[2]:
+                break
+        assert env._goal_credited
+    finally:
+        env.close()
+
+
+@pytest.mark.timeout(600)
+@pytest.mark.parametrize("learner", ["skill"])
+@pytest.mark.parametrize("label", [True, False])
+@pytest.mark.parametrize("family", ["action_walk", "enemy_patrol"])
+def test_teacher_collection_and_learning_use_the_new_layer_contract(
+    learner, label, family, monkeypatch
+):
+    from retroagi.domains.smb.perception.scene_labels import scene_from_labels
+    from retroagi.legacy.core.smb_agent import SMBAgents
+
+    # Exact scenes stand in for vision, while the agent still accepts only frames.
+    task = EpisodeTask(0, family, "train", 7, 0, float(label), label, difficulty="easy")
+    lane = _Lane(task, 0)
+    if learner == "skill" and not label:
+        from retroagi.legacy.block_smb import teacher_tokens
+
+        def unused(*args, **kwargs):
+            raise AssertionError("skill evaluation searched for a teacher action route")
+
+        monkeypatch.setattr(teacher_tokens, "teacher_plan", unused)
+        monkeypatch.setattr(teacher_tokens, "teacher_skill", unused)
+
+    class Observer:
+        def observe(self, screens):
+            return [scene_from_labels(lane.env.scene_labels())]
+
+    policy = LayeredSMBPolicy().eval()
+
+    def carry_out(number, action):
+        # Labelled: the teacher carries out the skill's own actions (their
+        # ground truth). Unlabelled, a fixed stand-in: no teacher is asked.
+        if label:
+            return lane.carry_out(action)
+        return SkillToken("hold", 0, 0) if action.verb == "wait" else SkillToken("run", 16, 0)
+
+    agent = SMBAgents(Observer(), policy, "cpu", carry_out=carry_out)
+    given = _teacher_given(learner, {0: lane})
+    feedback = []
+    try:
+        for _ in range(3):
+            lane.teacher.observe_frame(lane.env)
+            step = agent.act([lane.screen], [0], given=given, run_given=(learner,))[0]
+            for key, row in zip("abc", step.rows):
+                lane.frames[key].append(row)
+            if step.decision:
+                lane.note_decision(learner, step.decision)
+                feedback.append(step.decision.execution_feedback)
+                assert step.decision.skill is not None
+                assert ("skill" in step.decision.chosen) == (learner == "skill")
+                assert step.decision.tactic_step is None
+            lane.frames["button"].append(step.button)
+            lane.frames["reward"].append(0.0)
+            lane.frames["potential"].append(0.0)
+            lane.screen, _, _, _, _ = lane.env.step(step.button)
+        record = lane.record()
+        if learner == "skill":
+            assert np.allclose(record.execution_feedback, feedback)
+        if learner == "skill" and not label:
+            assert not record.labels["valid"].any()
+            assert all(
+                len(record.labels[head]) == len(record.decision_frames)
+                for head in ("verb", "pointer", "action_valid", "end_dx", "end_dy")
+            )
+            return
+        losses, _ = learner_losses(policy, learner, [record], 1.0, "cpu")
+        assert losses
+        sum(losses.values()).backward()
+        assert any(p.grad is not None for p in getattr(policy, learner).parameters())
+    finally:
+        lane.env.close()
+
+
+def test_unlabelled_skill_teacher_execution_still_gets_a_destination():
+    task = EpisodeTask(0, "action_walk", "train", 7, 0, 1.0, False, difficulty="easy")
+    lane = _Lane(task, 0)
+    try:
+        asked = lane.ask_teacher("skill", None)
+        assert asked["plays_teacher"]
+        assert asked["skill"] is not None and asked["action"] is not None
+    finally:
+        lane.env.close()
+
+
+def test_skill_stage_is_available_and_checkpoint_sequence_includes_it():
+    from retroagi.legacy.block_smb.cli import build_parser
+    from retroagi.legacy.block_smb.layered_train import GIVEN, LEARNERS
+
+    assert LEARNERS == ("skill", "tactic")
+    assert GIVEN == {"skill": "tactic", "tactic": None}
+    assert LayeredTrainConfig(learner="skill").learner == "skill"
+    assert set(ACTION_FAMILIES) <= set(learner_families("skill", BLOCK_SMB_MC_FAMILIES))
+    assert (
+        build_parser()
+        .parse_args(["exam-layer", "--checkpoint", "some.pt", "--learner", "skill"])
+        .learner
+        == "skill"
+    )
+
+
+def test_skill_receives_strategy_context_in_runtime_and_training_records(monkeypatch):
+    from retroagi.domains.smb.perception.scene_labels import scene_from_labels
+    from retroagi.legacy.core.smb_agent import SMBAgents
+    from retroagi.legacy.core.tokens import (
+        STRATEGY_WIDTH,
+        TACTIC_WIDTH,
+        StrategyToken,
+        encode_strategy,
+    )
+
+    task = EpisodeTask(0, "action_walk", "train", 7, 0, 0.0, False, difficulty="easy")
+    lane = _Lane(task, 0)
+    switch = StrategyToken("max_points", 1)
+    lane.switch = switch
+
+    class Observer:
+        def observe(self, screens):
+            return [scene_from_labels(lane.env.scene_labels())]
+
+    policy = LayeredSMBPolicy().eval()
+    original = policy.run_skill
+    seen = []
+
+    def run(*args, **kwargs):
+        seen.append(kwargs["strategy"].clone())
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(policy, "run_skill", run)
+    agents = SMBAgents(
+        Observer(),
+        policy,
+        "cpu",
+        switch=switch,
+        carry_out=lambda number, action: lane.carry_out(action),
+    )
+    try:
+        step = agents.act([lane.screen], [0], given=_teacher_given("skill", {0: lane}))[0]
+        for key, row in zip("abc", step.rows):
+            lane.frames[key].append(row)
+        lane.note_decision("skill", step.decision)
+        assert torch.equal(seen[0][0], encode_strategy(switch))
+        recorded = lane.decisions["given"][0]
+        assert len(recorded) == TACTIC_WIDTH + STRATEGY_WIDTH
+        assert recorded[-STRATEGY_WIDTH:].tolist() == encode_strategy(switch).tolist()
+    finally:
+        lane.env.close()
+
+
+def test_legacy_checkpoint_migration_preserves_action_and_existing_skill_weights(tmp_path):
+    import copy
+    from dataclasses import asdict
+
+    from retroagi.legacy.block_smb.layered_train import load_layered_checkpoint
+    from retroagi.legacy.core.smb_observer import observation_layout
+    from retroagi.legacy.core.tokens import TACTIC_WIDTH, token_layout
+
+    policy = LayeredSMBPolicy()
+    state = copy.deepcopy(policy.state_dict())
+    state["skill.above.weight"] = state["skill.above.weight"][:, :TACTIC_WIDTH].clone()
+    layout = token_layout()
+    del layout["skill"]["strategy_context"]
+    path = tmp_path / "legacy.pt"
+    torch.save(
+        {
+            "settings": asdict(policy.settings),
+            "state_dict": state,
+            "token_layout": layout,
+            "observation_layout": observation_layout(),
+            "trained_layers": ["action"],
+        },
+        path,
+    )
+    loaded, metadata = load_layered_checkpoint(path)
+    assert metadata["load_migrations"]
+    for name, value in state.items():
+        if name.startswith("memory."):
+            continue  # the world model starts untrained (memory version 5)
+        actual = loaded.state_dict()[name]
+        if name == "skill.above.weight":
+            assert torch.equal(actual[:, :TACTIC_WIDTH], value)
+            assert not actual[:, TACTIC_WIDTH:].any()
+        else:
+            assert torch.equal(actual, value), name
+
+
+def test_skill_curriculum_excludes_tactic_decisions_but_keeps_local_maneuvers():
+    from retroagi.legacy.block_smb.tactic_families import TACTIC_TRAINING_FAMILIES
+
+    families = set(learner_families("skill", BLOCK_SMB_MC_FAMILIES))
+    assert families == set(BLOCK_SMB_MC_FAMILIES) - set(TACTIC_TRAINING_FAMILIES)
+    assert len(families) == 44
+    assert not families & set(learner_families("tactic", BLOCK_SMB_MC_FAMILIES))
+    assert not any("stomp" in name and "recovery" in name for name in BLOCK_SMB_MC_FAMILIES)
+    assert {
+        "enemy_hop",
+        "enemy_stomp",
+        "action_wait",
+        "landing_enemy",
+        "skill_overhead_climb",
+        "skill_raised_climb",
+        "skill_gap_descent",
+        "skill_ledge_descent",
+        "skill_enemy_bypass",
+        "skill_enemy_bypass_back",
+    } <= families
+    assert "skill_enemy_bypass" in families
+    assert "choice_alternate_route" not in families
+
+
+def test_enemy_bypass_sampler_keeps_drawing_after_rejected_duplicates(monkeypatch):
+    import copy
+    import random
+    from collections import Counter
+
+    from retroagi.legacy.block_smb import monte_carlo
+
+    generate, verify = monte_carlo._generate_family_scenario, monte_carlo._verified_route
+    repeated = generate(
+        "skill_enemy_bypass",
+        monte_carlo.ParameterDraws(random.Random(1)),
+        split="train",
+        difficulty="easy",
+    )
+    draws = []
+
+    def repeating(family, rng, **kwargs):
+        # The first three draws repeat one layout, which its route check rejects.
+        drawn = generate(family, rng, **kwargs)
+        draws.append(family)
+        return copy.deepcopy(repeated) if len(draws) <= 3 else drawn
+
+    def rejecting(family, scenario, actions):
+        if scenario == repeated[0]:
+            return None, "no_verified_route", None
+        return verify(family, scenario, actions)
+
+    monkeypatch.setattr(monte_carlo, "_generate_family_scenario", repeating)
+    monkeypatch.setattr(monte_carlo, "_verified_route", rejecting)
+    rejected = Counter()
+    sample = sample_block_smb_monte_carlo_scenario(
+        split="train",
+        seed=0,
+        sample_index=0,
+        family="skill_enemy_bypass",
+        difficulty="easy",
+        rejection_counter=rejected,
+    )
+    assert rejected["duplicate_regeneration"] == 2
+    assert sample.reachability["reachable"] and sample.scenario != repeated[0]
+
+
+@pytest.mark.timeout(300)
+@pytest.mark.parametrize(
+    "family,tactic",
+    [
+        ("skill_overhead_climb", "climb_forward"),
+        ("skill_raised_climb", "climb_forward"),
+        ("skill_gap_descent", "descend_forward"),
+        ("skill_ledge_descent", "descend_forward"),
+    ],
+)
+@pytest.mark.parametrize("difficulty", ["easy", "medium", "hard"])
+def test_route_skill_ends_on_first_destination_without_a_tactic_sequence(
+    family, tactic, difficulty
+):
+    from retroagi.domains.smb.sim.tactic_schedule import _support_index
+    from retroagi.legacy.block_smb.teacher_tokens import teacher_tactic
+
+    sample = sample_block_smb_monte_carlo_scenario(
+        split="validation", seed=2026100801, sample_index=0, family=family, difficulty=difficulty
+    )
+    scenario = sample.scenario
+    target = sample.parameters["target_platform"]
+    assert len(scenario["tactics"]) == 1
+    assert scenario["tactics"][0]["route"] == [target]
+    assert not scenario["coins"]
+    env = MarioScenarioEnv()
+    try:
+        env.reset(scenario=scenario)
+        state = episode_teacher(scenario)
+        checked_jump = False
+        for i, button in enumerate(sample.oracle["actions"]):
+            state.observe_frame(env)
+            if i == 0 or (button in (2, 4, 5) and not checked_jump):
+                plan, _ = teacher_plan(env, state, certify_holds=False)
+                goal = teacher_skill(env, state, plan)
+                gx = env.mario["x"] + env.mario["w"] / 2 + goal.x
+                gy = env.mario["y"] + env.mario["h"] + goal.y
+                half = env.mario["w"] / 2
+                assert any(
+                    p["rect"].left + half <= gx <= p["rect"].right - half
+                    and abs(gy - p["rect"].top) <= 1
+                    for p in env.platforms
+                ), (family, difficulty, goal)
+                checked_jump |= button in (2, 4, 5)
+            assert teacher_tactic(env, state).stance == tactic
+            done = env.step(button)[2]
+            if _support_index(env) == target:
+                assert done and env._goal_credited
+                assert i == len(sample.oracle["actions"]) - 1
+                break
+            assert not done
+        else:
+            pytest.fail("local maneuver never reached its destination")
+    finally:
+        env.close()
+
+
+@pytest.mark.timeout(300)
+@pytest.mark.parametrize("family", ["skill_enemy_bypass", "skill_enemy_bypass_back"])
+@pytest.mark.parametrize("difficulty", ["easy", "medium", "hard"])
+def test_enemy_bypass_lands_beyond_a_live_enemy_and_stomping_fails(family, difficulty):
+    sample = sample_block_smb_monte_carlo_scenario(
+        split="validation",
+        seed=3,
+        sample_index=0,
+        family=family,
+        difficulty=difficulty,
+    )
+    env = MarioScenarioEnv()
+    try:
+        env.reset(scenario=sample.scenario)
+        teacher = episode_teacher(sample.scenario)
+        plan, _ = teacher_plan(env, teacher, certify_holds=False)
+        target = teacher_skill(env, teacher, plan)
+        assert target.mode == "jump"
+        assert target.x < 0 if family.endswith("back") else target.x > 0
+        for action in sample.oracle["actions"]:
+            if env.step(action)[2]:
+                break
+        assert env._goal_credited and env.mario["on_ground"]
+        assert not any(e["dead"] for e in env.enemies)
+        enemy = env.enemies[0]
+        if family.endswith("back"):
+            assert env.mario["x"] + env.mario["w"] < enemy["x"]
+        else:
+            assert env.mario["x"] > enemy["x"] + enemy["w"]
+        env.reset(scenario=sample.scenario)
+        env.enemies[0]["dead"] = True
+        _, _, terminated, _, info = env.step(0)
+        assert terminated and info["off_route"] and not env._goal_credited
+    finally:
+        env.close()

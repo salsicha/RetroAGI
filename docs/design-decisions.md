@@ -53,7 +53,7 @@ Built and measured with the scripted chooser standing in for the chooser
 - from game memory, 24/24 obstacles and 1-1 finished in both modes; from
   vision alone, 0.98 of the obstacles and the speed run finished (35fb5d2,
   43fb55f);
-- random Block SMB levels from 1-1's pieces (stages/block_smb/
+- random Block SMB levels from 1-1's pieces (legacy/block_smb/
   game_levels.py): 99 of 100 finished in the speed run, 98 in max points;
   the fixes they needed left 1-1 at 24/24 from game memory and 0.92 from
   vision (max points at Goomba pairs).
@@ -703,7 +703,7 @@ Measured first: a Full SMB piranha plant stays down 64 frames, but as long
 as Mario is within about 35 pixels it does not come up at all (down 6,202
 frames once); a time limit on memory was the wrong rule.
 
-- `core/smb_tracked_objects.py`: up to 20 enemies and moving platforms; one
+- `legacy/core/smb_tracked_objects.py`: up to 20 enemies and moving platforms; one
   out of sight stays where it vanished, with its last velocity and how long
   it has been unseen, without a time limit; the same kind seen within 8
   pixels of there is it found again; seen defeated there ends it; a full
@@ -811,7 +811,7 @@ must happen during the action"; "If Mario isn't hit during his action then
 the layout was a failure" (hits and stomps both count); then "the gru should
 know when no collision will happen, so include misses".
 
-- **Fifteen collision families** (`stages/block_smb/collision_families.py`),
+- **Fifteen collision families** (`legacy/block_smb/collision_families.py`),
   each one scripted action against an enemy: waits (a walker or a monster
   walking into Mario, a plant rising under him on its pipe, a walker
   dropping onto him from a ledge), runs (into a walker or a monster coming
@@ -829,7 +829,7 @@ know when no collision will happen, so include misses".
   truth's contact labels show it) or a miss (the action ends with none).
   **Failed** (recorded with its layout, not kept): a contact before the
   action, a death with no enemy contact, a timeout.
-- **Dataset and training** (`stages/block_smb/collision_train.py`): kept
+- **Dataset and training** (`legacy/block_smb/collision_train.py`): kept
   lessons saved one gzip-compressed file per family; the trackers, from the
   skill run's, learn from them alone; then measured on freshly drawn layouts
   of each family. The tactic run and Full SMB go on from these trackers.
@@ -875,7 +875,7 @@ attempting"; then "1-1 only first" and "Train on all".
 - **Played as deployed**, every network engaged: vision, the tactic and
   skill layers (sampling their choices), the world model carrying out the
   skill's actions, the trackers ending waits and aiming stomps
-  (`stages/full_smb/learn.py`, `practice.play_recorded`).
+  (`legacy/full_smb/learn.py`, `practice.play_recorded`).
 - **Rewards follow the mode played**, in Block SMB's units: progress, a cost
   per frame (five times as much in speed run), points (max points only), a
   loss at death, the goal (speed run: plus the share of the timer left).
@@ -999,23 +999,23 @@ Approved plan (`/home/amoran/.claude/plans/resilient-wobbling-abelson.md`):
   should not be doing any state estimation since the executor is already
   doing that. send the state estimates to the LSTM". The collision trackers
   read the same estimates. Built: `smb_trajectory.Track` (16-sighting mean,
-  identity kept 8 frames unseen), `core/smb_kinematics.py`.
+  identity kept 8 frames unseen), `legacy/core/smb_kinematics.py`.
 - **Truth is recorded** with collection episodes (`record_truth`) and labels
-  are made afterwards from recorded real paths (`core/collision_labels.py`,
-  `core/action_outcomes.py`), the same way Full SMB's memory will fill them.
-- **Collision trackers** (`core/target_tracker.py`, rewritten): per enemy,
+  are made afterwards from recorded real paths (`legacy/core/collision_labels.py`,
+  `legacy/core/action_outcomes.py`), the same way Full SMB's memory will fill them.
+- **Collision trackers** (`legacy/core/target_tracker.py`, rewritten): per enemy,
   every frame, a stomp or a hit in two-frame bins over 96 frames, or none,
   and the contact place; inputs are the kinematics, what vision shows of the
   enemy and the action in progress (an enemy-aimed action's destination is
   the enemy's seen point, never the teacher's command). The old
   displacement tracker and the action controller are deleted.
-- **The world model** (`core/world_model.py`, the policy's `memory`): one
+- **The world model** (`legacy/core/world_model.py`, the policy's `memory`): one
   LSTM step per action; trained on executed and tried actions
   (`world_model_train.py`). The action predictor and its trainer are
   deleted. Checkpoints load at memory version 5 with it untrained.
 
 - **Deployed execution** (built): the world model's outcome is the
-  destination; `core/smb_threat.py` ends waits and ground moves when the
+  destination; `legacy/core/smb_threat.py` ends waits and ground moves when the
   trackers expect a hit within the executor's jump lead (+5 frames; an enemy
   not yet seen closing is given 0.5 px a frame); stomps aim at the trackers'
   contact point. `exam-layer --execution` measures each network apart.
@@ -1027,10 +1027,10 @@ fresh stages (user, 2026-10-17; chained). Then the Full SMB loop.
   with the Full SMB foundation"): the boxes the game itself tests contacts
   with (Mario's and each enemy slot's), each slot's drawn box, alive or
   defeated, stompable; the level's progress (Mario's distance into it, score,
-  coins, time left, dying, left the level) (`stages/full_smb/truth.py`). The
+  coins, time left, dying, left the level) (`domains/smb/nes/truth.py`). The
   game reuses its six enemy slots as the level scrolls; a slot filled again is
   a new enemy column. The arrays have Block SMB's recording format, so the
-  same labels and the same trainers read them. `stages/full_smb/practice.py`
+  same labels and the same trainers read them. `legacy/full_smb/practice.py`
   records a playthrough with the deployed agent (no teacher). How the
   playthroughs feed learning (how many per update, replay, the rewards of the
   two modes, the skill's and tactic's reward rounds) is to be settled with the
@@ -1197,7 +1197,7 @@ Built so far:
   input, the expected-scene inputs and the tactic memory's action-memory input
   are gone; old checkpoints migrate (`memory_version` 4); the predictor is
   refused in training.
-- Collision truth (`stages/block_smb/collision_truth.py`).
+- Collision truth (`legacy/block_smb/collision_truth.py`).
 - Every wait is one action of true length. The teacher's one-frame holds are
   measured when played (`teacher_tokens.whole_wait`). A wait ended by a coming
   walker is marked (`SkillToken.threat`), and the executor ends it as `threat`.
@@ -1425,7 +1425,7 @@ rather than by an action it would teach.
   destination; a point where the floor is cut at an enemy is on the nearest
   piece of that floor.
 
-Pictures of every skill family (`stages/block_smb/family_atlas.py`, user
+Pictures of every skill family (`legacy/block_smb/family_atlas.py`, user
 request: each drawn parameter at its lowest, middle and highest value, enemy
 and moving-platform motion blurred, a heat spot at each decision) then
 showed decisions in the air of two kinds, both fixed:

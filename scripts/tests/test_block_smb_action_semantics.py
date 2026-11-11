@@ -8,8 +8,8 @@ mechanics (coyote time, jump buffering, rebound on a held jump).
 
 import unittest
 
-from retroagi.core.actions import SMBAction
-from retroagi.stages.block_smb.env import MarioScenarioEnv
+from retroagi.domains.smb.actions import SMBAction
+from retroagi.domains.smb.sim.env import MarioScenarioEnv
 
 FLAT_SCENARIO = {
     "world_width": 256,

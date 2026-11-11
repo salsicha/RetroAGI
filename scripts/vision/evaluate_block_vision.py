@@ -3,7 +3,7 @@
 Frames: every Monte Carlo family at every difficulty on the VALIDATION split,
 each layout played with its teacher route and with a perturbed teacher route.
 The measurements and the printed table are the shared ones
-(retroagi.core.scene_vision.evaluate_scene_vision and scene_report), so both
+(retroagi.domains.smb.perception.scene_vision.evaluate_scene_vision and scene_report), so both
 games' evaluations report the same numbers with the same meaning. Each
 frame's found scene is compared with its true scene (smb_scene_labels):
 
@@ -32,13 +32,10 @@ PROJECT_ROOT = Path(__file__).resolve().parents[2]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
-from retroagi.core.devices import select_device
-from retroagi.core.scene_vision import evaluate_scene_vision, scene_report
-from retroagi.stages.block_smb.vision import (
-    DEFAULT_BLOCK_VIT_CHECKPOINT,
-    load_block_vit_checkpoint,
-)
-from retroagi.stages.block_smb.vision_frames import family_layouts, held_out_frames
+from retroagi.domains.smb.perception.scene_vision import evaluate_scene_vision, scene_report
+from retroagi.framework.devices import select_device
+from retroagi.legacy.block_smb.vision import DEFAULT_BLOCK_VIT_CHECKPOINT, load_block_vit_checkpoint
+from retroagi.legacy.block_smb.vision_frames import family_layouts, held_out_frames
 
 
 def main() -> None:

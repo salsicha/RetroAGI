@@ -2,8 +2,8 @@
 
 
 def test_nes_snapshot_restores_fractional_physics():
-    from retroagi.stages.block_smb.env import MarioScenarioEnv
-    from retroagi.stages.block_smb.env_state import restore_env_state, snapshot_env_state
+    from retroagi.domains.smb.sim.env import MarioScenarioEnv
+    from retroagi.domains.smb.sim.env_state import restore_env_state, snapshot_env_state
 
     env = MarioScenarioEnv()
     try:
@@ -25,7 +25,7 @@ def test_nes_snapshot_restores_fractional_physics():
 
 
 def test_landing_clears_fractional_vertical_force():
-    from retroagi.core.smb_physics import NESPlayerMotion
+    from retroagi.domains.smb.physics import NESPlayerMotion
 
     motion = NESPlayerMotion(y_speed=3, y_force=224, y_fraction=64)
     motion.vertical_contact()
@@ -36,7 +36,7 @@ def test_landing_clears_fractional_vertical_force():
 
 
 def test_nes_enemy_damage_body_is_distinct_from_floor_probe():
-    from retroagi.stages.block_smb.env import MarioScenarioEnv
+    from retroagi.domains.smb.sim.env import MarioScenarioEnv
 
     env = MarioScenarioEnv()
     try:

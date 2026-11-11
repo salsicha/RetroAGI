@@ -2,13 +2,13 @@
 
 Frames are real emulator frames: every level start (vision_frames.LEVELS)
 played from its saved start by a random player that is
-rewound after each death (retroagi/stages/full_smb/vision_frames.py). Worker
+rewound after each death (retroagi/domains/smb/nes/vision_frames.py). Worker
 processes play fresh episodes throughout training, so frames rarely repeat.
 Labels are read from game memory (pixel_labels.label_frame): every accepted
 frame is rebuilt from memory and matches the emulator's picture at every
 visible pixel, and every object is what drew its pixels; frames memory cannot
 explain are skipped. The model and the training loop are the shared ones
-(retroagi.core.vision.SceneVisionTransformer, retroagi.core.scene_vision),
+(retroagi.domains.smb.perception.vision.SceneVisionTransformer, retroagi.domains.smb.perception.scene_vision),
 with the same settings as the Block SMB model.
 Progress is monitored on separate plays of the levels;
 scripts/vision/evaluate_full_vision.py measures on further fresh plays.
@@ -36,7 +36,9 @@ PROJECT_ROOT = Path(__file__).resolve().parents[2]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
-from retroagi.core.config import (
+from retroagi.domains.smb.nes.vision import DEFAULT_FULL_VIT_CHECKPOINT, FullVisionTransformer
+from retroagi.domains.smb.nes.vision_frames import LEVELS, labelled_frames
+from retroagi.domains.smb.perception.config import (
     CheckpointConfig,
     EnvironmentConfig,
     EvaluationConfig,
@@ -44,8 +46,8 @@ from retroagi.core.config import (
     ModelConfig,
     TrainingConfig,
 )
-from retroagi.core.devices import select_device
-from retroagi.core.scene_vision import (
+from retroagi.domains.smb.perception.pixel_types import PIXEL_TYPES
+from retroagi.domains.smb.perception.scene_vision import (
     epoch_line,
     frame_targets,
     pixel_type_weights,
@@ -54,9 +56,7 @@ from retroagi.core.scene_vision import (
     stack_targets,
     train_scene_vision,
 )
-from retroagi.core.smb_pixel_types import PIXEL_TYPES
-from retroagi.stages.full_smb.vision import DEFAULT_FULL_VIT_CHECKPOINT, FullVisionTransformer
-from retroagi.stages.full_smb.vision_frames import LEVELS, labelled_frames
+from retroagi.framework.devices import select_device
 
 DEFAULT_OUTPUT = PROJECT_ROOT / DEFAULT_FULL_VIT_CHECKPOINT
 DEFAULT_SEED = 7

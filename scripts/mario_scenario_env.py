@@ -7,8 +7,8 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
-from retroagi.stages.block_smb.env import *  # noqa: F401,F403
-from retroagi.stages.block_smb.env import main
+from retroagi.domains.smb.sim.env import *  # noqa: F401,F403
+from retroagi.domains.smb.sim.env import main
 
 if __name__ == "__main__":
     main()

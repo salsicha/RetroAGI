@@ -24,7 +24,7 @@ outside the tested project matrix.
 
 CUDA is optional. Block SMB, the vision transformers and the tests must remain
 functional with the CPU-only PyTorch wheel. GPU acceleration is selected with
-`retroagi.core.devices.select_device`: `auto` prefers
+`retroagi.framework.devices.select_device`: `auto` prefers
 CUDA, then Apple MPS, then CPU. Explicit `cuda` or `mps` requests fail early if
 the backend is unavailable.
 

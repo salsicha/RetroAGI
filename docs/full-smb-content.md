@@ -10,7 +10,7 @@ SMB with the trained agent, both of which use `stable-retro`.
 | --- | --- |
 | stable-retro game id | `SuperMarioBros-Nes` |
 | RetroAGI stage | `full_smb` |
-| Play module | `retroagi/stages/full_smb/play.py` (`FullSMBGame`) |
+| Play module | `retroagi/domains/smb/nes/game.py` (`FullSMBGame`) |
 | Backend entrypoint | `retro.make(game="SuperMarioBros-Nes")` |
 | Required package | `python -m pip install -e '.[full-smb]'` |
 
@@ -57,7 +57,7 @@ must not be committed, bundled, uploaded with artifacts, or redistributed.
 After importing the ROM, check that the emulator starts a level and steps:
 
 ```bash
-python -c 'from retroagi.stages.full_smb.play import FullSMBGame; g = FullSMBGame("Level1-1"); g.reset(); print(g.step(1)[1]); g.close()'
+python -c 'from retroagi.domains.smb.nes.game import FullSMBGame; g = FullSMBGame("Level1-1"); g.reset(); print(g.step(1)[1]); g.close()'
 ```
 
 It prints how far into the level Mario is (`level_x`) and whether he is

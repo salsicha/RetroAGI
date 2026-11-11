@@ -1,0 +1,161 @@
+"""Closed-loop holding uses observations and emits only emulator button actions."""
+
+import os
+
+os.environ.setdefault("SDL_VIDEODRIVER", "dummy")
+
+import pytest
+
+from retroagi.domains.smb.actions import SMBAction
+from retroagi.domains.smb.perception.scene_labels import (
+    EnemyView,
+    MarioView,
+    SceneObservation,
+    Surface,
+    scene_from_labels,
+)
+from retroagi.domains.smb.sim.env import MarioScenarioEnv
+from retroagi.legacy.core.smb_executor import HOLD_GROUND, ActionPlan, GroundHold, SMBExecutor
+
+
+def picture(left=80, mario=96, top=200):
+    return SceneObservation(
+        MarioView((mario, top - 16, mario + 12, top), True, "moving_platform", True),
+        moving_platforms=((left, top, left + 64, top + 8),),
+        surfaces=(Surface(left, left + 64, top, True),),
+    )
+
+
+def test_hold_corrects_both_directions_and_tracks_camera_and_platform_motion():
+    executor = SMBExecutor()
+    executor.start(ActionPlan(HOLD_GROUND, 10))
+    assert executor.press(picture()) == SMBAction.NOOP
+    # Whole picture translates, with the same relative spot on the platform.
+    assert executor.press(picture(left=100, mario=116, top=198)) == SMBAction.NOOP
+    assert executor.press(picture(left=100, mario=122, top=198)) == SMBAction.LEFT
+    assert executor.press(picture(left=100, mario=110, top=198)) == SMBAction.RIGHT
+
+
+def test_consecutive_holds_keep_anchor_and_another_action_releases_it():
+    executor = SMBExecutor()
+    executor.start(ActionPlan(HOLD_GROUND, 2))
+    executor.press(picture())
+    assert executor.press(picture(mario=103)) == SMBAction.LEFT
+    executor.end("done")
+    executor.start(ActionPlan(HOLD_GROUND, 1))
+    assert executor.press(picture(mario=103)) == SMBAction.LEFT
+    executor.end("done")
+    executor.start(ActionPlan(SMBAction.NOOP, 1))
+    executor.press()
+    executor.end("done")
+    executor.start(ActionPlan(HOLD_GROUND, 1))
+    assert executor.press(picture(mario=103)) == SMBAction.NOOP
+
+
+def test_missing_support_releases_buttons_without_reanchoring_to_another_platform():
+    executor = SMBExecutor()
+    executor.start(ActionPlan(HOLD_GROUND, 5))
+    executor.press(picture())
+    assert executor.press(None) == SMBAction.NOOP
+    assert executor.press(picture(left=180, mario=196)) == SMBAction.NOOP
+    assert executor.press(picture(mario=103)) == SMBAction.LEFT
+
+
+def test_separate_jump_plans_have_a_release_edge_even_after_a_landing():
+    executor = SMBExecutor()
+    executor.start(ActionPlan(SMBAction.RIGHT_JUMP, 14))
+    assert executor.press() == SMBAction.RIGHT_JUMP
+    executor.end("landed")
+    executor.start(ActionPlan(SMBAction.RIGHT_JUMP, 1))
+    assert executor.press() == SMBAction.RIGHT
+    assert not executor.finished
+    assert executor.press() == SMBAction.RIGHT_JUMP
+    assert executor.finished
+
+
+@pytest.mark.parametrize("moving,direction", [(False, 1), (True, -1), (True, 1)])
+@pytest.mark.parametrize("velocity", [-2.0, 2.0])
+def test_hold_recovers_from_drift_on_static_and_reversing_platforms(moving, direction, velocity):
+    platform = {"x": 90, "y": 220, "w": 96, "h": 12}
+    if moving:
+        platform.update(moving=[60, 150, 0.7], direction=direction)
+    env = MarioScenarioEnv()
+    executor = SMBExecutor()
+    try:
+        env.reset(
+            scenario={
+                "world_width": 320,
+                "mario": [130, 204],
+                "platforms": [platform],
+                "mario_velocity": [velocity, 0],
+                "frame_budget": 400,
+            }
+        )
+        anchor = env.mario["x"] - env.platforms[0]["rect"].x
+        errors, buttons = [], []
+        for frame in range(240):
+            if executor.finished:
+                executor.end("done")
+            if executor.idle:
+                executor.start(ActionPlan(HOLD_GROUND, 8))
+            observation = scene_from_labels(env.scene_labels())
+            button = executor.press(observation)
+            buttons.append(button)
+            _, _, done, _, info = env.step(button)
+            assert not done, info
+            assert env.mario["on_ground"]
+            errors.append(abs(env.mario["x"] - env.platforms[0]["rect"].x - anchor))
+        assert set(buttons) <= {SMBAction.NOOP, SMBAction.LEFT, SMBAction.RIGHT}
+        assert SMBAction.LEFT in buttons and SMBAction.RIGHT in buttons
+        # Existing momentum needs stopping distance before returning to the spot.
+        assert max(errors) <= 20
+        assert max(errors[-40:]) <= 2
+    finally:
+        env.close()
+
+
+# An end where an enemy stands is no landmark: vision may find the end where
+# the enemy's feet hide the surface, and it walks with the enemy (2026-10-21:
+# a hold against it backed Mario away from a monster at its own speed, so the
+# monster never reached him).
+
+
+def _standing(mario_x, floor, enemies=()):
+    surface = Surface(*floor, 220, False)
+    return SceneObservation(
+        mario=MarioView(box=(mario_x, 208, mario_x + 10, 220), facing_right=True, support="ground",
+                        on_something=True),
+        enemies=tuple(EnemyView(box, "other") for box in enemies),
+        surfaces=(surface,),
+        uncut_surfaces=(surface,),
+    )
+
+
+def test_a_hold_does_not_follow_a_floor_end_where_an_enemy_stands():
+    # The floor runs off the left edge; its right end is where a monster's
+    # feet hide it, and it walks left with the monster.
+    hold = GroundHold()
+    presses = []
+    for t in range(40):
+        monster = 134 - t
+        presses.append(hold.press(_standing(85, (8, monster), [(monster, 200, monster + 16, 220)])))
+    assert presses == [int(SMBAction.NOOP)] * 40
+    assert hold.surface is None
+
+
+def test_a_hold_lets_go_of_its_end_while_an_enemy_stands_there():
+    hold = GroundHold()
+    # Held against a real end (a ledge's), then a walker comes to stand at it.
+    assert hold.press(_standing(85, (8, 134))) == int(SMBAction.NOOP)
+    assert hold.surface is not None and hold.right_edge
+    assert hold.press(_standing(85, (8, 130), [(130, 210, 140, 220)])) == int(SMBAction.NOOP)
+    # Gone again: the end holds as before, and Mario pushed off his place
+    # (the end now 10 pixels nearer) is brought back.
+    assert hold.press(_standing(85, (8, 124))) == int(SMBAction.LEFT)
+
+
+def test_a_hold_with_no_enemy_at_its_ends_keeps_its_place_as_before():
+    hold = GroundHold()
+    assert hold.press(_standing(85, (40, 134))) == int(SMBAction.NOOP)
+    assert not hold.right_edge  # the left end, in view
+    assert hold.press(_standing(80, (40, 134))) == int(SMBAction.RIGHT)

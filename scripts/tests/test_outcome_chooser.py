@@ -1,14 +1,23 @@
-"""The chooser's three rules (core/outcome_chooser.py) on given
+"""The chooser's three rules (framework/chooser.py) on given
 predictions."""
 
 import numpy as np
 
-from retroagi.core import outcome_chooser
-from retroagi.core.outcome_chooser import DEATH, FINISHED, FRAMES, INFEASIBLE, POINTS, PROGRESS, STUCK, OutcomeChooser
-from retroagi.core.outcome_network import PREDICTIONS
-from retroagi.core.smb_controller import State
-from retroagi.core.smb_physics import NESPlayerMotion
-from retroagi.core.smb_planner import Enemy, Solid
+from retroagi.domains.smb.controller import State
+from retroagi.domains.smb.physics import NESPlayerMotion
+from retroagi.domains.smb.planner import Enemy, Solid
+from retroagi.framework import chooser as outcome_chooser
+from retroagi.framework.chooser import (
+    DEATH,
+    FINISHED,
+    FRAMES,
+    INFEASIBLE,
+    POINTS,
+    PROGRESS,
+    STUCK,
+    OutcomeChooser,
+)
+from retroagi.framework.outcome_network import PREDICTIONS
 
 FLOOR = Solid(0, 208, 400, 240, "ground", ("ground", 0))
 GOOMBA = Enemy((150, 198, 160, 204), -0.5, 0.0, ("slots", 0))
@@ -107,7 +116,7 @@ def test_reaching_the_flag_counts_only_when_likely(monkeypatch):
 def test_waiting_is_tried_after_max_waits_at_a_spot(monkeypatch):
     # Every way on a little risky, waiting safe: after MAX_WAITS waits the
     # least risky way on is taken.
-    from retroagi.core.outcome_chooser import MAX_WAITS
+    from retroagi.framework.chooser import MAX_WAITS
 
     rows = {(3, 1): row(death=0.08, progress=96, frames=40), (4, 0): row(frames=8, progress=4)}
     choose(monkeypatch, "speed_run", rows)  # patches the predictions

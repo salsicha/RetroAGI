@@ -57,7 +57,7 @@ Students should complete this before week 1:
 
 ```bash
 python3 -m unittest discover -s scripts/tests -v
-python -m retroagi.stages.synthetic_1d.train
+python -m retroagi.legacy.synthetic_1d.train
 ```
 
 Expected result: the test suite passes, and the Synthetic 1D trainer produces a
@@ -142,7 +142,7 @@ each pixel's type read exactly from game memory
 (`scripts/vit/train_full_vit.py`; see
 [Reproduce Full SMB Vision](reproducibility.md#10-reproduce-full-smb-vision)).
 Both label every pixel with the same nine types
-(`retroagi.core.smb_pixel_types.PIXEL_TYPES`), and `canonical_vision` in
+(`retroagi.domains.smb.perception.pixel_types.PIXEL_TYPES`), and `canonical_vision` in
 `retroagi/core/smb_scene.py` maps those types onto the policy's seven classes
 by meaning (ground, brick, question block and pipe all become standable
 platform). The segmentation supplies position,

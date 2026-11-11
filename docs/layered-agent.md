@@ -94,7 +94,7 @@ The controller chooses the buttons and durations; the skill chooses the target.
 ## Memory and timing
 
 The skill and tactic layers read no prediction (user, 2026-10-15). The world
-model (`core/world_model.py`, the policy's `memory`) is an LSTM run once at
+model (`legacy/core/world_model.py`, the policy's `memory`) is an LSTM run once at
 the start of each action, after the skill has chosen it: it reads the scene
 encoder's tokens but for the enemies' and moving platforms', one token for
 each row of the list of tracked things instead (where each is now or where
@@ -107,8 +107,8 @@ reads no tracker's prediction (user, 2026-10-21: the trackers predict
 collisions, the world model the action's outcome). It predicts where
 Mario's feet and the object end, how many frames the action takes (for a
 wait, how long) and the chance it succeeds. It is trained apart
-(`stages/block_smb/world_model_train.py`) on recorded outcomes: each executed
-action's measured one (`core/action_outcomes.py`) and the other actions the
+(`legacy/block_smb/world_model_train.py`) on recorded outcomes: each executed
+action's measured one (`legacy/core/action_outcomes.py`) and the other actions the
 teacher tried at each decision, evaluated from the state before it without
 advancing it (a one-frame teacher hold counts only as a lower bound on a
 wait's length). It reads the scene encoder trained with the skill, frozen,
@@ -123,7 +123,7 @@ speed, his feet's movement, whether he stands). Vision reports boxes only;
 a sprite missed for up to 8 frames keeps its identity and velocity.
 
 The system keeps a list of up to 20 tracked things (every enemy and moving
-platform vision has reported; `core/smb_tracked_objects.py`; user,
+platform vision has reported; `legacy/core/smb_tracked_objects.py`; user,
 2026-10-21). One out of sight stays on it where it vanished, in the world,
 with the velocity it was last estimated to have and how long it has been
 unseen, with no time limit: a plant down in its pipe, an enemy past the
@@ -138,7 +138,7 @@ every enemy on it, and the world model reads it in place of vision's enemy
 and platform tokens; the decision layers do not.
 
 Both prediction networks and the decision layers read these same estimates, per
-scene slot (`core/smb_kinematics.py`): the trackers every frame, the world
+scene slot (`legacy/core/smb_kinematics.py`): the trackers every frame, the world
 model at each action's start (user, 2026-10-16), the skill and tactic layers
 at each decision (each sprite's velocity added to its scene token, Mario's
 to his; user, 2026-10-21: a human sees motion). The tactic layer also reads
@@ -154,7 +154,7 @@ frame's true boxes and one more after the last button, which true enemy each
 scene slot shows, why each action ended, and each executed command and the
 action it carried out; the networks' labels are made from these afterwards.
 
-The collision trackers (`core/target_tracker.py`) run every frame, one GRU
+The collision trackers (`legacy/core/target_tracker.py`) run every frame, one GRU
 state per enemy on the list of tracked things, seen or out of sight, so the
 GRU goes on stepping while a plant is down in its pipe and can learn when it
 comes back. Each predicts whether that enemy and Mario will touch
@@ -168,12 +168,12 @@ in progress (its verb, where it sends Mario from where he is
 now, how long it has run; an action aimed at an enemy sends him to the
 enemy's point when it began, never to the teacher's command, which was aimed
 with the enemy's true future). Their labels are made from recorded real
-paths (`core/collision_labels.py`): Mario's path until his action ends, then
+paths (`legacy/core/collision_labels.py`): Mario's path until his action ends, then
 standing, against the enemy's; unknown past a recording's end. They learn
 alongside the skill and tactic layers from the same teacher episodes
-(`layered_train.Predictions`, with `stages/block_smb/tracker_train.py`'s
+(`layered_train.Predictions`, with `legacy/block_smb/tracker_train.py`'s
 loss); until they are shown accurate the simulator's truth stands in
-(`stages/block_smb/collision_truth.py`). Watched frames
+(`legacy/block_smb/collision_truth.py`). Watched frames
 before a lesson's first decision let the tracks see enemies move.
 
 Without the teacher (deployed play, `SMBAgents(world_model=True)`), the
@@ -191,7 +191,7 @@ approaches stops it (`smb_aim`; jumps keep their takeoff plan), a stomp goes to 
 collision trackers' expected contact point. The executor ends a wait or a
 ground move as `threat` (feedback `collision_due`) when the trackers expect
 a hit within the lead a jump over that enemy needs, plus 5 frames
-(`core/smb_threat.py`): the smallest gap from which one of the executor's own
+(`legacy/core/smb_threat.py`): the smallest gap from which one of the executor's own
 jumps still clears the enemy coming at its estimated speed, so a faster enemy
 is jumped from farther away; within 48 frames when no jump clears it; never in
 the air. `exam-layer --execution teacher | world_model | trackers | deployed`
@@ -218,15 +218,15 @@ Evaluation is Full SMB played many times, learning continuing on every
 playthrough, the world model and the trackers included, in speed mode (time
 to each checkpoint) and points mode. The measure is how few playthroughs it
 takes before Mario plays the level successfully. Full SMB's truth is read
-from the emulator's memory every frame (`stages/full_smb/truth.py`): the
+from the emulator's memory every frame (`domains/smb/nes/truth.py`): the
 game's own collision boxes for Mario and its six enemy slots (a slot filled
 again is a new enemy), alive or defeated, and the level's progress (distance,
 score, coins, time). It is kept in Block SMB's recording arrays, so the same
-labels train the same networks; `stages/full_smb/practice.py` records a
+labels train the same networks; `legacy/full_smb/practice.py` records a
 playthrough of the deployed agent, with a checkpoint every 500 pixels of
 Mario's distance into the level.
 
-Full SMB learning (`stages/full_smb/learn.py`, user 2026-10-17) starts from
+Full SMB learning (`legacy/full_smb/learn.py`, user 2026-10-17) starts from
 the tactic run's checkpoint and trackers once both layers have met their
 gates. Every network is engaged and goes on learning: each round the agent
 plays the current level as deployed, eight playthroughs in speed run mode
@@ -428,7 +428,7 @@ skill endpoint completes a movement command, not the scenario's final goal.
 
 ## Curriculum
 
-**Variety around pits and enemies** (`stages/block_smb/threat_variety.py`).
+**Variety around pits and enemies** (`legacy/block_smb/threat_variety.py`).
 Every family that teaches jumping over or past a pit or an enemy starts Mario
 at varied distances from it, right next to it in about 40% of layouts (as in
 Full SMB, where he can end up beside one), and follows it with a second pit
@@ -604,7 +604,7 @@ An unsuccessful single-jump landing is a terminal failed attempt, not a timeout.
 retroagi-block-smb train-layer --learner skill --output artifacts/block_smb/skill
 retroagi-block-smb train-layer --learner tactic --init artifacts/block_smb/skill/passed.pt --output artifacts/block_smb/tactic
 retroagi-block-smb exam-layer --learner skill --checkpoint artifacts/block_smb/skill/passed.pt
-python -m retroagi.stages.full_smb.layered_eval --checkpoint artifacts/block_smb/tactic/passed.pt
+python -m retroagi.legacy.full_smb.layered_eval --checkpoint artifacts/block_smb/tactic/passed.pt
 ```
 
 Full SMB uses the same policy/executor with its own vision weights. Passing
@@ -732,7 +732,7 @@ teacher-driven skill round reuses these demonstrations. Qualification covers
 the sampled layouts, not all possible layouts or learner-created states. Its
 report also counts decisions where the teacher's choice names no action.
 
-To check the teaching by eye, `python -m retroagi.stages.block_smb.family_atlas
+To check the teaching by eye, `python -m retroagi.legacy.block_smb.family_atlas
 --out <folder>` pictures every skill family's layouts with each drawn parameter
 at its lowest, middle and highest value, at each difficulty: where the enemies
 and moving platforms go (blurred over the episode's frames), the teacher's

@@ -3,7 +3,7 @@
 import unittest
 from pathlib import Path
 
-from retroagi.core.config import (
+from retroagi.domains.smb.perception.config import (
     CheckpointConfig,
     EnvironmentConfig,
     EvaluationConfig,

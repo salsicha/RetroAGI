@@ -1,15 +1,27 @@
-"""The outcome network (core/outcome_network.py) and its trainer
-(stages/block_smb/outcome_train.py)."""
+"""The outcome network (framework/outcome_network.py) and its trainer
+(framework/training.py)."""
 
 import numpy as np
 import torch
 
-from retroagi.core.outcome_network import PREDICTIONS, OutcomeConfig, OutcomeNetwork, pick, predict
-from retroagi.core.smb_choices import ENEMY_SLOTS, GENERAL, ITEM_SLOTS, SURFACE_SLOTS, state_tokens
-from retroagi.stages.block_smb.env import MarioScenarioEnv
-from retroagi.stages.block_smb.game_levels import BlockTruthState, random_level
-from retroagi.stages.block_smb.outcome_sampling import OUTCOME_FIELDS
-from retroagi.stages.block_smb.outcome_train import loss_of, targets
+from retroagi.domains.smb.choices import (
+    ENEMY_SLOTS,
+    GENERAL,
+    ITEM_SLOTS,
+    SURFACE_SLOTS,
+    state_tokens,
+)
+from retroagi.domains.smb.sim.env import MarioScenarioEnv
+from retroagi.domains.smb.sim.levels import BlockTruthState, random_level
+from retroagi.framework.outcome_network import (
+    PREDICTIONS,
+    OutcomeConfig,
+    OutcomeNetwork,
+    pick,
+    predict,
+)
+from retroagi.framework.sampling import OUTCOME_FIELDS
+from retroagi.framework.training import loss_of, targets
 
 SMALL = OutcomeConfig(width=32, layers=1, heads=2)
 

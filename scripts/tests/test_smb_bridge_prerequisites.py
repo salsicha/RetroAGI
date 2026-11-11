@@ -2,8 +2,8 @@
 
 import pytest
 
-from retroagi.stages.block_smb.env import MarioScenarioEnv
-from retroagi.stages.block_smb.env_state import restore_env_state, snapshot_env_state
+from retroagi.domains.smb.sim.env import MarioScenarioEnv
+from retroagi.domains.smb.sim.env_state import restore_env_state, snapshot_env_state
 
 
 def touching_bridge(task):
