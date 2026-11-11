@@ -43,19 +43,22 @@ agent was built on and on six nobody looked at
 ([the measurements](docs/generalization.md)). Share of a level's obstacles
 passed, four tries each that start at different moments:
 
-| State | 1-1 and 5-1 (tuned), 59 obstacles | 2-1, 3-1, 4-1, 6-1, 7-1, 8-1 (untouched), 206 obstacles |
+| What the agent is given | 1-1 and 5-1 (tuned), 59 obstacles | 2-1, 3-1, 4-1, 6-1, 7-1, 8-1 (untouched), 206 obstacles |
 |---|---|---|
-| Game memory (perfect perception), at first contact | 0.96 | 0.66 |
-| Game memory, now | 0.97 | **0.77** |
-| Vision only, at first contact | 0.83 | 0.49 |
-| Vision only, now | 0.85 | **0.58** |
+| The screen alone (the agent proper), at first contact | 0.83 | 0.49 |
+| The screen alone, now | 0.85 | **0.58** |
+| Exact positions from the game's memory in place of seeing (a measuring device), at first contact | 0.96 | 0.66 |
+| Exact positions, now | 0.97 | **0.77** |
 
 Between the two: a dynamics model fitted to what the agent sees of each
 thing in place of a rule per kind of enemy, a refused choice answered in
 the same frame, and the perfect-perception stand-in showing a plant when
-vision would. From its start 1-1 is finished in every play; 5-1, 2-1, 4-1
-and 6-1 in some from game memory, none from vision. On fresh random levels
-in the simulator the network's chooser finishes 53 of 60 plays.
+vision would. From its start 1-1 is finished from the screen in every
+play; no other level is yet (5-1, 2-1, 4-1 and 6-1 in some plays with exact
+positions). A level has about 35 obstacles, so most plays finish only when
+about 98% of tries at an obstacle pass: [how far that is](docs/generalization.md).
+On fresh random levels in the simulator the network's chooser finishes 53
+of 60 plays.
 
 The outcome network was trained only on Block SMB random levels (question
 blocks, mushrooms, big Mario, Koopa Troopas, piranha plants, hopping
@@ -195,7 +198,8 @@ retroagi/
 scripts/
   vit/                           # train the two vision transformers
   vision/                        # measure the two vision transformers
-  dev/                           # refactoring check; result tables; what killed the agent; one obstacle traced
+  dev/                           # the scorecard; result tables; what killed the agent; one obstacle traced;
+                                 #   what each part of perception costs; the refactoring check
   tests/                         # the test suite (tests/legacy: the retired agent's)
 ```
 

@@ -6,6 +6,29 @@ measures what that work is worth on levels nobody looked at, and records
 each step taken to make the agent general against that measure. Nothing
 learns on the real game in any of it.
 
+## How far from a working agent
+
+Three numbers, on the held-out levels (`scripts/dev/scorecard.py FOLDER`):
+
+| | First contact | After the second round | A working agent |
+|---|---|---|---|
+| Whole levels finished from the screen alone | 0 of 32 plays | 0 of 32 | most |
+| Tries at an obstacle that fail, from the screen alone | 47% | 41% | about 2% |
+| The same with exact positions in place of seeing | 35% | 24% | about 2% |
+
+A level has about 35 obstacles, so half its plays finish only when about 2%
+of tries at an obstacle fail (0.98 to the 35th is a half), and 9 in 10 at
+about 0.3%. The agent now passes 2.4 obstacles between failures from the
+screen and 4.2 with exact positions; it needs about 50. World 1-1, one of
+the two levels it was built on, it finishes from the screen in every play.
+
+"With exact positions" (elsewhere here: "from game memory") is a measuring
+device, not the agent: the positions of Mario, the enemies and the ground
+are read from the emulator's memory and handed to the agent in place of
+what it would see. It shows what choosing and controlling lose by
+themselves. The agent proper is given the screen's picture and nothing
+else ("from vision").
+
 ## The measure
 
 - **Three sets of levels.** *Tuned*: 1-1 and 5-1. *Development*: 2-1 and
@@ -327,20 +350,76 @@ levels the rules 0.95 / 0.90 / 0.85 / 0.81 and the fitted model 0.94 / 0.91
 **0.76** / 0.63 / 0.56 (hopping Paratroopas 0.53 and 0.80 at 16 frames,
 Spinies 0.41 and 0.58, Buzzy Beetles 0.68 and 0.80, plants 0.80 and 0.88).
 
+## What seeing costs, 2026-11-11
+
+Vision was trained on frames of all eight levels, and it is about as
+accurate on the untouched ones as on 1-1
+(`python -m retroagi.domains.smb.nes.perception_check --bench DIR` lays its
+state over the exact one on the same frames): Mario within 2 pixels at the
+median and 5 at the 90th percentile, 85% to 99% of each kind of enemy
+given, within 1 to 2 pixels (3 to 8 at the 90th percentile), the ground
+agreed in 96% to 98% of 8-pixel columns around Mario. Small errors, yet
+from the screen the agent fails 41% of its tries where with exact
+positions it fails 24%.
+
+`scripts/dev/perception_parts.py` plays the bench from the screen with some
+parts of the state replaced by the exact ones:
+
+| Exact in place of seen | Tuned | Untouched |
+|---|---|---|
+| Nothing (the agent proper) | 0.85 | 0.58 |
+| Mario's own body and motion | 0.89 | 0.65 |
+| The enemies and items | 0.89 | 0.67 |
+| The ground, pipes and blocks | 0.80 | 0.55 |
+| All three | 0.95 | 0.78 |
+
+What vision loses is in Mario's own position and motion and in the
+enemies, about equally, and not in the ground. (Exact ground under a
+Mario placed a few pixels off is no better than seen ground.)
+
+## Tried and not kept, 2026-11-11
+
+Measured with exact positions, against 0.97 on the tuned levels and 0.77
+on the untouched ones:
+
+- **Room around a thing by the model's own record of error** (the model
+  scored its predictions 8, 16 and 32 frames on, and things that cannot be
+  stomped were kept clear of by what three quarters of the predictions for
+  their type had been off by): 0.97 and 0.75. Fewer deaths on 4-1 and none
+  fewer on 6-1, the level of Spinies it was meant for.
+- **A run or wait ended when the model's paths bring a thing from another
+  level onto Mario** (a Koopa falling from a ledge, a thrown Spiny): 0.97
+  and 0.77, 67 deaths for 70. Too little to keep.
+- **A wait credited with no progress** (the chooser took short waits for
+  the ground Mario slid over during them): 0.97 and 0.77, some levels up
+  and others down.
+
+What the deaths show instead (`scripts/dev/trace_obstacle.py --why`): on
+the held-out levels half of them happen during a run or a wait, and at
+the decisions before one the outcome network gives every choice no chance
+of death with a Goomba a few steps away. Its lessons call a choice safe
+while any way out is left after it, so the chooser waits, safely, and
+waits again, until none is left. Outcomes are now sampled with a second
+answer, **danger** (dead soon after the choice if the agent then does
+nothing, a way out or not), the network predicts it, and the chooser
+prefers choices that do not leave Mario so (`--use chooser=plain` for the
+chooser without it). The network sampled this way, with the present agent,
+is in training (outcomes_20261111k).
+
 ## What the measurements say to do next
 
-1. **Perception on levels it was not trained on.** The loss from vision is
-   now the largest. Measure what vision gets wrong on the untouched levels
-   (each has enemies and scenery its training frames may lack), and give
-   outcome sampling perception's kind of error so the chooser learns with
-   it.
+1. **Mario's own position and motion, and the enemies, as seen.** The loss
+   from the screen is now the largest, and it is there (above): each made
+   exact gives back 7 to 9 points. Then outcome sampling with perception's
+   kind of error, so the chooser learns with it.
 2. **Things thrown from above.** Lakitu's Spinies are a third of the
    deaths: a thing first seen falling, from a thrower that follows Mario.
    The model predicts their fall better than the rules (0.58 against 0.41)
    but the chooser has no choice made for them.
-3. **The outcome network sampled with the present agent** (in training),
-   and after it the same check for the simulator's enemies as for the
-   game's: where the practice world moves a thing as the game does not.
+3. **The outcome network sampled with the present agent, with danger** (in
+   training), and after it the same check for the simulator's enemies as
+   for the game's: where the practice world moves a thing as the game does
+   not.
 4. **Margins that follow the model's own error**: the planner keeps every
    enemy 2 pixels wider than its box, whatever the model's record with its
    type (Lakitu and the Hammer Bro are within 4 pixels half the time).
