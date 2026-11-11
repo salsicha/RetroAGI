@@ -424,3 +424,15 @@ def test_a_jump_to_a_narrow_step_across_a_pit_keeps_room_for_error():
     assert plan is not None
     back = rollout(NESPlayerMotion(), (415.0, 132.0, 425.0, 144.0), plan.pre_run, plan.hold, 1, solids, [])
     assert back.end == "landed" and back.solid is far
+
+
+def test_a_jump_lands_only_after_mario_is_seen_in_the_air():
+    # Vision still calling Mario standing in the frames after takeoff: the
+    # jump goes on (it ended "landed" at its top over a 5-1 pit).
+    standing = State(body=STANDING, motion=NESPlayerMotion(), grounded=True, solids=[FLOOR], enemies=[])
+    controller = Controller()
+    controller.start(Choice("jump", Goal("land", ("surfaces", 0), 140, 200, top=208)), standing)
+    takeoff = controller.plan.pre_run
+    for _ in range(takeoff + 4):
+        controller.press(standing)
+    assert controller.event is None

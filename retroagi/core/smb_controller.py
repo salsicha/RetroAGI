@@ -385,6 +385,7 @@ class Controller:
     def start(self, choice: Choice, state: State) -> None:
         self.choice, self.plan, self.frame, self.event = choice, None, 0, None
         self.stood = 0  # frames in a row Mario has stood
+        self.flown = False  # Mario seen in the air since the jump took off
         if choice.verb == "jump":
             self._plan(state)
 
@@ -441,13 +442,18 @@ class Controller:
         if taken_off and not state.grounded and (step - plan.pre_run) % REPLAN_EVERY == 0:
             plan, step = self._check_flight(state, plan, step)
         self.stood = self.stood + 1 if state.grounded else 0
-        if taken_off and self.stood >= LANDING_FRAMES and step > plan.pre_run + 1:
+        # A jump lands only once Mario has been seen in the air: vision still
+        # called him standing in the first frames after takeoff, the run-up's
+        # standing frames counted on, and a jump across a 5-1 pit "landed"
+        # at its top (a hop never seen in the air ends by PLAN_SLACK).
+        self.flown = self.flown or (taken_off and not state.grounded)
+        if taken_off and self.flown and self.stood >= LANDING_FRAMES and step > plan.pre_run + 1:
             # Landed (or stomped and landed): the choice is done, whatever
             # buttons the plan had left.
             self.event = "stomped" if plan.outcome.stomped is not None else "landed"
             return 0
         if step >= len(plan.buttons):
-            if self.stood >= LANDING_FRAMES:
+            if self.flown and self.stood >= LANDING_FRAMES:
                 self.event = "stomped" if plan.outcome.stomped is not None else "landed"
                 return 0
             if step >= len(plan.buttons) + PLAN_SLACK:
