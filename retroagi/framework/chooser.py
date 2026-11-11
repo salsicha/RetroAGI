@@ -6,9 +6,14 @@ At a decision the predictor gives every candidate choice's outcome
 (interfaces.OutcomePredictor; outcome_network.PREDICTIONS). Then:
 1. don't die: of the choices the controller can carry out, keep those whose
    chance of death is at most SAFE, or within SLACK of the safest one when
-   none is that safe; and of those, the ones not likely to leave the agent
-   stuck (from where no choice gets it on: a valley between staircases,
-   entered for its quick progress, held Mario there), if any;
+   none is that safe; of those, the ones not likely to leave the agent in
+   danger (dead soon after if it then does nothing: a choice counts as safe
+   while some way out is left after it, so with a Goomba a few steps off
+   the chooser waited, safely, and waited again, until no way out was
+   left), if any and unless the chooser is not ``wary``; and of those, the
+   ones not likely to leave it stuck (from where no choice gets it on: a
+   valley between staircases, entered for its quick progress, held Mario
+   there), if any;
 2. progress: of those, the one bringing the most progress a frame (frames
    counted from MIN_FRAMES up, so a short wait is no free win), and above
    all one likely (at least an even chance) to finish the task (weighed by
@@ -50,14 +55,14 @@ SAFE = 0.05
 MAX_WAITS = 4
 SLACK = 0.02
 MIN_FRAMES = 8
-DEATH, INFEASIBLE, FINISHED, STUCK, PROGRESS, FRAMES, POINTS = range(len(PREDICTIONS))
+DEATH, INFEASIBLE, FINISHED, STUCK, PROGRESS, FRAMES, POINTS, DANGER = range(len(PREDICTIONS))
 # The controller's events that say a choice could not be carried out.
 REFUSED = ("infeasible", "blocked")
 
 
 class OutcomeChooser:
-    def __init__(self, predictor, space, point_value: float = 0.0):
-        self.predictor, self.space, self.point_value = predictor, space, point_value
+    def __init__(self, predictor, space, point_value: float = 0.0, wary: bool = True):
+        self.predictor, self.space, self.point_value, self.wary = predictor, space, point_value, wary
         self.last = None  # (candidates, predictions, picked index): for inspection
         self.tried: dict = {}  # spot -> the choices taken from it
         self.refused: dict = {}  # spot -> the choices about still things found impossible there
@@ -88,8 +93,9 @@ class OutcomeChooser:
             feasible = np.ones(len(p), bool)
         risk = np.where(feasible, p[:, DEATH], np.inf)
         allowed = risk <= max(SAFE, risk.min() + SLACK)
-        if (allowed & (p[:, STUCK] < 0.5)).any():
-            allowed &= p[:, STUCK] < 0.5
+        for unwanted in ((DANGER, STUCK) if self.wary else (STUCK,)):
+            if (allowed & (p[:, unwanted] < 0.5)).any():
+                allowed &= p[:, unwanted] < 0.5
         value = (p[:, PROGRESS] / np.maximum(p[:, FRAMES], MIN_FRAMES)
                  + self.point_value * p[:, POINTS] + (p[:, FINISHED] >= 0.5) * 100.0)
         best = int(np.argmax(np.where(allowed, value, -np.inf)))

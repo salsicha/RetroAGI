@@ -62,7 +62,7 @@ def main(argv=None) -> int:
     starts = {}
     for obstacle in index["obstacles"]:
         starts.setdefault((args.bench / f"{obstacle['name']}.state").read_bytes(), []).append(obstacle)
-    causes, plays = Counter(), 0
+    causes, during, plays = Counter(), Counter(), 0
     for state, group in starts.items():
         world = domain.real_world(index["level"], state)
         goals = [o["x1"] + PASSED for o in group]
@@ -82,9 +82,10 @@ def main(argv=None) -> int:
                     if step.died:
                         why = cause(before, true_frame(world.game.env.get_ram(), world.game.start))
                         causes[why] += 1
+                        choice = agent.last_choice
+                        doing = choice.verb + (f" ({choice.goal.kind})" if choice and choice.goal else "")
+                        during[why, doing] += 1
                         if not args.quiet:
-                            choice = agent.last_choice
-                            doing = choice.verb + (f" ({choice.goal.kind})" if choice and choice.goal else "")
                             print(f"{group[0]['name']:22} {mode:10} seed {seed}: died at x {world.progress:4}: {why}; "
                                   f"during {doing}", flush=True)
                         break
@@ -96,7 +97,8 @@ def main(argv=None) -> int:
         world.close()
     print(f"{index['level']}: {sum(causes.values())} deaths in {plays} plays")
     for why, count in causes.most_common():
-        print(f"  {count:3}  {why}")
+        doing = ", ".join(f"{n} during {what}" for (cause_, what), n in during.most_common() if cause_ == why)
+        print(f"  {count:3}  {why}: {doing}")
     return 0
 
 

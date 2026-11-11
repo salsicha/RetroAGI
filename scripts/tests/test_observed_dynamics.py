@@ -145,10 +145,10 @@ def test_a_thing_in_the_air_that_does_not_fall_flies_through_everything():
 
 def test_super_mario_bros_takes_either_dynamics_model_by_name():
     observed = registry.load("smb")
-    assert isinstance(observed.controller().dynamics, ObservedDynamics) and observed.chosen == {"dynamics": "observed"}
+    assert isinstance(observed.controller().dynamics, ObservedDynamics) and observed.chosen["dynamics"] == "observed"
     assert observed.controller().dynamics is not observed.controller().dynamics  # (a new one each play)
     rules = registry.load("smb", ("dynamics=rules",))
-    assert rules.controller().dynamics is RULES and registry.used(rules) == ("dynamics=rules",)
+    assert rules.controller().dynamics is RULES and "dynamics=rules" in registry.used(rules)
     with pytest.raises(ValueError):
         registry.load("smb", ("dynamics=guessed",))
     # A controller made from another's knows what that one's model has learned, and learns apart from it.

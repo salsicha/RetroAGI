@@ -51,12 +51,17 @@ class SuperMarioBros:
     # each thing as it plays (framework/observed_dynamics; a new one each
     # play, with the game's walkers' fall off a ledge for what it has not
     # yet seen), or "rules", written by hand for each kind of enemy.
-    parts = {"dynamics": {
-        "rules": lambda: RULES,
-        "observed": lambda: ObservedDynamics(gravity=ENEMY_GRAVITY, fastest=ENEMY_FALL, reach=FEET_BELOW + 2,
-                                             wall_depth=WALL_DEPTH, ignored=("edge",)),
-    }}
-    chosen = {"dynamics": "observed"}
+    # The chooser on the outcome network's predictions: "wary" of choices
+    # that leave Mario in danger, or "plain" (framework/chooser).
+    parts = {
+        "dynamics": {
+            "rules": lambda: RULES,
+            "observed": lambda: ObservedDynamics(gravity=ENEMY_GRAVITY, fastest=ENEMY_FALL, reach=FEET_BELOW + 2,
+                                                 wall_depth=WALL_DEPTH, ignored=("edge",)),
+        },
+        "chooser": {"wary": True, "plain": False},
+    }
+    chosen = {"dynamics": "observed", "chooser": "wary"}
 
     def using(self, **choices) -> "SuperMarioBros":
         for part, name in choices.items():
@@ -74,7 +79,8 @@ class SuperMarioBros:
         return Controller(self.dynamics())
 
     def chooser(self, predictor, mode: str) -> OutcomeChooser:
-        return OutcomeChooser(predictor, self.space, POINT_VALUE[mode])
+        return OutcomeChooser(predictor, self.space, POINT_VALUE[mode],
+                              wary=self.parts["chooser"][self.chosen["chooser"]])
 
     def behaviour(self, mode: str) -> ScriptedChooser:
         return ScriptedChooser(mode)

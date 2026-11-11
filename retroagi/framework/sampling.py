@@ -48,7 +48,11 @@ EXPLORE = 0.3
 # After a choice, the agent is stuck when no probe from where it left it is
 # feasible, safe and makes at least this much progress.
 STUCK_PROGRESS = 16
-OUTCOME_FIELDS = ("died", "died_after", "frames", "progress", "points", "finished", "stuck", "end")
+# "died_after": dead within the window after the choice with no way out of
+# it (no probe or escape from where the choice ended survives); "danger":
+# dead during the choice or within the window after it if the agent then
+# does nothing, a way out or not.
+OUTCOME_FIELDS = ("died", "died_after", "frames", "progress", "points", "finished", "stuck", "danger", "end")
 
 
 def outcome(world, source, domain, choice, probe: bool = True, controller=None) -> tuple:
@@ -109,7 +113,7 @@ def outcome(world, source, domain, choice, probe: bool = True, controller=None) 
             settled = settled + 1 if world.settled else 0
             if settled >= WINDOW:
                 break
-    stuck = died or died_after
+    stuck = danger = died or died_after
     if probe and not (died or finished):
         # Probed from where the choice ended, not after the window: settled
         # there first, Mario slid to rest, and a landing on a step at speed,
@@ -132,7 +136,7 @@ def outcome(world, source, domain, choice, probe: bool = True, controller=None) 
         if died_after and saved:
             died_after = False
     return (float(died), float(died_after), float(frames), float(progress), float(world.score - points),
-            float(finished), float(stuck), float(ends.index(end)))
+            float(finished), float(stuck), float(danger), float(ends.index(end)))
 
 
 class Sampler:

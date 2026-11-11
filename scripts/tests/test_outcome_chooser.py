@@ -7,7 +7,16 @@ from retroagi.domains.smb.controller import State
 from retroagi.domains.smb.domain import DOMAIN
 from retroagi.domains.smb.physics import NESPlayerMotion
 from retroagi.domains.smb.planner import Enemy, Solid
-from retroagi.framework.chooser import DEATH, FINISHED, FRAMES, INFEASIBLE, POINTS, PROGRESS, STUCK
+from retroagi.framework.chooser import (
+    DANGER,
+    DEATH,
+    FINISHED,
+    FRAMES,
+    INFEASIBLE,
+    POINTS,
+    PROGRESS,
+    STUCK,
+)
 from retroagi.framework.outcome_network import PREDICTIONS
 
 FLOOR = Solid(0, 208, 400, 240, "ground", ("ground", 0))
@@ -43,10 +52,24 @@ def choose(mode, rows):
     return options[best].kind, options[best].modifier
 
 
-def row(death=0.0, progress=0.0, frames=16.0, points=0.0, finished=0.0, stuck=0.0):
+def row(death=0.0, progress=0.0, frames=16.0, points=0.0, finished=0.0, stuck=0.0, danger=0.0):
     p = np.zeros(len(PREDICTIONS), np.float32)
     p[DEATH], p[PROGRESS], p[FRAMES], p[POINTS], p[FINISHED], p[STUCK] = death, progress, frames, points, finished, stuck
+    p[DANGER] = danger
     return p
+
+
+def test_a_safe_choice_that_leaves_mario_in_danger_gives_way_to_one_that_does_not():
+    # A short wait slides on toward a Goomba: nothing dies in it, and a way
+    # out is left after it, but doing nothing next would kill. The jump
+    # away, slower, is taken; the wait only when nothing else is safe, or
+    # by a chooser that is not wary.
+    rows = {(4, 0): row(progress=12, frames=5, danger=0.9), (0, 2): row(progress=20, frames=40)}
+    assert choose("speed_run", rows) == (0, 2)
+    assert choose("speed_run", {(4, 0): rows[4, 0], (0, 2): row(death=0.6, progress=20, frames=40)}) == (4, 0)
+    plain = DOMAIN.using(chooser="plain").chooser(Given(rows), "speed_run")
+    plain.decide(STATE)
+    assert plain.last[0][plain.last[2]].kind == 4
 
 
 def test_dont_die_comes_before_progress():

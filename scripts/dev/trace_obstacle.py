@@ -4,7 +4,11 @@ the last frames (Mario's box and every object slot's kind and box, from
 game memory), to see what a death or a stall was.
 
     python scripts/dev/trace_obstacle.py --bench data/full_smb_obstacles/Level2-1 --name 00_steps_320 \\
-        [--source memory | vision] [--model OUTCOME.pt] [--mode speed_run] [--seed 0] [--last 30]
+        [--source memory | vision] [--model OUTCOME.pt] [--mode speed_run] [--seed 0] [--last 30] [--why]
+
+``--why`` adds, at each decision of the outcome network's chooser, what it
+predicted for the choices it weighed: the chance of death, of being
+infeasible and of leaving Mario stuck, and the progress and frames.
 """
 
 import argparse
@@ -29,6 +33,7 @@ def main(argv=None) -> int:
     parser.add_argument("--mode", default="speed_run")
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument("--last", type=int, default=30, help="frames of the game's account printed at the end")
+    parser.add_argument("--why", action="store_true", help="the chooser's predictions at each decision")
     args = parser.parse_args(argv)
     domain = registry.chosen(args)
     index = json.loads((args.bench / "index.json").read_text())
@@ -47,6 +52,16 @@ def main(argv=None) -> int:
         if agent.last_choice is not choice:
             choice = agent.last_choice
             print(f"frame {frame:3} x {world.progress:4}  after {agent.last_event or 'nothing':10} chose {choice}")
+            if args.why and getattr(agent.chooser, "last", None):
+                options, predicted, best = agent.chooser.last
+                kinds = domain.space.spec.kinds
+                # (the likeliest to be carried out and survived first)
+                order = sorted(range(len(options)), key=lambda k: (predicted[k][1] >= 0.5, predicted[k][0]))
+                for k in order[:10]:
+                    o, p = options[k], predicted[k]
+                    print(f"      {'>' if k == best else ' '} {kinds[o.kind].name:7} {str(o.ref):18} {o.modifier}  "
+                          f"death {p[0]:.2f} infeasible {p[1]:.2f} stuck {p[3]:.2f} progress {p[4]:6.1f} "
+                          f"frames {p[5]:5.1f}")
         truth = true_frame(world.game.env.get_ram(), world.game.start)
         slots = "  ".join(f"{k}:{s['kind']:02X}{'' if s['enemy'] else '?'}{tuple(int(v) for v in s['box'])}"
                           for k, s in enumerate(truth["slots"]) if s["active"] and s["box"] and not s["defeated"])
