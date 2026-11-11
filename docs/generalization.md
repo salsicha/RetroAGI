@@ -26,7 +26,9 @@ learns on the real game in any of it.
   (`agent.START_WAITS`), so the enemies are elsewhere in their walks.
   Obstacles that share a saved state are scored in one play, and results
   are also given by distinct start state (in brackets below): obstacles
-  sharing a start are not independent.
+  sharing a start are not independent. An obstacle not passed within 900
+  frames has stalled (from the second round on, 900 frames after the
+  obstacle before it in the play was passed).
 - **Whole levels** (`framework/play.py --runs 4`): from the level's start,
   in both ways to play. One death anywhere ends a play, so this is far
   harder than the bench.
@@ -204,30 +206,144 @@ with its 90% interval):
   in 4 of 8 plays from game memory, where none was), and the middle play
   goes further on most levels.
 
-The rules stay the default for now: the simulator gives no tracks, so the
-outcome network cannot yet be given outcomes sampled with the observed
-model.
+(That was so when this was measured; the second round below gave the
+simulator tracks and made this model the default.)
+
+## Second round, 2026-11-11: following the deaths
+
+Each step below was measured on its own, with the state from game memory
+(the benches take two minutes that way) and the same network; the table
+after them has the whole of it from vision too.
+
+**The bench's frame limit counts again from each obstacle passed.** A play
+that covers a dozen obstacles from one saved state had 900 frames for all
+of them, so a patient wait at one pipe "stalled" every obstacle after it.
+With the limit counted from the last obstacle passed, the first-contact
+agent scores 0.96 on the tuned levels and 0.66 on the untouched ones (0.65
+before), with 118 deaths in 496 plays there. The steps are measured against
+that.
+
+| Step (state from game memory) | Tuned | Untouched | Deaths in 496 plays on the untouched levels |
+|---|---|---|---|
+| The first-contact agent | 0.96 | 0.66 | 118 |
+| The dynamics model fitted to what is seen | 0.97 | 0.68 | 110 |
+| A refused choice answered in the same frame | 0.97 | 0.72 | 77 |
+| A plant shown when its head shows, as vision sees it | 0.97 | **0.77** | **70** |
+| (remembering what went out of sight: not kept) | 0.97 | 0.69 | 68 |
+| The hand-written rules with the same fixes, for comparison | 0.94 | 0.73 | 85 |
+
+- **A refused choice is answered in the same frame.** The chooser offered
+  one choice a frame, and while the controller refused them the agent went
+  on as it was: Mario slid into a pit of 5-1 past seven refused landings.
+  The agent now asks for the next choice at once, up to 8 a frame
+  (`agent.TRIES`). A third of the deaths on the untouched levels went with
+  it.
+- **Perfect perception was blinder than vision about plants.** The
+  game-memory state source showed a piranha plant only once the box the
+  game collides with (14 pixels below the plant's head) had cleared the
+  pipe: 2 frames before it reached a Mario landing there. Vision sees the
+  head 28 frames sooner, and the simulator shows it then too. Shown when
+  its head shows, a plant coming up is seen in time to steer the jump
+  away: plant deaths fell from 26 to 9. Most of what looked like a need
+  to remember hidden plants was this.
+- **Remembering what went out of sight was tried and not kept.** The model
+  kept each thing last seen going into a solid, learned from the first one
+  seen to return how long its type stays away, and gave the planner its
+  return as a thing to keep clear of. It did what it was built to (a plant
+  is away 120 frames, and the model found that), but the agent then stood
+  beside the pipe waiting for a plant that, in this game, stays down as
+  long as Mario stands there: 10% of its tries stalled, and no fewer died.
+  Dropping the expectation after a long wait only moved the deaths (the
+  plant comes up the moment Mario steps back for a run-up). To use such a
+  memory the model must also learn what keeps a thing away. The experiment
+  is kept as a patch outside the tree, not in the code.
+- **The simulator gives tracks, and falls as the game does.** Each enemy's
+  and mushroom's places while in sight are kept in the simulator's own
+  state (so they are saved and put back with it), and outcome sampling
+  plays each candidate with a controller that knows what the playing
+  agent's model has learned. Under the game's rules the simulator's
+  walkers and mushrooms now fall off a ledge as the game's do (0.2 pixels a
+  frame gained each frame up to 3.4, fitted to Goombas and Koopas falling
+  in the game: 1.6 pixels off on average, where the 0.5 up to 4.5 written
+  first was 11 off). On 30 fresh random levels the hand-written chooser
+  finishes 47 of 60 plays with the fitted model and 42 with the rules; the
+  network's chooser 53 and 52.
+- **The fitted model is the default** (`--use dynamics=rules` for the
+  rules). The rules were corrected on the way (the fall, and the pipe of a
+  plant whose box is still inside it), which is most of why they are now
+  closer to it than at first contact.
+
+### Where it stands
+
+Network `outcome_20261109d` (its outcomes were sampled with the rules and
+one choice a frame: a network sampled with the present agent is being
+trained). Share of obstacles passed (and of the plays from distinct starts,
+with its 90% interval):
+
+| State | Levels | First contact | The rules, now | The default, now |
+|---|---|---|---|---|
+| Game memory | tuned | 0.96 (0.97, 0.94-0.99) | 0.94 (0.95, 0.91-0.98) | 0.97 (0.97, 0.94-0.99) |
+| Game memory | development | 0.64 (0.71, 0.56-0.85) | 0.72 (0.71, 0.57-0.85) | **0.78** (0.83, 0.71-0.93) |
+| Game memory | held out | 0.67 (0.75, 0.66-0.84) | 0.74 (0.79, 0.71-0.87) | **0.76** (0.80, 0.73-0.88) |
+| Vision | tuned | 0.83 | 0.87 (0.92, 0.85-0.97) | 0.85 (0.89, 0.82-0.94) |
+| Vision | development | 0.41 | 0.56 (0.64, 0.48-0.77) | **0.58** (0.69, 0.57-0.81) |
+| Vision | held out | 0.53 | 0.57 (0.71, 0.61-0.80) | **0.59** (0.72, 0.63-0.80) |
+
+(First contact from vision was measured under the old frame limit.)
+
+| Level | memory | vision | whole level, memory | whole level, vision |
+|---|---|---|---|---|
+| 1-1 (tuned) | 1.00 (1.00) | 0.95 (0.95) | 8/8, x 3161 | 8/8, x 3161 |
+| 5-1 (tuned) | 0.96 (0.93) | 0.78 (0.82) | 3/8, x 1905 | 0/8, x 1906 |
+| 2-1 | 0.88 (0.93) | 0.60 (0.79) | 4/8, x 3193 | 0/8, x 1731 |
+| 3-1 | 0.71 (0.78) | 0.56 (0.64) | 0/8, x 1963 | 0/8, x 1471 |
+| 4-1 | 0.86 (0.80) | 0.52 (0.78) | 2/8, x 2408 | 0/8, x 1911 |
+| 6-1 | 0.54 (0.67) | 0.42 (0.48) | 2/8, x 2290 | 0/8, x 509 |
+| 7-1 | 0.87 (0.86) | 0.55 (0.62) | 0/8, x 647 | 0/8, x 1365 |
+| 8-1 | 0.75 (0.83) | 0.77 (0.84) | 0/8, x 2703 | 0/8, x 2491 |
+| **tuned, all obstacles** | **0.97** | **0.85** | | |
+| **untouched, all obstacles** | **0.77** | **0.58** | | |
+
+- **With perfect perception the gap between tuned and untouched levels has
+  gone from 0.96 against 0.66 to 0.97 against 0.77**, on the held-out
+  levels as on the development ones, and the deaths there from 118 to 70.
+  Whole levels finished: 27 of 128 plays (18 at first contact), 1-1 in all
+  16, and 2-1, 4-1 and 6-1 for the first time (from game memory).
+- **Perception is now the larger loss**: 0.77 with the state from game
+  memory, 0.58 from vision, and from vision twice as many tries end in a
+  death (38% against 18%). Nothing in this round was aimed at it.
+- **From vision, the fitted model and the corrected rules are level**
+  (0.58 and 0.57 on the untouched levels, the tuned levels within their
+  intervals); with perfect perception the fitted model is ahead (0.77
+  against 0.73, 70 deaths against 85).
+- **What kills it now** (70 deaths on the untouched levels, game memory):
+  Lakitu's Spinies 25 (all in 6-1 and 4-1), Goombas 10, piranha plants 9,
+  Koopas 7, hopping Paratroopas 7.
+
+How well each model predicts, re-measured with plants shown from their
+heads (within 4 pixels at 8 / 16 / 32 / 48 frames ahead): on the tuned
+levels the rules 0.95 / 0.90 / 0.85 / 0.81 and the fitted model 0.94 / 0.91
+/ 0.86 / 0.81; on the held-out levels 0.83 / 0.69 / 0.56 / 0.51 and 0.87 /
+**0.76** / 0.63 / 0.56 (hopping Paratroopas 0.53 and 0.80 at 16 frames,
+Spinies 0.41 and 0.58, Buzzy Beetles 0.68 and 0.80, plants 0.80 and 0.88).
 
 ## What the measurements say to do next
 
-In the order the deaths rank them:
-
-1. **Remember what went out of sight.** A plant that went down its pipe is
-   still there. The model should keep things that disappeared into a
-   solid, learn from the first one seen to return how long they stay away,
-   and give the planner their return as a predicted hazard. This is the
-   largest single cause of death and no model of visible things can touch
+1. **Perception on levels it was not trained on.** The loss from vision is
+   now the largest. Measure what vision gets wrong on the untouched levels
+   (each has enemies and scenery its training frames may lack), and give
+   outcome sampling perception's kind of error so the chooser learns with
    it.
-2. **When nothing is feasible, act at once.** The chooser tries one choice
-   a frame and Mario slides on meanwhile; the choices should be planned in
-   one frame and the safest taken.
-3. **Margins that follow the model's own error.** The planner keeps every
-   enemy 2 pixels wider than its box. The model can measure how wrong its
-   predictions for each type have been (Lakitu, Spinies in the air) and
-   keep away by that much instead.
-4. **The simulator's rules against the game's.** The same check, run on
-   the simulator's enemies, would show where the practice world teaches
-   the outcome network something the game does not do (the Goomba's fall
-   is one).
-5. **Tracks in the simulator**, so that the observed model can be the one
-   outcomes are sampled with, and the default.
+2. **Things thrown from above.** Lakitu's Spinies are a third of the
+   deaths: a thing first seen falling, from a thrower that follows Mario.
+   The model predicts their fall better than the rules (0.58 against 0.41)
+   but the chooser has no choice made for them.
+3. **The outcome network sampled with the present agent** (in training),
+   and after it the same check for the simulator's enemies as for the
+   game's: where the practice world moves a thing as the game does not.
+4. **Margins that follow the model's own error**: the planner keeps every
+   enemy 2 pixels wider than its box, whatever the model's record with its
+   type (Lakitu and the Hammer Bro are within 4 pixels half the time).
+5. **What a model may keep from one play to the next** is the user's to
+   decide: its memory starts empty at each play, and what it learns of a
+   type in one play would serve the next.

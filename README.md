@@ -43,16 +43,19 @@ agent was built on and on six nobody looked at
 ([the measurements](docs/generalization.md)). Share of a level's obstacles
 passed, four tries each that start at different moments:
 
-| State, dynamics model | 1-1 and 5-1 (tuned), 59 obstacles | 2-1, 3-1, 4-1, 6-1, 7-1, 8-1 (untouched), 206 obstacles |
+| State | 1-1 and 5-1 (tuned), 59 obstacles | 2-1, 3-1, 4-1, 6-1, 7-1, 8-1 (untouched), 206 obstacles |
 |---|---|---|
-| Game memory, hand-written rules | 0.96 | 0.65 |
-| Game memory, model fitted to what is seen | 0.96 | 0.66 |
-| Vision only, hand-written rules | 0.83 | 0.49 |
-| Vision only, model fitted to what is seen | **0.91** | **0.55** |
+| Game memory (perfect perception), at first contact | 0.96 | 0.66 |
+| Game memory, now | 0.97 | **0.77** |
+| Vision only, at first contact | 0.83 | 0.49 |
+| Vision only, now | 0.85 | **0.58** |
 
-From its start, only 1-1 is finished reliably. On fresh random levels in
-the simulator the network's chooser finishes 87 of 100 in a speed run and
-91 for points (network h, trained with 5-1's enemies: 93 and 93).
+Between the two: a dynamics model fitted to what the agent sees of each
+thing in place of a rule per kind of enemy, a refused choice answered in
+the same frame, and the perfect-perception stand-in showing a plant when
+vision would. From its start 1-1 is finished in every play; 5-1, 2-1, 4-1
+and 6-1 in some from game memory, none from vision. On fresh random levels
+in the simulator the network's chooser finishes 53 of 60 plays.
 
 The outcome network was trained only on Block SMB random levels (question
 blocks, mushrooms, big Mario, Koopa Troopas, piranha plants, hopping
@@ -61,8 +64,8 @@ Paratroopas, Bullet Bill cannons); nothing learns on the real game.
 ```bash
 # score an agent on the 24 obstacles of 1-1, from vision
 python -m retroagi.framework.bench --domain smb --bench data/full_smb_obstacles/Level1-1 --source vision --model data/outcome/outcome_20261109d.pt
-# the same with the dynamics model fitted to what is seen
-python -m retroagi.framework.bench --domain smb --use dynamics=observed --bench data/full_smb_obstacles/Level1-1 --source vision --model data/outcome/outcome_20261109d.pt
+# the same with the hand-written rules for how enemies move, not the model fitted to what is seen
+python -m retroagi.framework.bench --domain smb --use dynamics=rules --bench data/full_smb_obstacles/Level1-1 --source vision --model data/outcome/outcome_20261109d.pt
 # play a whole level
 python -m retroagi.framework.play --domain smb --level Level1-1 --source vision --model data/outcome/outcome_20261109d.pt
 # the scripted chooser, or the outcome network as the chooser, on fresh random levels

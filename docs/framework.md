@@ -38,7 +38,11 @@ now.
 
 The controller is shown every state (`observe`), a choice in progress or
 not, and passes what moves in it to its dynamics model: a model that
-adapts learns from every frame, not only from the frames it plans in.
+adapts learns from every frame, not only from the frames it plans in. A
+controller can make another that knows what its model has learned
+(`another`): outcome sampling plays each candidate with one. A choice the
+controller refuses as it starts is answered by the chooser's next in the
+same frame.
 
 ## Parts with alternatives
 
@@ -48,11 +52,11 @@ has two dynamics models:
 
 | `--use dynamics=` | What it is |
 |---|---|
-| `rules` (the default) | A rule per kind of enemy, written by hand from the game (`domains/smb/planner.py`). |
-| `observed` | `framework/observed_dynamics.py`: told nothing of what a thing is, it fits each thing's motion to its own track and remembers by type what things have been seen to do (how they fall, bounce, come out of solids, pace). Its memory starts empty at each play. |
+| `observed` (the default) | `framework/observed_dynamics.py`: told nothing of what a thing is, it fits each thing's motion to its own track and remembers by type what things have been seen to do (how they fall, bounce, come out of solids, pace). Its memory starts empty at each play. Every state source gives the tracks: the simulator, game memory, vision. |
+| `rules` | A rule per kind of enemy, written by hand from the game (`domains/smb/planner.py`). |
 
 ```bash
-python -m retroagi.framework.bench --domain smb --use dynamics=observed --bench data/full_smb_obstacles/Level2-1 --source vision --model data/outcome/outcome_20261109d.pt
+python -m retroagi.framework.bench --domain smb --use dynamics=rules --bench data/full_smb_obstacles/Level2-1 --source vision --model data/outcome/outcome_20261109d.pt
 python -m retroagi.domains.smb.nes.dynamics_check --bench data/full_smb_obstacles/Level2-1 --model data/outcome/outcome_20261109d.pt
 ```
 
@@ -117,17 +121,15 @@ benches from game memory and from vision.
 
 ## What is not general yet
 
-- **The agent is tuned to the two levels it was built on**: it passes 96%
-  of their obstacles with perfect perception and 65% of the obstacles of
-  six levels nobody looked at; from vision, 83% and 49%
-  ([measurements](generalization.md)).
-- **The default dynamics model is written by hand**, a rule per kind of
-  enemy. The model identified from what is seen predicts better on levels
-  neither was written on (within 4 pixels 16 frames ahead: 0.74 against
-  0.68), but the agent does not yet play better with it, the simulator
-  gives it no tracks to learn from, and it cannot see what the rules
-  cannot either: a thing that went out of sight, a thing that moves by what
-  Mario does.
+- **The agent is still tuned to the two levels it was built on**: it
+  passes 97% of their obstacles with perfect perception and 77% of the
+  obstacles of six levels nobody looked at (65% at first contact); from
+  vision, 85% and 58% ([measurements](generalization.md)). Perception is
+  now the larger loss.
+- **The dynamics model is fitted to what is seen, but only of what is
+  seen**: it cannot predict a thing that moves by what Mario does (Lakitu,
+  a Hammer Bro), and a first try at remembering what went out of sight
+  made the agent wait for things that never came.
 - **Mario's own motion is transcribed from the game**
   (`domains/smb/physics.py`) and compiled into the planner: nothing about
   the agent's own body is identified.

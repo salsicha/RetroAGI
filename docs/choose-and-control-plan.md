@@ -434,3 +434,20 @@ Each phase ends with a measurement that decides whether to go on.
   simulator gives tracks too. docs/generalization.md has the method (tuned,
   development and held-out levels), the tables and what they say to do
   next.
+- **Second round against the untouched levels, 2026-11-11.** Measured step
+  by step (docs/generalization.md): the agent now answers a choice the
+  controller refuses with the chooser's next in the same frame; the
+  game-memory state source shows a piranha plant when its head shows, as
+  vision does (it had shown it 28 frames later, which was most of the
+  plant deaths); the simulator gives every thing its track and its
+  walkers fall as the game's do; outcome sampling plays candidates with a
+  controller that knows what the play's model has learned; and the model
+  fitted to what is seen is the default dynamics model. With the state
+  from game memory the untouched levels go from 0.66 to 0.77 of their
+  obstacles passed (deaths 118 to 70 in 496 plays), from vision 0.49 to
+  0.58; 1-1 is finished in all 16 plays from its start. Remembering things
+  that went out of sight (a plant in its pipe) was tried and not kept: the
+  agent waited beside pipes for plants that stay down while Mario stands
+  there. The bench's 900-frame limit now counts again from each obstacle
+  passed. Outcomes are being resampled with this agent
+  (outcomes_20261111j).
