@@ -441,7 +441,7 @@ def safe_jump_holds(
     snapshot includes goal credit and reward potentials so probes cannot leak
     credit, shaping, or platform phase into the live episode.
     """
-    from .piranha import freeze_plant_envelopes
+    from .piranha_teacher import freeze_plant_envelopes
     from .piranha_tactics import timed_plant, timed_safe_holds
 
     plant = timed_plant(env)
@@ -601,7 +601,7 @@ def terrain_oracle(scenario: dict, max_steps: int = 300) -> list[int]:
         isinstance(e, dict) and e.get("kind") == "piranha_plant"
         for e in scenario.get("enemies", [])
     ):
-        from .piranha import plant_oracle
+        from .piranha_teacher import plant_oracle
 
         return plant_oracle(scenario, max_steps)
     env = MarioScenarioEnv()

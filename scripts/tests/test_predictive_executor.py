@@ -268,7 +268,8 @@ def test_teacher_owns_approach_waypoints_before_the_jump(family):
 
 def test_occluded_floor_edge_is_not_camera_scroll_and_bridge_support_uses_geometry():
     from retroagi.core.smb_scene_labels import MarioView, SceneObservation, Surface
-    from retroagi.core.smb_spatial_feedback import camera_shift, moving_support_offset
+    from retroagi.core.smb_estimator import camera_shift
+    from retroagi.core.smb_spatial_feedback import moving_support_offset
 
     def scene(edge, mario):
         return SceneObservation(

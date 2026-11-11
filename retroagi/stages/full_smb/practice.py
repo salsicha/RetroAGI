@@ -33,7 +33,8 @@ import numpy as np
 from retroagi.core.smb_observer import SCENE_SLOTS
 
 from .play import FullSMBGame
-from .truth import FullTruthRecorder, match_slots, true_frame
+from .truth import true_frame
+from .truth_recording import FullTruthRecorder, match_slots
 
 # A checkpoint every this many pixels of Mario's distance into the level: the
 # speed run is measured by the frames to each, max points by the points

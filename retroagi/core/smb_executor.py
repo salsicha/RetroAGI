@@ -119,7 +119,7 @@ class GroundHold:
             return int(SMBAction.NOOP)
         x0, _, x1, feet = scene.mario.box
         center = (x0 + x1) / 2
-        from .smb_spatial_feedback import moving_support
+        from .smb_estimator import moving_support
 
         on_moving = moving_support(scene) is not None
         # Compact moving-platform boxes preserve the platform edges even where

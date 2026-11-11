@@ -30,7 +30,6 @@ from typing import Optional, Sequence
 import numpy as np
 from numba import njit
 
-from .smb_observer import packed_lists
 from .smb_physics import NES_JUMP_FRAMES, NESPlayerMotion
 
 # Frames of running before takeoff the planner tries.
@@ -225,33 +224,6 @@ class Plan:
 
 def _overlap(a0, a1, b0, b1) -> bool:
     return a0 < b1 and b0 < a1
-
-
-def solids_of(scene, camera: float) -> list:
-    """Every still thing vision reports as a solid, in world pixels: pipes
-    and blocks by their boxes, the floor and steps from their tops down to
-    the screen's bottom (but those the pipes and blocks of their height
-    cover at least half of: their own tops), moving surfaces thin. A 2-pixel pipe vision
-    made up at a step's end once hid the whole step Mario stood on."""
-    lists = packed_lists(scene)
-    out = []
-    for slot, p in enumerate(lists.get("pipes", ())):
-        out.append(Solid(p[0] + camera, p[1], p[2] + camera, SCREEN_BOTTOM, "pipe", ("pipes", slot)))
-    for slot, b in enumerate(lists.get("blocks", ())):
-        x0, y0, x1, y1 = b.box
-        kind = "question" if getattr(b, "kind", "") == "question_block" else "block"
-        out.append(Solid(x0 + camera, y0, x1 + camera, y1, kind, ("blocks", slot)))
-    for slot, s in enumerate(lists.get("surfaces", ())):
-        x0, x1 = s.x0 + camera, s.x1 + camera
-        covered = 2 * sum(
-            max(0.0, min(x1, o.x1) - max(x0, o.x0))
-            for o in out if o.kind in ("pipe", *BLOCK_KINDS) and abs(o.top - s.top) <= 2
-        ) >= x1 - x0
-        if covered:
-            continue
-        bottom = s.top + 8 if s.moving else SCREEN_BOTTOM
-        out.append(Solid(x0, s.top, x1, bottom, "moving" if s.moving else "ground", ("surfaces", slot)))
-    return out
 
 
 def screen_edge(camera: float) -> Solid:

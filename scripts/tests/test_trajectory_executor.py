@@ -13,7 +13,8 @@ from retroagi.core.smb_scene_labels import (
     Surface,
 )
 from retroagi.core.smb_spatial_feedback import SpatialFeedback
-from retroagi.core.smb_trajectory import Track, VisualTracks, plan_flight
+from retroagi.core.smb_tracks import Track, VisualTracks
+from retroagi.core.smb_trajectory import plan_flight
 from retroagi.core.tokens import SkillToken
 
 

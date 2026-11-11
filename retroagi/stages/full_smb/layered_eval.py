@@ -13,14 +13,51 @@ Example:
 
 import argparse
 import json
+from dataclasses import dataclass
 from pathlib import Path
+from typing import Sequence
 
 from retroagi.core.smb_agent import SMBAgents
 from retroagi.core.smb_observer import VisionObserver
 from retroagi.core.tokens import DEFAULT_STRATEGY, STRATEGIES, StrategyToken
 
-from .play import POLICY_TEST_LEVELS, play_full_levels
+from .play import POLICY_TEST_LEVELS, FullSMBGame
 from .vision import DEFAULT_FULL_VIT_CHECKPOINT, load_full_vit_checkpoint
+
+
+@dataclass(frozen=True)
+class FullSMBRun:
+    level: str
+    frames: int
+    furthest_x: int
+    died: bool
+    finished: bool
+
+
+def play_full_levels(agents, levels: Sequence[str], frames: int) -> list[FullSMBRun]:
+    """Each level played once from its start by copy 0 of ``agents``
+    (core.smb_agent.SMBAgents), one after another (the emulator allows one
+    game a process), until Mario dies, leaves the level or ``frames`` frames
+    pass."""
+    runs = []
+    for level in levels:
+        game = FullSMBGame(level)
+        try:
+            screen = game.reset()
+            agents.reset(0)
+            furthest = 0
+            for frame in range(frames):
+                step = agents.act([screen], [0])[0]
+                screen, outcome = game.step(step.button)
+                furthest = max(furthest, outcome.level_x)
+                if outcome.dying or outcome.finished or frame == frames - 1:
+                    runs.append(
+                        FullSMBRun(level, frame + 1, furthest, outcome.dying, outcome.finished)
+                    )
+                    break
+        finally:
+            game.close()
+    return runs
 
 
 def evaluate_on_full(

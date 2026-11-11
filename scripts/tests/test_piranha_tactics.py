@@ -174,7 +174,7 @@ def test_running_departures_are_certified():
     # Timed plants are raised whenever a runner arrives, so teacher routes
     # depart from a stop. Certification must still admit a departure made
     # at speed: retime a layout so the plant retracts as a runner approaches.
-    from retroagi.stages.block_smb.piranha import runner_crossing_frame
+    from retroagi.stages.block_smb.piranha_teacher import runner_crossing_frame
 
     sample = timed_sample("medium")
     env = MarioScenarioEnv()

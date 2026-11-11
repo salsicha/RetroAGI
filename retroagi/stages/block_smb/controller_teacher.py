@@ -24,7 +24,8 @@ from retroagi.core.smb_coaching import probe_state, training_target
 from retroagi.core.smb_executor import WAIT_SLICE, SMBExecutor
 from retroagi.core.smb_scene_labels import scene_from_labels
 from retroagi.core.smb_spatial_feedback import SpatialFeedback
-from retroagi.core.smb_trajectory import VisualTracks, aimed_goal, best_holds, hold_paths
+from retroagi.core.smb_tracks import VisualTracks
+from retroagi.core.smb_trajectory import aimed_goal, best_holds, hold_paths
 from retroagi.core.tokens import SKILL_X, SKILL_Y, SkillToken
 
 from . import tactic_schedule

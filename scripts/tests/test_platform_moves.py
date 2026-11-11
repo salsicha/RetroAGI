@@ -6,7 +6,7 @@ from types import SimpleNamespace
 import numpy as np
 
 from retroagi.core.smb_scene_labels import MarioView, SceneObservation, Surface
-from retroagi.core.smb_trajectory import Track, VisualTracks
+from retroagi.core.smb_tracks import Track, VisualTracks
 
 
 def test_boarding_request_moves_onto_platform_instead_of_braking_back_to_shore():

@@ -7,7 +7,8 @@ import torch
 
 from retroagi.core.smb_scene_labels import decode_scene, scene_from_labels, scene_targets
 from retroagi.core.smb_spatial_feedback import SpatialFeedback
-from retroagi.core.smb_trajectory import VisualTracks, plan_flight
+from retroagi.core.smb_tracks import VisualTracks
+from retroagi.core.smb_trajectory import plan_flight
 from retroagi.core.tokens import SkillToken
 from retroagi.stages.block_smb.env import MarioScenarioEnv
 from retroagi.stages.block_smb.layered_train import learner_families

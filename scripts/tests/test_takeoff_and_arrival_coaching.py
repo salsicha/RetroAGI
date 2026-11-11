@@ -5,7 +5,7 @@ import copy
 from retroagi.stages.block_smb.env import MarioScenarioEnv
 from retroagi.stages.block_smb.local_traversal import takeoff_timing_actions
 from retroagi.stages.block_smb.monte_carlo import sample_block_smb_monte_carlo_scenario
-from retroagi.stages.block_smb.piranha import runner_crossing_frame
+from retroagi.stages.block_smb.piranha_teacher import runner_crossing_frame
 
 SEED = 20260908
 
@@ -119,7 +119,7 @@ def test_plant_pipes_are_taught_as_get_past_the_plant_not_land_on_the_pipe():
     from retroagi.core.smb_coaching import training_target
     from retroagi.stages.block_smb.env_state import restore_env_state, snapshot_env_state
     from retroagi.stages.block_smb.local_traversal import local_objective, safe_jump_holds
-    from retroagi.stages.block_smb.piranha import freeze_plant_envelopes
+    from retroagi.stages.block_smb.piranha_teacher import freeze_plant_envelopes
 
     sample = piranha("clearance")
     env = MarioScenarioEnv()

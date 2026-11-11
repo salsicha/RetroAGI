@@ -13,7 +13,8 @@ import torch
 from retroagi.core.actions import SMBAction
 from retroagi.core.collision_labels import KINDS, action_ends, collision_labels
 from retroagi.stages.full_smb.play import FullSMBGame
-from retroagi.stages.full_smb.truth import FullTruthRecorder, true_frame
+from retroagi.stages.full_smb.truth import true_frame
+from retroagi.stages.full_smb.truth_recording import FullTruthRecorder
 
 pytestmark = pytest.mark.timeout(900)
 

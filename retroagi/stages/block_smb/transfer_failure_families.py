@@ -179,7 +179,7 @@ def transfer_failure_scenario(family, rng, difficulty):
             )
             # A uniformly random phase let most timed layouts be run straight
             # through, so the family rarely required the wait it teaches.
-            from .piranha import exposed_arrival_phase
+            from .piranha_teacher import exposed_arrival_phase
 
             phase = exposed_arrival_phase(scenario, rng)
             plant["phase"] = phase

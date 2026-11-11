@@ -4,21 +4,28 @@ planner's goals and its "infeasible" answer, and the controller's runs."""
 
 from copy import copy
 
-from retroagi.core.smb_controller import Choice, Controller, State, _collision_box, meets_soon, pit_ahead, stopping_distance
+from retroagi.core.smb_controller import (
+    Choice,
+    Controller,
+    State,
+    meets_soon,
+    pit_ahead,
+    stopping_distance,
+)
+from retroagi.core.smb_perceived import _collision_box, solids_of
 from retroagi.core.smb_physics import NESPlayerMotion
 from retroagi.core.smb_planner import (
-    blocked,
     INSET,
     Enemy,
     Goal,
     Solid,
+    blocked,
     enemy_paths,
     floor_behind,
     plan_flight,
     plan_jump,
     rollout,
     screen_edge,
-    solids_of,
 )
 from retroagi.core.smb_scene_labels import BlockView, MarioView, SceneObservation, Surface
 
@@ -323,7 +330,8 @@ def test_hoppers_plants_and_fliers_have_their_own_paths():
 
 
 def test_a_hoppers_speed_is_its_recent_moves_plus_gravity():
-    from retroagi.core.smb_controller import HOP_GRAVITY, hopper_speed
+    from retroagi.core.smb_perceived import hopper_speed
+    from retroagi.core.smb_planner import HOP_GRAVITY
 
     # Falling ever faster: the last four moves 1, 2, 2, 3 (mean 2) are its
     # speed two and a half frames ago.

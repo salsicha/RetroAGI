@@ -88,7 +88,7 @@ class GroundMove:
             self.done, self.status = True, "lost_observation"
             return 0
         from .smb_scene_labels import fixed_surfaces
-        from .smb_spatial_feedback import moving_support
+        from .smb_estimator import moving_support
 
         support_box = moving_support(scene)
         moving = support_box is not None

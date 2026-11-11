@@ -14,7 +14,7 @@ from retroagi.core.smb_kinematics import MARIO_STATE, SPRITE_SLOTS, SPRITE_STATE
 from retroagi.core.smb_observer import packed_lists
 from retroagi.core.smb_scene_labels import scene_from_labels
 from retroagi.core.smb_spatial_feedback import SpatialFeedback
-from retroagi.core.smb_trajectory import LOST_FRAMES
+from retroagi.core.smb_tracks import LOST_FRAMES
 from retroagi.stages.block_smb.env import MarioScenarioEnv
 
 S = {name: i for i, name in enumerate(SPRITE_STATE)}

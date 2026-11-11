@@ -50,7 +50,7 @@ def coached_suffix(
         chosen = interior_hold(holds, menu=tuple(range(33)))
         return routes[chosen]
 
-    from .piranha import conservative_suffix, has_plants
+    from .piranha_teacher import conservative_suffix, has_plants
     from .piranha_tactics import timed_plant
 
     if not prefix and has_plants(env) and timed_plant(env) is None:

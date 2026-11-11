@@ -234,9 +234,9 @@ def _mode_summary(played: list) -> dict:
 
 def learn(config: FullLearnConfig) -> dict:
     """Play and learn (module notes) for ``config.rounds`` rounds."""
+    from retroagi.core.scene_vision import save_scene_vision_checkpoint
     from retroagi.stages.block_smb import layered_train as lt
     from retroagi.stages.block_smb.tracker_train import load_tracker
-    from retroagi.core.scene_vision import save_scene_vision_checkpoint
 
     from .vision import load_full_vit_checkpoint
 

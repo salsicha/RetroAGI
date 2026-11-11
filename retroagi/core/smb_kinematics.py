@@ -27,7 +27,7 @@ import numpy as np
 
 from .smb_observer import SCENE_SLOTS, packed_lists
 from .smb_scene_labels import OBJECT_TYPE_SLOTS
-from .smb_trajectory import ESTIMATE_SAMPLES
+from .smb_tracks import ESTIMATE_SAMPLES
 
 SPRITE_STATE = ("present", "x", "y", "vx", "vy", "seen")
 MARIO_STATE = ("vx", "vy", "grounded")

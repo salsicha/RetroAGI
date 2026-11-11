@@ -8,7 +8,8 @@ os.environ.setdefault("SDL_VIDEODRIVER", "dummy")
 
 from retroagi.core.smb_physics import NESPlayerMotion
 from retroagi.core.smb_scene_labels import scene_from_labels
-from retroagi.core.smb_trajectory import VisualTracks, aimed_goal
+from retroagi.core.smb_tracks import VisualTracks
+from retroagi.core.smb_trajectory import aimed_goal
 from retroagi.stages.block_smb.controller_teacher import exact_positions
 from retroagi.stages.block_smb.env import MarioScenarioEnv
 
