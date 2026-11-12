@@ -47,21 +47,19 @@ class SuperMarioBros:
     space = SPACE
     sources = ("memory", "vision")
     # The parts with alternatives (--use PART=NAME). The controller's model
-    # of how enemies and items move: "observed", fitted to what is seen of
-    # each thing as it plays (framework/observed_dynamics; a new one each
-    # play, with the game's walkers' fall off a ledge for what it has not
-    # yet seen), or "rules", written by hand for each kind of enemy.
-    # The chooser on the outcome network's predictions: "wary" of choices
-    # that leave Mario in danger, or "plain" (framework/chooser).
-    parts = {
-        "dynamics": {
-            "rules": lambda: RULES,
-            "observed": lambda: ObservedDynamics(gravity=ENEMY_GRAVITY, fastest=ENEMY_FALL, reach=FEET_BELOW + 2,
-                                                 wall_depth=WALL_DEPTH, ignored=("edge",)),
-        },
-        "chooser": {"wary": True, "plain": False},
-    }
-    chosen = {"dynamics": "observed", "chooser": "wary"}
+    # of how enemies and items move: "rules", the simulator's own rule for
+    # each kind of enemy (Block SMB's behaviour, measured from the game), or
+    # "observed", fitted to what is seen of each thing as it plays
+    # (framework/observed_dynamics; a new one each play). The second was
+    # shaped against recordings of the real game (2026-11-11), which no part
+    # of the policy may be, and plays fresh practice levels no better than
+    # the rules: an experiment until it earns its place in Block SMB.
+    parts = {"dynamics": {
+        "rules": lambda: RULES,
+        "observed": lambda: ObservedDynamics(gravity=ENEMY_GRAVITY, fastest=ENEMY_FALL, reach=FEET_BELOW + 2,
+                                             wall_depth=WALL_DEPTH, ignored=("edge",)),
+    }}
+    chosen = {"dynamics": "rules"}
 
     def using(self, **choices) -> "SuperMarioBros":
         for part, name in choices.items():
@@ -79,8 +77,7 @@ class SuperMarioBros:
         return Controller(self.dynamics())
 
     def chooser(self, predictor, mode: str) -> OutcomeChooser:
-        return OutcomeChooser(predictor, self.space, POINT_VALUE[mode],
-                              wary=self.parts["chooser"][self.chosen["chooser"]])
+        return OutcomeChooser(predictor, self.space, POINT_VALUE[mode])
 
     def behaviour(self, mode: str) -> ScriptedChooser:
         return ScriptedChooser(mode)

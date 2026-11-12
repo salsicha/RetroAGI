@@ -451,3 +451,18 @@ Each phase ends with a measurement that decides whether to go on.
   there. The bench's 900-frame limit now counts again from each obstacle
   passed. Outcomes are being resampled with this agent
   (outcomes_20261111j).
+- **The rule restated, and the day's policy changes put back, 2026-11-11.**
+  The user: the real game may be looked at to train vision, to make Block
+  SMB an accurate copy (from the game's memory), and to score; the policy
+  that decides and controls is learned from Block SMB alone, since a robot
+  cannot be trained or debugged in its real situation. The two rounds above
+  had traced deaths on real levels and changed the agent to answer them.
+  Scored on 100 fresh Block SMB levels, none of those changes helped (184
+  to 188 of 200 plays finished, whichever were on), so the hand-written
+  motion rules are the default again, a choice is tried once a frame, and
+  the "danger" answer and the resampling begun with it are gone. Kept:
+  the measuring tools and the corrections to Block SMB (walkers fall as
+  the game's; a standing enemy stands exactly; tracks). Next: make Block
+  SMB an accurate copy of what the real levels hold, read from the game's
+  memory, and let the policy learn there.
+

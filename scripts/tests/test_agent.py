@@ -3,7 +3,7 @@ controller."""
 
 from dataclasses import dataclass
 
-from retroagi.framework.agent import TRIES, Agent
+from retroagi.framework.agent import Agent
 
 
 @dataclass
@@ -50,18 +50,13 @@ def agent_refusing(first_feasible):
     return agent
 
 
-def test_a_refused_choice_is_answered_with_the_next_in_the_same_frame():
-    agent = agent_refusing(3)
-    assert agent.step(State()) == 103  # the fourth choice, pressed at once
-    assert agent.chooser.told == [(None, None), ("infeasible", 0), ("infeasible", 1), ("infeasible", 2)]
-    assert agent.step(State()) == 103 and len(agent.chooser.told) == 4  # it goes on: nothing is decided
-    assert agent.controller.seen == 2  # the controller is shown every state
-
-
-def test_with_every_choice_refused_the_frame_is_idle_and_the_next_decides_again():
-    agent = agent_refusing(10 ** 6)
-    assert agent.step(State()) == 0 and len(agent.chooser.told) == TRIES
-    assert agent.step(State()) == 0 and len(agent.chooser.told) == 2 * TRIES
+def test_a_refused_choice_leaves_the_frame_idle_and_the_next_frame_decides_again():
+    agent = agent_refusing(2)
+    assert agent.step(State()) == 0 and agent.step(State()) == 0  # choices 0 and 1 refused: idle frames
+    assert agent.step(State()) == 102  # the third is carried out
+    assert agent.chooser.told == [(None, None), ("infeasible", 0), ("infeasible", 1)]
+    assert agent.step(State()) == 102 and len(agent.chooser.told) == 3  # it goes on: nothing is decided
+    assert agent.controller.seen == 4  # the controller is shown every state
 
 
 def test_nothing_is_decided_while_the_state_is_not_decidable_or_missing():

@@ -4,7 +4,7 @@
 Each step takes BATCH sampled choices at random, runs the network on their
 states and compares its predictions for those choices with what happened:
 the chances (death during the choice or after it, infeasible, finishing the
-task, stuck, danger) by cross-entropy, the amounts (progress, frames, points, at
+task, stuck) by cross-entropy, the amounts (progress, frames, points, at
 the network's SCALES) by a Huber loss on choices the controller could carry
 out. The measures, per kind of choice: how well the death chance ranks
 deaths first (the area under the ROC curve), its mean error, how often
@@ -44,10 +44,7 @@ def targets(outcomes: np.ndarray, ends: tuple) -> np.ndarray:
     after), infeasible (the controller ended it before its first frame:
     found infeasible, or blocked at once; a blocked run counted as feasible
     was picked again and again against a wall), finished, stuck, then
-    progress, frames and points at the network's SCALES, and danger."""
-    if outcomes.shape[1] != len(OUTCOME_FIELDS):
-        raise ValueError(f"outcomes of {outcomes.shape[1]} fields, not the {len(OUTCOME_FIELDS)} sampled now: "
-                         "sampled before a field was added; sample them again")
+    progress, frames and points at the network's SCALES."""
     f = {name: outcomes[:, k] for k, name in enumerate(OUTCOME_FIELDS)}
     nothing = (f["frames"] == 0) & (f["died"] == 0) & (f["finished"] == 0)
     return np.stack([
@@ -58,7 +55,6 @@ def targets(outcomes: np.ndarray, ends: tuple) -> np.ndarray:
         f["progress"] / SCALES[0],
         f["frames"] / SCALES[1],
         f["points"] / SCALES[2],
-        f["danger"],
     ], axis=1).astype(np.float32)
 
 
@@ -127,8 +123,6 @@ def measure(model, data: Data, batch: int = 8192) -> dict:
             "death_error": float(np.abs(chance[sel, 0] - t[sel, 0]).mean()),
             "infeasible_right": float(((chance[sel, 1] > 0.5) == (t[sel, 1] > 0.5)).mean()),
             "stuck_right": float(((chance[sel, 3] > 0.5) == (t[sel, 3] > 0.5)).mean()),
-            "danger": float(t[sel, 7].mean()),
-            "danger_auc": _auc(chance[sel, 4], t[sel, 7]),
             "progress_error": float(np.abs(p[feasible, 4] - t[feasible, 4]).mean() * SCALES[0]) if feasible.any() else None,
         }
     return out

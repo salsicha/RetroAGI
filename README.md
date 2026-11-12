@@ -38,27 +38,25 @@ Nothing learns on the real game: training data comes from random levels
 built in the Block SMB simulator from the real game's pieces and rules
 (`domains/smb/sim/`).
 
-Where it stands (2026-11-11), with outcome_20261109d, on the two levels the
-agent was built on and on six nobody looked at
-([the measurements](docs/generalization.md)). Share of a level's obstacles
-passed, four tries each that start at different moments:
+**The rule** (2026-11-11): the real game is looked at only to train the
+vision network, to make Block SMB an accurate copy of its look and
+behaviour, and to score the finished system. Everything that decides and
+controls is learned from Block SMB alone, and is debugged there
+([docs/generalization.md](docs/generalization.md)).
 
-| What the agent is given | 1-1 and 5-1 (tuned), 59 obstacles | 2-1, 3-1, 4-1, 6-1, 7-1, 8-1 (untouched), 206 obstacles |
-|---|---|---|
-| The screen alone (the agent proper), at first contact | 0.83 | 0.49 |
-| The screen alone, now | 0.85 | **0.58** |
-| Exact positions from the game's memory in place of seeing (a measuring device), at first contact | 0.96 | 0.66 |
-| Exact positions, now | 0.97 | **0.77** |
+Where it stands (2026-11-11), with outcome_20261109d:
 
-Between the two: a dynamics model fitted to what the agent sees of each
-thing in place of a rule per kind of enemy, a refused choice answered in
-the same frame, and the perfect-perception stand-in showing a plant when
-vision would. From its start 1-1 is finished from the screen in every
-play; no other level is yet (5-1, 2-1, 4-1 and 6-1 in some plays with exact
-positions). A level has about 35 obstacles, so most plays finish only when
-about 98% of tries at an obstacle pass: [how far that is](docs/generalization.md).
-On fresh random levels in the simulator the network's chooser finishes 53
-of 60 plays.
+- **In Block SMB** (100 fresh random levels, both ways to play): the
+  network's chooser finishes 183 of 200 plays, the hand-written chooser
+  192 (the network learned in Block SMB as it was before the day's
+  corrections to it).
+- **In the real game** the agent finishes World 1-1 from the screen alone,
+  a level its hand-written parts were adjusted on, and no other: on six
+  levels nobody looked at it passes about half of the obstacles, where a
+  level needs about 98% of them passed to be finished in half its plays.
+  That gap is what Block SMB lacks of the game (enemies it does not have,
+  real level layouts, what vision's small errors do to a policy trained
+  on exact positions), and closing it in Block SMB is the work.
 
 The outcome network was trained only on Block SMB random levels (question
 blocks, mushrooms, big Mario, Koopa Troopas, piranha plants, hopping

@@ -7,12 +7,10 @@ kind of thing around it (in Super Mario Bros: the surfaces, the enemies and
 the items on screen). A small transformer lets every token see the others;
 then a head on each token gives the outcomes of the choices about that
 thing, and a head on the agent's token those about no thing. Each choice's
-outcome is PREDICTIONS: the chance the agent dies during it or soon after
-with no way out, the chance the controller finds it infeasible, the chance
-it finishes the task, the chance it leaves the agent stuck (no choice from
-there gets it on), the progress, frames and points it brings, and the
-chance it leaves the agent in danger (dead soon after if it then does
-nothing, a way out or not).
+outcome is PREDICTIONS: the chance the agent dies during it or soon after,
+the chance the controller finds it infeasible, the chance it finishes the
+task, the chance it leaves the agent stuck (no choice from there gets it
+on), and the progress, frames and points it brings.
 
 A saved network carries its ChoiceSpec (save, load_model), so it can be
 loaded and checked against a domain without that domain's code.
@@ -25,10 +23,10 @@ import numpy as np
 import torch
 from torch import nn
 
-PREDICTIONS = ("death", "infeasible", "finished", "stuck", "progress", "frames", "points", "danger")
+PREDICTIONS = ("death", "infeasible", "finished", "stuck", "progress", "frames", "points")
 # The logits (chances) and the amounts, and the scale the amounts are
 # learned at (progress, frames, points).
-CHANCES, AMOUNTS = (0, 1, 2, 3, 7), (4, 5, 6)
+CHANCES, AMOUNTS = (0, 1, 2, 3), (4, 5, 6)
 SCALES = (64.0, 64.0, 5.0)
 
 
@@ -85,17 +83,13 @@ class OutcomeConfig:
     # empty: all of them). A network trained before a group gained numbers
     # reads fewer.
     reads: tuple = field(default_factory=tuple)
-    # How many of the PREDICTIONS the network gives (the first ones: one
-    # trained before a prediction was added gives fewer, and `predict` says
-    # "no chance" for the rest).
-    predicts: int = len(PREDICTIONS)
 
 
 class OutcomeNetwork(nn.Module):
     def __init__(self, spec: ChoiceSpec, config: OutcomeConfig = OutcomeConfig()):
         super().__init__()
         self.spec, self.config = spec, config
-        w, n = config.width, config.predicts
+        w, n = config.width, len(PREDICTIONS)
         self.reads = tuple(config.reads) or tuple(g.width for g in spec.groups)
         self.inputs = nn.ModuleList(nn.Linear(read, w) for read in self.reads)
         self.kind = nn.Embedding(len(spec.groups), w)
@@ -123,7 +117,7 @@ class OutcomeNetwork(nn.Module):
                 first, last = group.present
                 absent.append(t[..., first:last].abs().sum(-1) == 0)
         h = self.encoder(torch.cat(embedded, dim=1), src_key_padding_mask=torch.cat(absent, dim=1))
-        out, start, n = [], 0, self.config.predicts
+        out, start, n = [], 0, len(PREDICTIONS)
         for k, group in enumerate(self.spec.groups):
             count = group.slots or 1
             tokens_of = h[:, start:start + count] if group.slots else h[:, start]
@@ -158,8 +152,6 @@ def predict(model: OutcomeNetwork, tokens: Sequence, choices, device) -> np.ndar
         c = torch.as_tensor(np.array(choices, np.int64).reshape(-1, 3), device=device)
         outputs = tuple(o.expand(len(c), *o.shape[1:]) for o in outputs)
         p = pick(model.spec, outputs, c[:, 0], c[:, 1], c[:, 2])
-        if p.shape[1] < len(PREDICTIONS):  # (an older network: no chance of what it does not predict)
-            p = torch.cat([p, torch.full((len(p), len(PREDICTIONS) - p.shape[1]), -30.0, device=device)], dim=1)
         out = p.clone()
         out[:, list(CHANCES)] = torch.sigmoid(p[:, list(CHANCES)])
         out[:, list(AMOUNTS)] = p[:, list(AMOUNTS)] * torch.tensor(SCALES, device=device)
@@ -186,8 +178,7 @@ def save(model: OutcomeNetwork, path: str, log: Sequence = ()) -> None:
 
 def load_model(path: str, device="cpu") -> OutcomeNetwork:
     saved = torch.load(path, map_location=device)
-    # (a network saved before "danger" was predicted gives the first 7)
-    config = OutcomeConfig(**{"predicts": 7, **saved["config"], "reads": tuple(saved["config"]["reads"])})
+    config = OutcomeConfig(**{**saved["config"], "reads": tuple(saved["config"]["reads"])})
     model = OutcomeNetwork(ChoiceSpec.from_plain(saved["spec"]), config).to(device)
     model.load_state_dict(saved["model"])
     return model.eval()

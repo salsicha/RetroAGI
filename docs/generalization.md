@@ -2,9 +2,56 @@
 
 The agent's rules, its simulator and its constants were written while
 watching two levels of the game, World 1-1 and World 5-1. This page
-measures what that work is worth on levels nobody looked at, and records
-each step taken to make the agent general against that measure. Nothing
-learns on the real game in any of it.
+measures what that work is worth on levels nobody looked at.
+
+## The rule (user, 2026-11-11)
+
+The project stands in for a robot, which cannot be trained or debugged in
+its real situation: a trained, working system must exist before it meets
+the real environment. So the real game may be looked at for three things
+only:
+
+1. **to train seeing** (the vision network: there is no way around it);
+2. **to make Block SMB an accurate copy** of the game's look and behaviour
+   (read from the game's memory: copying a system is a far simpler problem
+   than learning to play in it);
+3. **to score the finished system.**
+
+The policy, everything that decides and controls, is learned from Block
+SMB alone. A failure in the real game may only be turned into the
+question "what does Block SMB lack, or do differently?"; Block SMB is
+corrected, the policy learns again there, and it is debugged on fresh
+Block SMB levels.
+
+**The first two rounds below broke this rule.** Deaths on real levels were
+traced and the agent changed to answer them; a dynamics model was shaped
+against recordings of real levels; "development levels" of the real game
+were declared for the purpose. What they measured stands as measurement.
+What they changed in the policy was put back the same day, each change
+first scored where it should have been, on 100 fresh Block SMB levels
+(plays finished of 200, network `outcome_20261109d`):
+
+| The policy | Finished |
+|---|---|
+| As before the rounds (hand-written motion rules, one choice a frame) | 188 |
+| The dynamics model fitted to what is seen | 187 |
+| A refused choice answered in the same frame | 184 |
+| Both | 185 |
+
+None earns its place in Block SMB, so none is kept: the rules are the
+default again, a choice is tried once a frame, and outcomes are sampled as
+before (the "danger" answer, drawn from a death on a real level, is gone;
+the resampling begun with it was stopped). The fitted model remains as a
+named alternative (`--use dynamics=observed`), an experiment until Block
+SMB gives it a reason. What stays from the rounds is what the rule allows:
+the measuring tools, and corrections to Block SMB itself (its walkers fall
+as the game's do, a standing enemy stands exactly, every thing has its
+track). With those corrections the hand-written chooser finishes 192 of
+the 200 plays and the network's 183: the network learned in the Block SMB
+of before, and is due to learn again in this one.
+
+The real-game numbers further down are of the policies of those rounds,
+not of the present one.
 
 ## How far from a working agent
 

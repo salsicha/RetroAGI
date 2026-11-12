@@ -1,8 +1,9 @@
 """Which part of perception costs what: an obstacle bench played from
 vision's state with some parts of it taken from game memory instead
 (Mario's own body and motion, the solids, the enemies and items). With
-none it is the vision bench; with all three, the game-memory bench. Nothing
-learns.
+none it is the vision bench; with all three, the game-memory bench. Mario's
+part can be split: where his body is ("body"), how he moves ("motion"),
+whether he stands ("stands"). Nothing learns.
 
     python scripts/dev/perception_parts.py --bench data/full_smb_obstacles/Level2-1 \\
         --true mario solids [--model OUTCOME.pt] [--runs 4] [--output OUT.json]
@@ -20,7 +21,7 @@ from retroagi.framework.agent import Agent
 from retroagi.framework.bench import report, run_bench
 from retroagi.framework.chooser import network_choosers
 
-PARTS = ("mario", "solids", "enemies")
+PARTS = ("mario", "solids", "enemies", "body", "motion", "stands")
 
 
 def _moved(box, shift: float) -> tuple:
@@ -50,9 +51,13 @@ class MixedSource:
         truth = true_frame(world.game.env.get_ram(), world.game.start)
         shift = self.vision.feedback.camera_position - truth["camera"]
         state = State(seen.body, seen.motion, seen.grounded, seen.solids, seen.enemies, seen.ready, seen.items)
-        if "mario" in self.true:
-            state.body, state.motion = _moved(true.body, shift), true.motion
-            state.grounded, state.ready = true.grounded, true.ready
+        mario = {"body", "motion", "stands"} if "mario" in self.true else self.true
+        if "body" in mario:
+            state.body = _moved(true.body, shift)
+        if "motion" in mario:
+            state.motion, state.ready = true.motion, true.ready
+        if "stands" in mario:
+            state.grounded = true.grounded
         if "solids" in self.true:
             state.solids = [replace(s, x0=s.x0 + shift, x1=s.x1 + shift) for s in true.solids]
         if "enemies" in self.true:

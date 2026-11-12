@@ -48,11 +48,7 @@ EXPLORE = 0.3
 # After a choice, the agent is stuck when no probe from where it left it is
 # feasible, safe and makes at least this much progress.
 STUCK_PROGRESS = 16
-# "died_after": dead within the window after the choice with no way out of
-# it (no probe or escape from where the choice ended survives); "danger":
-# dead during the choice or within the window after it if the agent then
-# does nothing, a way out or not.
-OUTCOME_FIELDS = ("died", "died_after", "frames", "progress", "points", "finished", "stuck", "danger", "end")
+OUTCOME_FIELDS = ("died", "died_after", "frames", "progress", "points", "finished", "stuck", "end")
 
 
 def outcome(world, source, domain, choice, probe: bool = True, controller=None) -> tuple:
@@ -113,7 +109,7 @@ def outcome(world, source, domain, choice, probe: bool = True, controller=None) 
             settled = settled + 1 if world.settled else 0
             if settled >= WINDOW:
                 break
-    stuck = danger = died or died_after
+    stuck = died or died_after
     if probe and not (died or finished):
         # Probed from where the choice ended, not after the window: settled
         # there first, Mario slid to rest, and a landing on a step at speed,
@@ -136,7 +132,7 @@ def outcome(world, source, domain, choice, probe: bool = True, controller=None) 
         if died_after and saved:
             died_after = False
     return (float(died), float(died_after), float(frames), float(progress), float(world.score - points),
-            float(finished), float(stuck), float(danger), float(ends.index(end)))
+            float(finished), float(stuck), float(ends.index(end)))
 
 
 class Sampler:
@@ -152,23 +148,20 @@ class Sampler:
         self.behaviour = domain.behaviour(mode)
         self.tokens = [[] for _ in domain.space.spec.groups]
         self.rows, self.outcomes = [], []
-        self.sampled = None  # the state last sampled at
 
     def decide(self, state, last_event, last_choice):
         domain, space, world = self.domain, self.domain.space, self.world
+        tokens, slots = space.tokens(state)
+        saved = world.snapshot()
         options = space.candidates(state)
-        if state is not self.sampled:  # (asked again in a frame, its choice refused: sampled already)
-            self.sampled = state
-            tokens, slots = space.tokens(state)
-            saved = world.snapshot()
-            index = len(self.tokens[0])
-            for kept, token in zip(self.tokens, tokens):
-                kept.append(token)
-            for c in options:
-                self.outcomes.append(outcome(world, self.source, domain, c.choice,
-                                             controller=self.agent.controller.another()))
-                self.rows.append((index, c.kind, slots.get(c.ref, -1) if c.ref is not None else -1, c.modifier))
-                world.restore(saved)
+        index = len(self.tokens[0])
+        for kept, token in zip(self.tokens, tokens):
+            kept.append(token)
+        for c in options:
+            self.outcomes.append(outcome(world, self.source, domain, c.choice,
+                                         controller=self.agent.controller.another()))
+            self.rows.append((index, c.kind, slots.get(c.ref, -1) if c.ref is not None else -1, c.modifier))
+            world.restore(saved)
         explored = domain.explore(state, options, self.rng)
         if explored is not None:
             return explored

@@ -50,13 +50,12 @@ class _BoxSpace:
 # jump forces and button edges. There is no coyote time and no jump buffer;
 # holding jump through a landing does not jump again. The NES small body is
 # 10x12 pixels and the Goomba damage body 10x6.
-ENEMY_GRAVITY = 0.5
-# Under the game's rules (an enemy's "game_rules", the random levels'; and
-# every mushroom) a walker falls off a ledge as the game's do: this much
-# faster each frame, up to GAME_ENEMY_FALL (fitted to Goombas and Koopas
-# falling in worlds 1-1 to 5-1: within 1.6 pixels of them on average; the
-# 0.5 up to 4.5 written first was 11 off).
-GAME_ENEMY_GRAVITY, GAME_ENEMY_FALL = 0.2, 3.4
+# An enemy or a mushroom falls off a ledge as the game's do: this much
+# faster each frame, up to ENEMY_FALL (measured in the game's memory, Goombas
+# and Koopas falling in worlds 1-1 to 5-1: within 1.6 pixels of them on
+# average; the 0.5 up to 4.5 written first was 11 off). The planner's rules
+# take the same (planner.ENEMY_GRAVITY).
+ENEMY_GRAVITY, ENEMY_FALL = 0.2, 3.4
 
 # ── Drawing ───────────────────────────────────────────────────────────────────
 #
@@ -1531,7 +1530,7 @@ class MarioScenarioEnv:
     def _update_item(self, item: dict, platform_rects: list) -> None:
         """A mushroom moves on as a walker does (turned by walls, falling
         off ledges), at its own speed."""
-        item["vy"] = min(item["vy"] + GAME_ENEMY_GRAVITY, GAME_ENEMY_FALL)
+        item["vy"] = min(item["vy"] + ENEMY_GRAVITY, ENEMY_FALL)
         item["x"] += item["vx"]
         body = pygame.Rect(item["x"], item["y"], item["w"], item["h"])
         if any(body.colliderect(r) and r.top < body.bottom - 2 for r in platform_rects):
@@ -1569,10 +1568,8 @@ class MarioScenarioEnv:
             if enemy["on_ground"]:
                 enemy["vy"] = HOP_SPEED
             enemy["vy"] += HOP_GRAVITY
-        elif enemy.get("game_rules"):
-            enemy["vy"] = min(enemy["vy"] + GAME_ENEMY_GRAVITY, GAME_ENEMY_FALL)
         else:
-            enemy["vy"] += ENEMY_GRAVITY
+            enemy["vy"] = min(enemy["vy"] + ENEMY_GRAVITY, ENEMY_FALL)
         if enemy["vy"] > self.max_fall_speed:
             enemy["vy"] = self.max_fall_speed
 
@@ -1606,14 +1603,20 @@ class MarioScenarioEnv:
             enemy["x"] = enemy["patrol_max"]
             enemy["direction"] = -1
 
-        # Y — apply and resolve
+        # Y — apply and resolve. Its feet reaching a top exactly (not by
+        # whole pixels) land it: standing, it stays where it stands (by
+        # whole pixels a standing enemy sank a fraction of a pixel for two
+        # frames in three before it was set back, and stood only the third).
+        feet = enemy["y"] + enemy["h"] + enemy.get("foot_offset", 0)
         enemy["y"] += enemy["vy"]
         enemy["on_ground"] = False
         er = pygame.Rect(
             enemy["x"], enemy["y"], enemy["w"], enemy["h"] + enemy.get("foot_offset", 0)
         )
         for r in platform_rects:
-            if er.colliderect(r):
+            lands = (enemy["vy"] >= 0 and r.left < enemy["x"] + enemy["w"] and enemy["x"] < r.right
+                     and feet <= r.top <= feet + enemy["vy"])
+            if lands or er.colliderect(r):
                 if enemy["vy"] >= 0:
                     er.bottom = r.top
                     enemy["on_ground"] = True

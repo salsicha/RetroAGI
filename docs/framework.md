@@ -40,9 +40,7 @@ The controller is shown every state (`observe`), a choice in progress or
 not, and passes what moves in it to its dynamics model: a model that
 adapts learns from every frame, not only from the frames it plans in. A
 controller can make another that knows what its model has learned
-(`another`): outcome sampling plays each candidate with one. A choice the
-controller refuses as it starts is answered by the chooser's next in the
-same frame.
+(`another`): outcome sampling plays each candidate with one.
 
 ## Parts with alternatives
 
@@ -52,11 +50,11 @@ has two dynamics models:
 
 | `--use dynamics=` | What it is |
 |---|---|
-| `observed` (the default) | `framework/observed_dynamics.py`: told nothing of what a thing is, it fits each thing's motion to its own track and remembers by type what things have been seen to do (how they fall, bounce, come out of solids, pace). Its memory starts empty at each play. Every state source gives the tracks: the simulator, game memory, vision. |
-| `rules` | A rule per kind of enemy, written by hand from the game (`domains/smb/planner.py`). |
+| `rules` (the default) | The simulator's own rule for each kind of enemy (`domains/smb/planner.py`): Block SMB's behaviour, measured from the game. |
+| `observed` | `framework/observed_dynamics.py`: told nothing of what a thing is, it fits each thing's motion to its own track and remembers by type what things have been seen to do (how they fall, bounce, come out of solids, pace). Its memory starts empty at each play. An experiment: it was shaped against recordings of the real game, which no part of the policy may be, and plays fresh Block SMB levels no better than the rules. |
 
 ```bash
-python -m retroagi.framework.bench --domain smb --use dynamics=rules --bench data/full_smb_obstacles/Level2-1 --source vision --model data/outcome/outcome_20261109d.pt
+python -m retroagi.framework.practice --domain smb --use dynamics=observed --levels 100 --first-seed 100000 --model data/outcome/outcome_20261109d.pt
 python -m retroagi.domains.smb.nes.dynamics_check --bench data/full_smb_obstacles/Level2-1 --model data/outcome/outcome_20261109d.pt
 ```
 
@@ -121,15 +119,16 @@ benches from game memory and from vision.
 
 ## What is not general yet
 
-- **The agent is still tuned to the two levels it was built on**: it
-  passes 97% of their obstacles with perfect perception and 77% of the
-  obstacles of six levels nobody looked at (65% at first contact); from
-  vision, 85% and 58% ([measurements](generalization.md)). Perception is
-  now the larger loss.
-- **The dynamics model is fitted to what is seen, but only of what is
-  seen**: it cannot predict a thing that moves by what Mario does (Lakitu,
-  a Hammer Bro), and a first try at remembering what went out of sight
-  made the agent wait for things that never came.
+- **Most of the policy is written by hand, and was adjusted while watching
+  the real game**: the tracking, the list of choices, the chooser's rules
+  and the controller's. Only the outcome network is learned (from Block
+  SMB). The rule ([generalization.md](generalization.md)) is that all of
+  it is learned or set from Block SMB alone.
+- **Block SMB is not yet the game**: it lacks enemies the real levels have
+  (Lakitu and his Spinies, Hammer Bros, Buzzy Beetles), lifts, and the
+  real levels' layouts, and the policy learns there from exact positions,
+  not from what vision would give. The agent finishes 92% to 96% of fresh
+  Block SMB levels and one real level.
 - **Mario's own motion is transcribed from the game**
   (`domains/smb/physics.py`) and compiled into the planner: nothing about
   the agent's own body is identified.
