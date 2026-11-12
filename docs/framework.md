@@ -133,8 +133,10 @@ benches from game memory and from vision.
   graphics or its levels: [requirements.md](requirements.md).) The agent
   finishes about three quarters of fresh Block SMB levels and one real
   level.
-- **The controller's parameters are set by hand**, not learned in Block
-  SMB and passed in.
+- **The controller's settings are chosen among three hand-made sets**
+  (bold, usual, careful; `controller.CARE`): each choice comes in each,
+  and the outcome network's predictions pick one per situation. The sets
+  themselves, and the controller's other constants, are still set by hand.
 - **Mario's own motion is transcribed from the game**
   (`domains/smb/physics.py`) and compiled into the planner: nothing about
   the agent's own body is identified.

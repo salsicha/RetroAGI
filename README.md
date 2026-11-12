@@ -22,7 +22,11 @@ behind an interface in `retroagi/framework/interfaces.py`:
    `domains/smb/nes/sources.py`), in the simulator from its truth.
 2. **The choice space** (`domains/smb/choices.py`) lists what can be done
    now: jump onto a thing, stomp or pass an enemy, run to a place, wait,
-   bump a block, collect an item.
+   bump a block, collect an item. Every jump and run comes in three ways
+   of carrying it out (bold, usual, careful: how wide a berth enemies get,
+   how long a landing must stay clear of them, how soon a coming enemy
+   ends a run), so that the controller's settings are chosen per situation
+   by what they lead to, not set by hand.
 3. **The outcome network** (`framework/outcome_network.py`): from the
    state, one pass predicts the outcome of every candidate choice at once
    (the chance of dying, of being infeasible, of leaving Mario stuck, of
