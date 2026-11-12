@@ -28,7 +28,7 @@ point is kept: the state as the choice space's tokens, each candidate as
 """
 
 import random
-from typing import Optional
+from typing import Callable, Optional, Sequence
 
 import numpy as np
 
@@ -142,10 +142,11 @@ class Sampler:
     a controller that knows what the playing ``agent``'s has learned so far
     (set by sample: a controller's model may adapt to what it sees)."""
 
-    def __init__(self, domain, world, source, mode: str, rng: random.Random, explore: float = EXPLORE):
+    def __init__(self, domain, world, source, mode: str, rng: random.Random, explore: float = EXPLORE,
+                 driver: Optional[Callable] = None):
         self.domain, self.world, self.source, self.rng, self.explore = domain, world, source, rng, explore
         self.agent = None
-        self.behaviour = domain.behaviour(mode)
+        self.behaviour = (driver or domain.behaviour)(mode)
         self.tokens = [[] for _ in domain.space.spec.groups]
         self.rows, self.outcomes = [], []
 
@@ -174,19 +175,24 @@ class Sampler:
         return self.behaviour.decide(state, last_event, last_choice)
 
 
-def sample(domain, seed: int, mode: str, *, explore: float = EXPLORE, rng: Optional[random.Random] = None) -> dict:
-    """Play the domain's practice world of ``seed`` in ``mode``, sampling
-    every candidate's outcome at every decision point: a shard of arrays
-    (see module notes)."""
-    world = domain.practice(seed)
+def sample(domain, seed: int, mode: str, *, kind: str = "level", driver: Optional[Callable] = None,
+           explore: float = EXPLORE, rng: Optional[random.Random] = None) -> dict:
+    """Play the domain's practice world of ``kind`` and ``seed`` in ``mode``
+    (a whole level, or a skill scene until it is passed), sampling every
+    candidate's outcome at every decision point: a shard of arrays (see
+    module notes). ``driver(mode)`` makes the chooser whose play, with
+    ``explore`` of its decisions made at random, visits the states (the
+    domain's behaviour chooser if None; an outcome network's, so that a
+    policy learns from where its own play takes it)."""
+    world = domain.practice(seed, kind)
     world.reset()
     source = domain.truth_source()
-    sampler = Sampler(domain, world, source, mode, rng or random.Random(seed), explore)
+    sampler = Sampler(domain, world, source, mode, rng or random.Random(seed), explore, driver)
     agent = Agent(source, lambda _: sampler, domain.controller, domain.idle)
     agent.reset(seed, mode)
     sampler.agent = agent
     for _ in range(world.budget):
-        if world.step(agent.act(world)).over:
+        if world.step(agent.act(world)).over or world.passed:
             break
     groups = domain.space.spec.groups
     states = len(sampler.tokens[0])
@@ -201,23 +207,47 @@ def sample(domain, seed: int, mode: str, *, explore: float = EXPLORE, rng: Optio
     return shard
 
 
+_DRIVERS: dict = {}  # (a worker process loads a driver's network once)
+
+
+def _driver(domain, driver: Optional[str]):
+    """``driver(mode)`` named on the command line: None for the domain's
+    behaviour chooser, else the path of an outcome network."""
+    if driver is None:
+        return None
+    if driver not in _DRIVERS:
+        from .chooser import network_choosers
+
+        _DRIVERS[driver] = network_choosers(domain, driver)
+    return _DRIVERS[driver]
+
+
 def _sample_one(job: tuple) -> tuple:
-    name, use, seed, mode, folder = job
-    shard = sample(registry.load(name, use), seed, mode)
-    np.savez_compressed(f"{folder}/level_{seed:06d}_{mode}.npz", **shard)
+    name, use, kind, seed, mode, folder, driver, explore = job
+    domain = registry.load(name, use)
+    shard = sample(domain, seed, mode, kind=kind, driver=_driver(domain, driver), explore=explore)
+    np.savez_compressed(f"{folder}/{kind}_{seed:06d}_{mode}.npz", **shard)
     return seed, mode, len(shard["seed"]), len(shard["choices"])
 
 
-def collect(domain, seeds, folder: str, workers: int = 8) -> list:
-    """sample for every seed and mode on ``workers`` processes, one shard
-    file each in ``folder``: (seed, mode, states, choices) per shard."""
+def collect(domain, seeds, folder: str, workers: int = 8, scenes: Sequence[int] = (), driver: Optional[str] = None,
+            explore: float = EXPLORE) -> list:
+    """sample on ``workers`` processes, one shard file each in ``folder``:
+    a whole level for every seed of ``seeds`` in every mode, and a skill
+    scene of every kind for every seed of ``scenes`` (in one mode, by
+    turns: a scene's outcomes do not depend on it). (seed, mode, states,
+    choices) per shard. ``driver``: the path of the outcome network whose
+    play visits the states (the domain's behaviour chooser if None)."""
     import multiprocessing
     from pathlib import Path
 
     Path(folder).mkdir(parents=True, exist_ok=True)
-    jobs = [(domain.name, registry.used(domain), seed, mode, folder) for seed in seeds for mode in domain.modes]
+    used, modes = registry.used(domain), domain.modes
+    jobs = [(domain.name, used, "level", seed, mode, folder, driver, explore) for seed in seeds for mode in modes]
+    jobs += [(domain.name, used, kind, seed, modes[(seed + k) % len(modes)], folder, driver, explore)
+             for seed in scenes for k, kind in enumerate(domain.practices) if kind != "level"]
     with multiprocessing.get_context("spawn").Pool(workers) as pool:
-        return list(pool.imap_unordered(_sample_one, jobs))
+        return list(pool.imap_unordered(_sample_one, jobs, chunksize=4))
 
 
 def _joined(shards: list) -> dict:
@@ -245,7 +275,7 @@ def pack(folder: str, parts: int = 8) -> None:
     (part_NN.npz; fewer files to keep), the shards removed."""
     from pathlib import Path
 
-    files = sorted(Path(folder).glob("level_*.npz"))
+    files = sorted(p for p in Path(folder).glob("*.npz") if not p.name.startswith("part_"))
     for k in range(parts):
         group = files[k::parts]
         if not group:
@@ -261,14 +291,19 @@ def main(argv=None) -> int:
 
     parser = argparse.ArgumentParser(description="Sample every candidate choice's outcome in practice worlds")
     registry.arguments(parser)
-    parser.add_argument("--levels", type=int, default=100)
+    parser.add_argument("--levels", type=int, default=100, help="whole levels (seeds from --first-seed)")
+    parser.add_argument("--scenes", type=int, default=0, help="skill scenes of each kind (seeds from --first-seed)")
     parser.add_argument("--first-seed", type=int, default=0)
+    parser.add_argument("--driver", help="an outcome network whose play visits the states "
+                                         "(the domain's behaviour chooser if not given)")
+    parser.add_argument("--explore", type=float, default=EXPLORE, help="the share of decisions made at random")
     parser.add_argument("--workers", type=int, default=8)
     parser.add_argument("--output", required=True, help="folder for the shard files")
     args = parser.parse_args(argv)
     start = time.time()
     rows = collect(registry.chosen(args), range(args.first_seed, args.first_seed + args.levels), args.output,
-                   args.workers)
+                   args.workers, scenes=range(args.first_seed, args.first_seed + args.scenes), driver=args.driver,
+                   explore=args.explore)
     pack(args.output)
     seconds = time.time() - start
     states, choices = sum(r[2] for r in rows), sum(r[3] for r in rows)

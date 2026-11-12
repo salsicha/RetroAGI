@@ -17,10 +17,17 @@ draws it. Goombas follow the game's rules (env.py "game_rules": they wake as
 they come on screen, walk left at half a pixel a frame, turn at walls, fall
 off ledges), and the camera keeps Mario where the real game does
 (SCROLL_X).
+
+A skill scene (skill_scene) is a short stretch of the same pieces that
+calls for one skill: one piece of a kind (SCENE_KINDS: a pipe, a pit,
+enemies, bricks, stairs, question blocks, a cannon) or two pieces close
+together ("pair"), Mario standing a few tiles before it, flat floor after
+it and no flag. Scenes give outcome sampling its share of every piece, and
+a score for each.
 """
 
 import random
-from typing import Optional
+from typing import Optional, Sequence
 
 from .piranha import EXPOSED_FRAMES, HIDDEN_FRAMES, RISE_FRAMES
 
@@ -72,6 +79,17 @@ CANNON_TILES = (1, 2)
 GOOMBA_FEET = 14
 # Frames a level may take per pixel of its length.
 FRAMES_PER_PIXEL = 3
+# The kinds of skill scene: one piece of a kind, or two pieces close together.
+SCENE_KINDS = (*PIECES, "pair")
+# A scene: Mario starts this many tiles before its first piece; a pair's
+# pieces are this many tiles apart; it is passed once Mario stands
+# SCENE_PASSED pixels beyond its last piece, and the floor goes on
+# SCENE_AFTER tiles from there (further than a choice tried near its end
+# and the probes after it can take him).
+SCENE_START = (3, 10)
+PAIR_FLAT = (1, 2)
+SCENE_PASSED = 2 * TILE
+SCENE_AFTER = 24
 
 
 def _goomba(x: float, top: float, kind: Optional[str] = None) -> dict:
@@ -81,11 +99,16 @@ def _goomba(x: float, top: float, kind: Optional[str] = None) -> dict:
     return out
 
 
-def random_level(seed: int, pieces: int = 12) -> dict:
-    """A level of ``pieces`` random pieces then the closing staircase and
-    flag, the same for the same ``seed`` (a Block SMB scenario)."""
+def random_level(seed: int, pieces: int = 12, only: Optional[str] = None, start_flat: int = START_FLAT,
+                 flat: Sequence[int] = FLAT, flag: bool = True) -> dict:
+    """A level of ``pieces`` random pieces (each of the kind ``only``, if
+    given) then the closing staircase and flag, the same for the same
+    arguments (a Block SMB scenario). ``start_flat``: tiles of floor before
+    the first piece; ``flat``: the fewest and most tiles between pieces.
+    Without ``flag`` (a skill scene) flat floor follows the last piece and
+    nothing is to be reached: metadata "scene" has where it is passed."""
     rng = random.Random(seed)
-    x = START_FLAT * TILE
+    x = start_flat * TILE
     pits, solids, enemies = [], [], []  # pits (x0, x1); solids [x, y, w, h, kind]
     contents = {}  # index in solids -> "coin" or "mushroom"
 
@@ -102,8 +125,9 @@ def random_level(seed: int, pieces: int = 12) -> dict:
         for k in range(tiles):
             block(x0 + k * TILE, top, rng.random() < QUESTION_SHARE)
 
+    after = 0  # (tiles of floor after the last piece)
     for _ in range(pieces):
-        kind = rng.choices(list(PIECES), weights=list(PIECES.values()))[0]
+        kind = only or rng.choices(list(PIECES), weights=list(PIECES.values()))[0]
         if kind == "pipe":
             top = FLOOR - rng.choice(PIPE_TILES) * TILE
             solids.append([x, top, 2 * TILE, BOTTOM - top, "pipe"])
@@ -161,16 +185,22 @@ def random_level(seed: int, pieces: int = 12) -> dict:
             for k in range(height + down_top - 1):
                 column(x, min(height, height + down_top - 1 - k))
                 x += TILE
-        x += rng.randint(*FLAT) * TILE
-    # The closing staircase, then the flag on the floor beyond.
-    height = rng.randint(4, 8)
-    for k in range(height):
-        column(x, k + 1)
-        x += TILE
-    column(x, height)
-    x += TILE + 4 * TILE
-    flag = x
-    width = x + END_FLAT * TILE
+        after = rng.randint(*flat)
+        x += after * TILE
+    if flag:
+        # The closing staircase, then the flag on the floor beyond.
+        height = rng.randint(4, 8)
+        for k in range(height):
+            column(x, k + 1)
+            x += TILE
+        column(x, height)
+        x += TILE + 4 * TILE
+        goal = x
+        width = x + END_FLAT * TILE
+    else:
+        goal = None
+        passed = x - after * TILE + SCENE_PASSED
+        width = passed + SCENE_AFTER * TILE
 
     # The floor, cut at pits and where pipes and steps stand.
     cuts = sorted(pits + [(s[0], s[0] + s[2]) for s in solids if s[4] in ("pipe", "ground", "cannon")])
@@ -193,6 +223,20 @@ def random_level(seed: int, pieces: int = 12) -> dict:
         "platforms": [p[:4] for p in platforms],
         "platform_kinds": [p[4] for p in platforms],
         "enemies": enemies,
-        "goal": [flag, 0, TILE, BOTTOM],
-        "metadata": {"game_level": {"seed": seed, "pieces": pieces}},
+        **({"goal": [goal, 0, TILE, BOTTOM]} if flag else {}),
+        "metadata": {"game_level": {"seed": seed, "pieces": pieces}, **({} if flag else {"scene": {"passed": passed}})},
     }
+
+
+def skill_scene(seed: int, kind: str) -> dict:
+    """The skill scene of ``kind`` (SCENE_KINDS) for ``seed`` (module
+    notes): passed once Mario stands beyond metadata "scene"'s "passed"."""
+    if kind not in SCENE_KINDS:
+        raise ValueError(f"no skill scene {kind!r}: one of {SCENE_KINDS}")
+    start = random.Random(seed).randint(*SCENE_START)
+    if kind == "pair":
+        scene = random_level(seed, 2, start_flat=start, flat=PAIR_FLAT, flag=False)
+    else:
+        scene = random_level(seed, 1, only=kind, start_flat=start, flag=False)
+    scene["metadata"]["scene"]["kind"] = kind
+    return scene

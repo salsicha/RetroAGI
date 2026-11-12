@@ -61,7 +61,10 @@ class World(Protocol):
 
 @runtime_checkable
 class Practice(World, Protocol):
-    """A world whose state can be saved and put back."""
+    """A world whose state can be saved and put back: a whole task, or a
+    skill scene, which is ``passed`` once the agent is through it."""
+
+    passed: bool
 
     def snapshot(self) -> Any: ...
 
@@ -175,8 +178,12 @@ class Domain(Protocol):
 
     def controller(self) -> Controller: ...
 
-    def practice(self, seed: int) -> Practice:
-        """A practice world made from ``seed`` (a random level)."""
+    practices: tuple  # the kinds of practice world: "level" (a whole task) and its skill scenes
+
+    def practice(self, seed: int, kind: str = "level") -> Practice:
+        """A practice world of ``kind`` made from ``seed``: a random level,
+        or a skill scene (a short stretch calling for one skill, ``passed``
+        when the agent is through it)."""
 
     def truth_source(self) -> StateSource:
         """The state from a practice world's own truth."""

@@ -55,3 +55,26 @@ def test_the_levels_hold_5_1s_plants_paratroopas_and_cannons():
     assert any("cannon" in level["platform_kinds"] for level in levels)
     kinds = {e.get("kind") for level in levels for e in level["enemies"]}
     assert {"piranha_plant", "paratroopa", "koopa", None} <= kinds
+
+
+def test_a_skill_scene_is_one_piece_of_its_kind_with_no_flag_and_is_passed_beyond_it():
+    from retroagi.domains.smb.sim.levels import SCENE_KINDS, TILE, skill_scene
+
+    for kind in SCENE_KINDS:
+        scene = skill_scene(7, kind)
+        assert scene == skill_scene(7, kind) and "goal" not in scene
+        assert scene["metadata"]["scene"]["kind"] == kind
+        assert scene["world_width"] - scene["metadata"]["scene"]["passed"] >= 20 * TILE  # floor to spare beyond it
+    # Its piece is of its kind: a pipe scene has a pipe, a pit scene a gap in the floor.
+    assert "pipe" in skill_scene(7, "pipe")["platform_kinds"]
+    floor = [p for p, k in zip(skill_scene(7, "pit")["platforms"], skill_scene(7, "pit")["platform_kinds"])
+             if k == "ground" and p[1] == FLOOR]
+    assert len(floor) == 2 and floor[1][0] - (floor[0][0] + floor[0][2]) in (2 * TILE, 3 * TILE, 4 * TILE)
+    # The domain gives scenes as practice worlds; one is passed once Mario stands beyond its piece.
+    assert DOMAIN.practices[0] == "level" and set(DOMAIN.practices[1:]) == set(SCENE_KINDS)
+    world = DOMAIN.practice(7, "pit")
+    world.reset()
+    assert not world.passed and world.passed_at == skill_scene(7, "pit")["metadata"]["scene"]["passed"]
+    rows = practice.run(DOMAIN, [], kinds=("pit", "pipe"), scenes=[100003])
+    assert [r["kind"] for r in rows] == ["pit", "pit", "pipe", "pipe"]
+    assert practice.summary(rows) == {"pit": (2, 2), "pipe": (2, 2)}  # (the hand-written chooser passes these)

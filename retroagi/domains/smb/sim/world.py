@@ -43,6 +43,8 @@ class SimWorld:
         self.env.draws = False
         # Frames a play of the level may take.
         self.budget = scenario.get("frame_budget", 6000)
+        # A skill scene is passed once Mario stands beyond this (None: a level, which is finished).
+        self.passed_at = scenario.get("metadata", {}).get("scene", {}).get("passed")
 
     def reset(self) -> None:
         self.env.reset(scenario=self.scenario)
@@ -78,6 +80,11 @@ class SimWorld:
     @property
     def settled(self) -> bool:
         return bool(self.env.mario["on_ground"])
+
+    @property
+    def passed(self) -> bool:
+        """Whether this skill scene has been got through."""
+        return self.passed_at is not None and self.progress >= self.passed_at and self.settled
 
     def snapshot(self):
         return snapshot_env_state(self.env)

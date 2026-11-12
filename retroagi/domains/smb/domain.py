@@ -84,11 +84,15 @@ class SuperMarioBros:
 
     # ── practice (the simulator) ─────────────────────────────────────────────
 
-    def practice(self, seed: int):
-        from .sim.levels import random_level
+    # The kinds of practice world: whole random levels, and the skill scenes
+    # (a stretch calling for one skill: sim/levels.SCENE_KINDS).
+    practices = ("level", "pipe", "pit", "goombas", "bricks", "stairs", "questions", "cannon", "pair")
+
+    def practice(self, seed: int, kind: str = "level"):
+        from .sim.levels import random_level, skill_scene
         from .sim.world import SimWorld
 
-        return SimWorld(random_level(seed))
+        return SimWorld(random_level(seed) if kind == "level" else skill_scene(seed, kind))
 
     def truth_source(self):
         from .sim.world import SimSource

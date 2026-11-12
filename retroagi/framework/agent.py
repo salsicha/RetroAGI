@@ -57,8 +57,8 @@ START_WAITS = (0, 6, 12, 18)
 
 def play(world, agent: Agent, frames: int, wait: int = 0) -> dict:
     """``agent`` (already reset) through ``world`` from its start, after
-    ``wait`` frames of doing nothing: how it ended ("finished", "died" or
-    "timeout") and the frames taken."""
+    ``wait`` frames of doing nothing: how it ended ("finished", "passed" for
+    a skill scene got through, "died" or "timeout") and the frames taken."""
     world.reset()
     for _ in range(wait):
         world.step(agent.idle)
@@ -66,4 +66,6 @@ def play(world, agent: Agent, frames: int, wait: int = 0) -> dict:
         step = world.step(agent.act(world))
         if step.over:
             return {"end": "died" if step.died else "finished" if step.finished else "timeout", "frames": frame + 1}
+        if getattr(world, "passed", False):
+            return {"end": "passed", "frames": frame + 1}
     return {"end": "timeout", "frames": frames}

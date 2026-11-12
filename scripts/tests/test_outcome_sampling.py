@@ -72,3 +72,20 @@ def test_a_level_gives_states_choices_and_outcomes_that_line_up():
     states = len(shard["mario"])
     assert states > 10 and len(shard["choices"]) == len(shard["outcomes"])
     assert shard["choices"][:, 0].max() == states - 1
+
+
+def test_a_skill_scene_is_sampled_until_it_is_passed_by_whatever_chooser_drives():
+    from retroagi.domains.smb.scripted_chooser import ScriptedChooser
+
+    shard = sample(DOMAIN, 5, "speed_run", kind="pit", explore=0.0)
+    assert 1 <= len(shard["mario"]) < 30 and len(shard["choices"]) == len(shard["outcomes"])
+    # The driver is whatever chooser is given (an outcome network's, in the making of training data).
+    asked = []
+
+    class Driver(ScriptedChooser):
+        def decide(self, state, last_event, last):
+            asked.append(last_event)
+            return super().decide(state, last_event, last)
+
+    again = sample(DOMAIN, 5, "speed_run", kind="pit", driver=Driver, explore=0.0)
+    assert asked and len(again["mario"]) == len(shard["mario"])
