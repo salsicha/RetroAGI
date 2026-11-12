@@ -143,6 +143,28 @@ hand-written chooser where the real levels stopped the agent (2-1's first
 staircase, 3-1 before its bridge, 5-1's tall pipe): the real difficulties
 are now in Block SMB, where they may be worked on.
 
+**Round 1** (`outcome_20261111k`): 2.08 million choices tried in 4,800
+skill scenes and 1,000 plays of random levels, the old network's play
+visiting the states; no copied levels yet.
+
+| The Block SMB exam (worlds not trained on) | Random levels | Skill scenes | Copied levels |
+|---|---|---|---|
+| The hand-written chooser (the yardstick) | 192 of 200 | all with a fair start | 13 of 200 |
+| The old network `outcome_20261109d` | 183 of 200 | all with a fair start | 14 of 200 |
+| Round 1 | 185 of 200 | 1593 of 1600 | 17 of 200 |
+
+In Block SMB's own random worlds the policy is near the bar; on the copies
+of real levels nothing is. That is the real game's difficulty, now inside
+Block SMB: round 2 samples outcomes on the copies too.
+
+Scored on the real game (nothing learned there), obstacles passed and whole
+levels finished:
+
+| | 1-1, from the screen | 1-1, whole level from the screen | Held-out levels, from the screen | Held-out, exact positions |
+|---|---|---|---|---|
+| The old network | 0.95 | 4 of 8 plays | 0.59 | 0.74 |
+| Round 1 | 0.97 | 6 of 8 plays | 0.59 | 0.68 |
+
 ## The measure
 
 - **Three sets of levels.** *Tuned*: 1-1 and 5-1. *Development*: 2-1 and
