@@ -93,3 +93,17 @@ def test_a_saved_network_carries_its_choice_space(tmp_path):
         pass
     else:
         raise AssertionError("another choice space was accepted")
+
+
+def test_the_trainer_makes_a_network_of_the_size_asked_for(tmp_path):
+    from retroagi.framework import sampling, training
+
+    shard = sampling.sample(DOMAIN, 5, "speed_run", kind="pit", explore=0.0)
+    for folder in ("data", "fresh"):
+        (tmp_path / folder).mkdir()
+        np.savez(tmp_path / folder / "pit_000005_speed_run.npz", **shard)
+    training.main(["--data", str(tmp_path / "data"), "--fresh", str(tmp_path / "fresh"), "--steps", "2",
+                   "--batch", "8", "--width", "32", "--layers", "1", "--heads", "2",
+                   "--output", str(tmp_path / "out")])
+    model = load_model(str(tmp_path / "out" / "outcome.pt"))
+    assert (model.config.width, model.config.layers, model.config.heads) == (32, 1, 2)
