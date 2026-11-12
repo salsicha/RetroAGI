@@ -1,17 +1,20 @@
-"""A real level copied into Block SMB from the game's memory: its layout
-(floor, pits, pipes, steps, bricks and question blocks) and where each
-enemy starts, read while a random player sweeps the level (as
-obstacles.sweep does), then written as a Block SMB level (the format of
-sim/levels.random_level) the simulator plays under the game's rules.
+"""A measuring tool: does Block SMB behave as the game does? A real level's
+layout (floor, pits, pipes, steps, bricks and question blocks) and where
+each enemy starts are read from the game's memory while a random player
+sweeps the level (as obstacles.sweep does), and written in Block SMB's
+level format (that of sim/levels.random_level), so the same situation can
+be set up in both and what follows compared (``--check``).
 
-Copying the look and behaviour of the game is how Block SMB is built; the
-policy never learns in the game itself. Only levels set aside for building
-Block SMB are copied (the others are kept to score the finished agent).
+A copy is never a practice world: nothing is sampled, trained or examined
+on it, because no model may learn a real level's layout
+(docs/requirements.md). Block SMB's practice worlds are drawn at random
+from the game's pieces. Only the levels set aside for building Block SMB
+are copied (the others are kept to score the finished agent).
 
 What the copy leaves out is said in its "left_out": enemies of kinds Block
 SMB does not have yet (a Hammer Bro), and what a question block held.
 
-    python -m retroagi.domains.smb.nes.clone --level Level5-1 [--output data/block_smb_levels] [--seeds 1 2 3]
+    python -m retroagi.domains.smb.nes.clone --level Level5-1 [--output data/full_smb_layouts] [--seeds 1 2 3]
 
 ``--check`` tells how true a copy is (fidelity): the level is played in the
 game, and every few frames Block SMB's Mario is put where the game's is,
@@ -52,8 +55,8 @@ KINDS = {0x06: None, 0x00: "koopa", 0x0E: "paratroopa", 0x0D: "piranha_plant"}
 BULLET = 0x33
 # A tile with air under it is part of the level when it was seen in at
 # least this many frames at a top on the game's grid: a lift passing is
-# seen a few frames at each height, and is not copied (Block SMB's copies
-# have no lifts yet).
+# seen a few frames at each height, and is not copied (Block SMB has no
+# lifts yet).
 FLOATING_SEEN = 30
 
 
@@ -289,7 +292,7 @@ def fidelity(level: str, copied: dict, frames: int = 900, states=(None,)) -> dic
 def main(argv=None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     parser.add_argument("--level", required=True, help="a saved level start, e.g. Level5-1")
-    parser.add_argument("--output", type=Path, default=Path("data/block_smb_levels"))
+    parser.add_argument("--output", type=Path, default=Path("data/full_smb_layouts"))
     parser.add_argument("--seeds", type=int, nargs="*", default=(1, 2, 3), help="one sweep of the level per seed")
     parser.add_argument("--check", action="store_true", help="tell how true the copy already made is")
     args = parser.parse_args(argv)

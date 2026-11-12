@@ -3,7 +3,8 @@
 RetroAGI is a game-neutral framework (`retroagi/framework`) plus one package
 per game or robot (`retroagi/domains/<name>`). Super Mario Bros is the first
 domain. The framework knows nothing of Mario: it is given a domain by name
-and uses it only through the interfaces below.
+and uses it only through the interfaces below. What all of it must be, in
+the project owner's words, is in [requirements.md](requirements.md).
 
 ## The agent's five parts
 
@@ -54,8 +55,8 @@ has two dynamics models:
 | `observed` | `framework/observed_dynamics.py`: told nothing of what a thing is, it fits each thing's motion to its own track and remembers by type what things have been seen to do (how they fall, bounce, come out of solids, pace). Its memory starts empty at each play. An experiment: it was shaped against recordings of the real game, which no part of the policy may be, and plays fresh Block SMB levels no better than the rules. |
 
 ```bash
-python -m retroagi.framework.practice --domain smb --use dynamics=observed --levels 100 --first-seed 100000 --model data/outcome/outcome_20261109d.pt
-python -m retroagi.domains.smb.nes.dynamics_check --bench data/full_smb_obstacles/Level2-1 --model data/outcome/outcome_20261109d.pt
+python -m retroagi.framework.practice --domain smb --use dynamics=observed --levels 100 --first-seed 100000 --model data/outcome/outcome_20261111k.pt
+python -m retroagi.domains.smb.nes.dynamics_check --bench data/full_smb_obstacles/Level2-1 --model data/outcome/outcome_20261111k.pt
 ```
 
 The second command scores every dynamics model of the domain on the same
@@ -80,9 +81,9 @@ by frames ahead. [How general is it?](generalization.md) has the results.
 ```bash
 python -m retroagi.framework.sampling --domain smb --levels 2000 --workers 14 --output data/datasets/block_smb/outcomes_NEW
 python -m retroagi.framework.training --domain smb --data data/datasets/block_smb/outcomes_NEW --fresh data/datasets/block_smb/outcomes_fresh_NEW --output artifacts/block_smb/outcome_NEW
-python -m retroagi.framework.practice --domain smb --levels 100 --first-seed 100000 --model data/outcome/outcome_20261109d.pt
-python -m retroagi.framework.bench --domain smb --bench data/full_smb_obstacles/Level1-1 --source vision --model data/outcome/outcome_20261109d.pt
-python -m retroagi.framework.play --domain smb --level Level1-1 --source vision --model data/outcome/outcome_20261109d.pt
+python -m retroagi.framework.practice --domain smb --levels 100 --first-seed 100000 --model data/outcome/outcome_20261111k.pt
+python -m retroagi.framework.bench --domain smb --bench data/full_smb_obstacles/Level1-1 --source vision --model data/outcome/outcome_20261111k.pt
+python -m retroagi.framework.play --domain smb --level Level1-1 --source vision --model data/outcome/outcome_20261111k.pt
 ```
 
 ## What a domain supplies
@@ -124,11 +125,14 @@ benches from game memory and from vision.
   and the controller's. Only the outcome network is learned (from Block
   SMB). The rule ([generalization.md](generalization.md)) is that all of
   it is learned or set from Block SMB alone.
-- **Block SMB is not yet the game**: it lacks enemies the real levels have
-  (Lakitu and his Spinies, Hammer Bros, Buzzy Beetles), lifts, and the
-  real levels' layouts, and the policy learns there from exact positions,
-  not from what vision would give. The agent finishes 92% to 96% of fresh
-  Block SMB levels and one real level.
+- **Block SMB does not yet behave as all of the game does**: it lacks
+  enemies the real levels have (Lakitu and his Spinies, Hammer Bros, Buzzy
+  Beetles) and lifts, and its random levels do not draw every piece and
+  spacing real levels are made of. (It is not meant to have the game's
+  graphics or its levels: [requirements.md](requirements.md).) The agent
+  finishes 92% to 96% of fresh Block SMB levels and one real level.
+- **The controller's parameters are set by hand**, not learned in Block
+  SMB and passed in.
 - **Mario's own motion is transcribed from the game**
   (`domains/smb/physics.py`) and compiled into the planner: nothing about
   the agent's own body is identified.
@@ -136,8 +140,9 @@ benches from game memory and from vision.
   collision boxes inside drawn sprites are entered by hand.
 - **The simulator is a hand copy of the game's rules**; where it differs
   from the game, sampled outcomes teach the wrong thing.
-- **The outcome network learns from the simulator's exact state** but plays
-  from vision's noisy one.
+- **Vision's errors cost the agent in the real game** (9 to 15 obstacles in
+  100 on levels nobody looked at). In Block SMB the state is a fast lookup
+  by design, so this is seeing's problem to solve, not the policy's.
 - **Leftovers of the retired design in live files:** vision's scene lists
   are still capped at the old policy's slot counts
   (`perception/scene_lists.py`), and the simulator still carries the

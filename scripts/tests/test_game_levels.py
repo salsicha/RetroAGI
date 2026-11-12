@@ -71,7 +71,8 @@ def test_a_skill_scene_is_one_piece_of_its_kind_with_no_flag_and_is_passed_beyon
              if k == "ground" and p[1] == FLOOR]
     assert len(floor) == 2 and floor[1][0] - (floor[0][0] + floor[0][2]) in (2 * TILE, 3 * TILE, 4 * TILE)
     # The domain gives scenes as practice worlds; one is passed once Mario stands beyond its piece.
-    assert DOMAIN.practices[0] == "level" and set(DOMAIN.practices[1:]) == {*SCENE_KINDS, "copy"}
+    # (and nothing else: no practice world has a real level's layout)
+    assert DOMAIN.practices == ("level", *SCENE_KINDS)
     world = DOMAIN.practice(7, "pit")
     world.reset()
     assert not world.passed and world.passed_at == skill_scene(7, "pit")["metadata"]["scene"]["passed"]

@@ -5,6 +5,12 @@ with the game as its first domain: an adaptive controller plus
 interchangeable models, composed through declared interfaces
 ([the framework](docs/framework.md)).
 
+**What the project must be** is in
+[docs/requirements.md](docs/requirements.md), in the project owner's words:
+a system trained and working before it meets the real game, learned in a
+fast, cheap simulator (Block SMB) that has none of the game's graphics or
+levels, with a controller far faster than the deep models.
+
 ## Current design: choose and control
 
 Since 2026-11-07 the agent is built around sparse decisions and a fast
@@ -39,38 +45,44 @@ built in the Block SMB simulator from the real game's pieces and rules
 (`domains/smb/sim/`).
 
 **The rule** (2026-11-11): the real game is looked at only to train the
-vision network, to make Block SMB an accurate copy of its look and
-behaviour, and to score the finished system. Everything that decides and
-controls is learned from Block SMB alone, and is debugged there
-([docs/generalization.md](docs/generalization.md)).
+vision network, to measure how the game behaves so that Block SMB behaves
+the same, and to score the finished system. Everything that decides and
+controls is learned from Block SMB alone, and is debugged there. No model
+learns a real level's layout: every practice world is drawn at random from
+the game's pieces ([docs/requirements.md](docs/requirements.md),
+[docs/generalization.md](docs/generalization.md)).
 
-Where it stands (2026-11-11), with outcome_20261109d:
+Where it stands (2026-11-11), with outcome_20261111k (learned from 2.08
+million choices tried in Block SMB's skill scenes and random levels):
 
-- **In Block SMB** (100 fresh random levels, both ways to play): the
-  network's chooser finishes 183 of 200 plays, the hand-written chooser
-  192 (the network learned in Block SMB as it was before the day's
-  corrections to it).
-- **In the real game** the agent finishes World 1-1 from the screen alone,
-  a level its hand-written parts were adjusted on, and no other: on six
-  levels nobody looked at it passes about half of the obstacles, where a
-  level needs about 98% of them passed to be finished in half its plays.
-  That gap is what Block SMB lacks of the game (enemies it does not have,
-  real level layouts, what vision's small errors do to a policy trained
-  on exact positions), and closing it in Block SMB is the work.
+- **In Block SMB** (worlds not trained on, both ways to play): the
+  network's chooser finishes 185 of 200 plays of 100 random levels and
+  passes 1,593 of 1,600 skill scenes; the hand-written chooser, kept as a
+  yardstick, finishes 192 of the 200.
+- **In the real game** (scored, nothing learned there) it finishes World
+  1-1 from the screen alone in 6 of 8 plays, a level its hand-written
+  parts were adjusted on, and on four levels nobody looked at (Worlds 4-1,
+  6-1, 7-1 and 8-1) it passes 0.59 of the obstacles, where a level needs about 98% of them passed to
+  be finished in half its plays. That gap is what Block SMB lacks of the
+  game (enemies it does not have, pieces and spacings its random levels
+  never draw) and what vision's errors cost; the first is closed by
+  widening Block SMB, the second is seeing's own work.
+- **Speed** (one processor core): the controller's work is about 0.04
+  milliseconds a frame, the outcome network's 1.4 to 2.3 a decision,
+  vision's 4 a frame; the whole agent plays Block SMB 70 to 105 times
+  faster than the game runs.
 
-The outcome network was trained only on Block SMB random levels (question
+The outcome network was trained only on Block SMB's skill scenes and random levels (question
 blocks, mushrooms, big Mario, Koopa Troopas, piranha plants, hopping
 Paratroopas, Bullet Bill cannons); nothing learns on the real game.
 
 ```bash
 # score an agent on the 24 obstacles of 1-1, from vision
-python -m retroagi.framework.bench --domain smb --bench data/full_smb_obstacles/Level1-1 --source vision --model data/outcome/outcome_20261109d.pt
-# the same with the hand-written rules for how enemies move, not the model fitted to what is seen
-python -m retroagi.framework.bench --domain smb --use dynamics=rules --bench data/full_smb_obstacles/Level1-1 --source vision --model data/outcome/outcome_20261109d.pt
+python -m retroagi.framework.bench --domain smb --bench data/full_smb_obstacles/Level1-1 --source vision --model data/outcome/outcome_20261111k.pt
 # play a whole level
-python -m retroagi.framework.play --domain smb --level Level1-1 --source vision --model data/outcome/outcome_20261109d.pt
+python -m retroagi.framework.play --domain smb --level Level1-1 --source vision --model data/outcome/outcome_20261111k.pt
 # the scripted chooser, or the outcome network as the chooser, on fresh random levels
-python -m retroagi.framework.practice --domain smb --levels 100 --first-seed 100000 [--model data/outcome/outcome_20261109d.pt]
+python -m retroagi.framework.practice --domain smb --levels 100 --first-seed 100000 [--model data/outcome/outcome_20261111k.pt]
 # sample outcomes, then train the outcome network
 python -m retroagi.framework.sampling --domain smb --levels 2000 --workers 14 --output data/datasets/block_smb/outcomes_NEW
 python -m retroagi.framework.training --domain smb --data data/datasets/block_smb/outcomes_NEW --fresh data/datasets/block_smb/outcomes_fresh_NEW --output artifacts/block_smb/outcome_NEW

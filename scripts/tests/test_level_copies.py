@@ -1,6 +1,8 @@
-"""Real levels copied into Block SMB (nes/clone.py, sim/copies.py): the
-copy made from what was captured, and the practice worlds made from the
-copies. (The capture itself reads the game's memory and is not run here.)"""
+"""A real level's layout written in Block SMB's format (nes/clone.py), to
+check that Block SMB behaves as the game does: the copy made from what was
+captured. (The capture itself reads the game's memory and is not run here.)
+A copy is never a practice world: test_game_levels checks the domain's
+practice kinds."""
 
 from retroagi.domains.smb.nes.clone import scenario
 from retroagi.domains.smb.sim.levels import BOTTOM, FLOOR, TILE
@@ -38,23 +40,3 @@ def test_a_captured_level_becomes_a_block_smb_level_of_the_same_pieces():
     assert koopa["game_rules"] and koopa["y"] == 144 - 14  # on the floating tile, not the floor under it
     assert copy["metadata"]["game_level"]["left_out"]["Hammer Bro"] == 1
 
-
-def test_a_copied_level_is_played_from_its_start_or_from_a_spot_along_it(tmp_path, monkeypatch):
-    import json
-
-    from retroagi.domains.smb.sim import copies
-
-    (tmp_path / "LevelX-1.json").write_text(json.dumps(scenario(CAPTURED)))
-    monkeypatch.setattr(copies, "COPIES", tmp_path)
-    copies.copies.cache_clear()
-    starts = set()
-    for seed in range(40):
-        level = copies.copied_level(seed)
-        assert level == copies.copied_level(seed)
-        start = level["mario"][0]
-        starts.add(start)
-        assert level["mario"][1] == FLOOR - 12 and all(e["x"] > start for e in level["enemies"])
-        # He stands on floor, not in the pit nor on the pipe.
-        assert not 480 - TILE < start < 528 and not 320 - TILE < start < 352
-    assert 40 in starts and len(starts) > 5
-    copies.copies.cache_clear()

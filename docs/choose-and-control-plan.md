@@ -64,7 +64,10 @@ decided ahead while the current action runs, checked at its event.
 - Next-frame prediction and pretraining.
 
 Nothing learns on Full SMB (user, 2026-10-28). Reading the real game for
-layouts and test states is allowed.
+test states is allowed, and for layouts only to measure what pieces levels
+are made of and to check that Block SMB behaves as the game does: no model
+learns a real level's layout (user, 2026-11-11:
+[requirements.md](requirements.md)).
 
 ## Phases
 
