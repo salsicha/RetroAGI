@@ -57,6 +57,17 @@ def test_one_pass_gives_every_choice_its_predictions():
 
 
 def test_the_network_learns_a_handful_of_outcomes():
+    # (one thread: on a machine whose every core samples outcomes, a thread
+    # for each core made 200 steps of this small network take a minute)
+    threads = torch.get_num_threads()
+    torch.set_num_threads(1)
+    try:
+        _learns_a_handful_of_outcomes()
+    finally:
+        torch.set_num_threads(threads)
+
+
+def _learns_a_handful_of_outcomes():
     torch.manual_seed(0)
     model = OutcomeNetwork(SPEC, SMALL)
     mario, surfaces, enemies, items = (torch.as_tensor(t)[None].expand(6, *np.shape(t)) for t in tokens())
