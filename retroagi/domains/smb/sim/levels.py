@@ -81,13 +81,17 @@ GOOMBA_FEET = 14
 FRAMES_PER_PIXEL = 3
 # The kinds of skill scene: one piece of a kind, or two pieces close together.
 SCENE_KINDS = (*PIECES, "pair")
-# A scene: Mario starts this many tiles before its first piece; a pair's
-# pieces are this many tiles apart; it is passed once Mario stands
-# SCENE_PASSED pixels beyond its last piece, and the floor goes on
-# SCENE_AFTER tiles from there (further than a choice tried near its end
-# and the probes after it can take him).
-SCENE_START = (3, 10)
-PAIR_FLAT = (1, 2)
+# A scene: its first piece starts this many tiles in (Mario stands at
+# START_X: 5.5 to 11.5 tiles before it; in the game an enemy wakes as the
+# screen reaches it, some 9 tiles ahead of him, and one put 3 tiles in
+# started on top of him); a pair's pieces are this many tiles apart (the
+# game's are often side by side: worlds 2-1, 3-1 and 5-1 have pieces 0 to 2
+# tiles apart 28 times); it is passed once Mario stands SCENE_PASSED pixels
+# beyond its last piece, and the floor goes on SCENE_AFTER tiles from there
+# (further than a choice tried near its end and the probes after it can
+# take him).
+SCENE_START = (8, 14)
+PAIR_FLAT = (0, 2)
 SCENE_PASSED = 2 * TILE
 SCENE_AFTER = 24
 
