@@ -15,6 +15,10 @@
 # Settings, from the environment: ROUNDS (3), LEVELS (300) and SCENES (400) sampled a round,
 # STEPS (20000) of training, WORKERS (14), and where things go: DATA (data/datasets/block_smb)
 # and OUT (artifacts/block_smb). The last round's network is OUT/outcome_NAME_<ROUNDS>/outcome.pt.
+#
+# A round that has taken its exam is not done again: the same NAME with more ROUNDS goes on
+# from where an earlier run stopped (an unfinished round is done again from its start; play
+# is deterministic, so what it had sampled is sampled the same).
 set -euo pipefail
 NAME=${1:?usage: scripts/learn_in_block_smb.sh NAME}
 ROUNDS=${ROUNDS:-3}
@@ -38,6 +42,12 @@ for round in $(seq 1 "$ROUNDS"); do
   sampled=$DATA/outcomes_${NAME}_$round
   fresh=$DATA/outcomes_fresh_${NAME}_$round
   network=$OUT/outcome_${NAME}_$round
+  if [ -f "$network/exam.json" ]; then
+    echo "round $round: done before"
+    data+=("$sampled")
+    driver=(--driver "$network/outcome.pt")
+    continue
+  fi
   echo "round $round: sampling $(date +%T)"
   python -m retroagi.framework.sampling --domain smb --levels "$LEVELS" --scenes "$SCENES" \
     --first-seed $((round * 10000)) ${driver[@]+"${driver[@]}"} --workers "$WORKERS" --output "$sampled"
