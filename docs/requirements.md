@@ -132,7 +132,21 @@ What this rules out:
 - Because the controller and Block SMB are both cheap, training data is
   collected many times faster than the game runs.
 
-## 6. How the work is done
+## 6. The controller's settings are chosen, by what they lead to
+
+> "make them part of each choice" (2026-11-12, choosing between two ways
+> the controller's hand-set safety margins and timings could be learned:
+> as part of each choice, or as fixed values found by search in Block SMB)
+
+- The settings that decide how carefully a choice is carried out (in Super
+  Mario Bros: how wide a berth enemies are given, how long a landing must
+  stay clear of them) become part of the choice. Each candidate choice
+  comes in its variants of those settings; the outcome network predicts
+  what each variant leads to, and the chooser picks among them as among
+  any choices. The parameters the controller is passed are then picked per
+  situation by what was learned in Block SMB, not set by hand.
+
+## 7. How the work is done
 
 - No training run is started unless asked for; a failed check is fixed in
   what failed, never bypassed.
@@ -148,7 +162,7 @@ What this rules out:
 |---|---|
 | Trained before it meets the real game | The outcome network has learned in Block SMB only. The hand-written parts (the controller's rules and constants, the list of choices, the chooser's priorities, the tracking of things seen) were adjusted while watching Worlds 1-1 and 5-1 before the rule was said; they have not yet been learned or set again from Block SMB alone. |
 | Deciding by a deep model of outcomes | The outcome network predicts every candidate choice's outcome in one pass and fixed priorities pick among them. The list of candidate choices is still written by hand. |
-| The controller takes learned parameters | Not yet: its margins and timings are set by hand. |
+| The controller takes learned parameters | Not yet: its margins and timings are set by hand. Decided 2026-11-12 (section 6): they become part of each choice; being built. |
 | The controller is much faster than the deep models | Yes, measured below. Nothing it imports is a deep-learning library (kept so by a test). |
 | Block SMB is fast and cheap | Yes, measured below. |
 | Practice worlds are random, of the game's pieces | Random levels and skill scenes drawn from pieces and ranges measured in Worlds 1-1, 2-1, 3-1 and 5-1; every one checked so far can be passed by some sequence of buttons (`sim/passable.py`). |
