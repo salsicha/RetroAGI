@@ -1,0 +1,78 @@
+{
+ "step": 20000,
+ "loss": 0.05408323556184769,
+ "fresh": {
+  "all": {
+   "choices": 222514,
+   "deaths": 0.01642143912613392,
+   "death_auc": 0.9783432358680431,
+   "death_error": 0.015239334665238857,
+   "infeasible_right": 0.9563622963049516,
+   "stuck_right": 0.9419991551093414,
+   "progress_error": 5.645122528076172
+  },
+  "land": {
+   "choices": 152241,
+   "deaths": 0.01416175626218319,
+   "death_auc": 0.9834717747759881,
+   "death_error": 0.012053584679961205,
+   "infeasible_right": 0.9579679586970659,
+   "stuck_right": 0.9481677077791134,
+   "progress_error": 5.505582809448242
+  },
+  "stomp": {
+   "choices": 6664,
+   "deaths": 0.03541416674852371,
+   "death_auc": 0.9256958433970025,
+   "death_error": 0.03461000323295593,
+   "infeasible_right": 0.9188175270108043,
+   "stuck_right": 0.9135654261704682,
+   "progress_error": 17.699853897094727
+  },
+  "pass": {
+   "choices": 13328,
+   "deaths": 0.03526410460472107,
+   "death_auc": 0.9290018963274789,
+   "death_error": 0.03717552125453949,
+   "infeasible_right": 0.9233193277310925,
+   "stuck_right": 0.8889555822328932,
+   "progress_error": 11.535479545593262
+  },
+  "run": {
+   "choices": 26406,
+   "deaths": 0.01874573901295662,
+   "death_auc": 0.9817788864680146,
+   "death_error": 0.019854512065649033,
+   "infeasible_right": 0.9709914413390897,
+   "stuck_right": 0.9392183594637582,
+   "progress_error": 6.215353965759277
+  },
+  "wait": {
+   "choices": 17604,
+   "deaths": 0.01635991781949997,
+   "death_auc": 0.9774415842124176,
+   "death_error": 0.016385935246944427,
+   "infeasible_right": 0.9887525562372188,
+   "stuck_right": 0.9531356509884117,
+   "progress_error": 1.5875715017318726
+  },
+  "bump": {
+   "choices": 5938,
+   "deaths": 0.001515661831945181,
+   "death_auc": 0.9530930829632128,
+   "death_error": 0.002829327480867505,
+   "infeasible_right": 0.8773997979117548,
+   "stuck_right": 0.9120916133378242,
+   "progress_error": 11.139838218688965
+  },
+  "collect": {
+   "choices": 333,
+   "deaths": 0.0,
+   "death_auc": NaN,
+   "death_error": 0.000787511351518333,
+   "infeasible_right": 0.8318318318318318,
+   "stuck_right": 0.978978978978979,
+   "progress_error": 13.291955947875977
+  }
+ }
+}
