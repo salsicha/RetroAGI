@@ -20,7 +20,7 @@ from retroagi.domains.smb.sim import levels as made
 
 CALIBRATION = ("Level2-1", "Level3-1", "Level5-1")
 # The enemies Block SMB has, by the game's code.
-IN_BLOCK_SMB = {0x06: "Goomba", 0x00: "green Koopa", 0x0E: "hopping Paratroopa", 0x0D: "Piranha Plant",
+IN_BLOCK_SMB = {0x06: "Goomba", 0x00: "green Koopa", 0x0E: "hopping Paratroopa", 0x0D: "Piranha Plant", 0x05: "Hammer Bro",
                 0x33: "Bullet Bill"}
 
 

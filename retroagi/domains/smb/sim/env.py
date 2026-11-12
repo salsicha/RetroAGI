@@ -119,6 +119,31 @@ HOP_SPEED, HOP_GRAVITY = -3.25, 0.12
 # frames, looked random; a fixed turn keeps replays from saved states alike).
 BULLET_W, BULLET_H, BULLET_BELOW, BULLET_SPEED = 10, 6, 6, 1.5
 CANNON_FRAMES = (46, 200, 98, 264, 170, 31, 240, 120, 214, 88, 180, 152)
+# Hammer Bros (3-1's, game memory): an 8 by 24 box (drawn 16 by 24, 4 in
+# from each side) whose bottom is 4 below its feet; it walks HAMMER_BRO_WALK
+# pixels either way of where it started, HAMMER_BRO_SPEED a frame; after
+# each of HAMMER_BRO_JUMPS frames in turn it jumps, up to the floor
+# HAMMER_BRO_REACH above it (starting HAMMER_BRO_UP pixels a frame upward,
+# through the row over it) or down through what it stands on to what is
+# below (starting HAMMER_BRO_DOWN upward), under HAMMER_BRO_GRAVITY, falling
+# at most ENEMY_FALL; after each of HAMMER_FRAMES in turn it throws a hammer
+# (the game's gaps: 49 or 50 frames, now and then a throw left out). It
+# throws only while on screen; a stomp kills it.
+HAMMER_BRO_W, HAMMER_BRO_H, HAMMER_BRO_FEET = 8, 24, -4
+HAMMER_BRO_WALK, HAMMER_BRO_SPEED = 8, 0.25
+HAMMER_BRO_REACH = 64
+HAMMER_BRO_UP, HAMMER_BRO_DOWN, HAMMER_BRO_GRAVITY = -6.25, -3.25, 0.25
+HAMMER_BRO_JUMPS = (215, 241)
+HAMMER_FRAMES = (50, 49, 49, 49, 50, 49, 49, 97)
+# A hammer (game memory, 116 throws): held HAMMER_HOLD frames over the
+# Hammer Bro's head (its middle HAMMER_OVER above the Bro's top), then
+# thrown toward Mario, HAMMER_SPEED pixels a frame sideways and HAMMER_THROW
+# upward, falling under HAMMER_GRAVITY to at most HAMMER_FALL, through
+# everything. Drawn spinning in two 8-pixel pieces, it hurts Mario by the
+# HAMMER_W by HAMMER_H box at its middle (not measured), held or thrown.
+HAMMER_W, HAMMER_H = 8, 8
+HAMMER_HOLD, HAMMER_OVER = 14, 5
+HAMMER_SPEED, HAMMER_THROW, HAMMER_GRAVITY, HAMMER_FALL = 1.0, -2.0, 0.0625, 4.5
 # Pre-episode frames ("watch_frames") end with Mario standing: up to this many
 # more are watched while one who starts above the floor drops onto it.
 LANDING_WATCH = 64
@@ -491,6 +516,14 @@ class MarioScenarioEnv:
             elif enemy.get("kind") == "koopa":
                 # (its feet where a Goomba's would be: 14 below the y given)
                 enemy.update(w=KOOPA_W, h=KOOPA_H, foot_offset=KOOPA_FEET, y=enemy["y"] + 14 - KOOPA_FEET - KOOPA_H)
+            elif enemy.get("kind") == "hammer_bro":
+                # (standing, its feet where a Goomba's would be; its first
+                # throw and jump after the frames given, or the game's first)
+                enemy.update(w=HAMMER_BRO_W, h=HAMMER_BRO_H, foot_offset=HAMMER_BRO_FEET, speed=HAMMER_BRO_SPEED,
+                             y=enemy["y"] + 14 - HAMMER_BRO_FEET - HAMMER_BRO_H, on_ground=True,
+                             patrol_min=enemy["x"] - HAMMER_BRO_WALK, patrol_max=enemy["x"] + HAMMER_BRO_WALK,
+                             throw_timer=int(e.get("throw_wait", 11)), throws=0,
+                             jump_timer=int(e.get("jump_wait", HAMMER_BRO_JUMPS[0])), jumps=0, through=None)
             elif enemy.get("kind") != "piranha_plant":
                 # NES Goomba damage body is 10x6, four pixels above its
                 # physical feet. Background support is a separate probe.
@@ -1226,8 +1259,8 @@ class MarioScenarioEnv:
                 yield "enemy", "plant", partial(self._draw_plant, rect=rect)
             elif enemy.get("kind") == "monster":
                 yield "enemy", "other", partial(self._draw_monster, enemy=enemy, rect=rect)
-            elif enemy.get("kind") == "bullet":
-                if not enemy.get("gone"):
+            elif enemy.get("kind") in ("bullet", "hammer", "hammer_bro"):
+                if not enemy.get("gone") and not (enemy.get("kind") == "hammer_bro" and enemy["dead"]):
                     yield "enemy", "other", partial(self._draw_monster, enemy=enemy, rect=rect)
             else:
                 kind = "defeated" if enemy["dead"] else "walker"
@@ -1494,7 +1527,7 @@ class MarioScenarioEnv:
             shell["kick_grace"] = max(0, shell.get("kick_grace", 0) - 1)
             body = pygame.Rect(shell["x"], shell["y"], shell["w"], shell["h"])
             for other in self.enemies:
-                if other is shell or other["dead"] or other.get("kind") == "piranha_plant":
+                if other is shell or other["dead"] or other.get("kind") in ("piranha_plant", "hammer"):
                     continue
                 if body.colliderect(pygame.Rect(other["x"], other["y"], other["w"], other["h"])):
                     other["dead"] = True
@@ -1543,6 +1576,77 @@ class MarioScenarioEnv:
                 item["y"] = float(r.top - item["h"])
                 item["vy"] = 0.0
 
+    def _update_hammer_bro(self, bro: dict, platform_rects: list) -> None:
+        """A Hammer Bro's frame (HAMMER_BRO_* notes): its walk, its throw when
+        due, its jump when due, and its flight."""
+        bro["x"] += bro["speed"] * bro["direction"]
+        if not bro["patrol_min"] < bro["x"] < bro["patrol_max"]:
+            bro["x"] = min(max(bro["x"], bro["patrol_min"]), bro["patrol_max"])
+            bro["direction"] *= -1
+        bro["throw_timer"] -= 1
+        if bro["throw_timer"] <= 0:
+            bro["throws"] += 1
+            bro["throw_timer"] = HAMMER_FRAMES[bro["throws"] % len(HAMMER_FRAMES)]
+            if self.camera_x <= bro["x"] < self.camera_x + self.width:
+                self._throw_hammer(bro)
+        x0, x1 = bro["x"], bro["x"] + bro["w"]
+        feet = bro["y"] + bro["h"] + bro["foot_offset"]
+        if bro["on_ground"]:
+            bro["jump_timer"] -= 1
+            if bro["jump_timer"] > 0:
+                return
+            bro["jumps"] += 1
+            bro["jump_timer"] = HAMMER_BRO_JUMPS[bro["jumps"] % len(HAMMER_BRO_JUMPS)]
+            over = lambda r: r.left < x1 and x0 < r.right  # noqa: E731
+            above = any(over(r) and abs(feet - r.top - HAMMER_BRO_REACH) <= 8 for r in platform_rects)
+            below = any(over(r) and r.top > feet + 1 for r in platform_rects)
+            if not (above or below):
+                return
+            # Up when it can and either cannot go down or it is its turn.
+            up = above and not (below and bro["jumps"] % 2)
+            bro.update(vy=HAMMER_BRO_UP if up else HAMMER_BRO_DOWN, through=None if up else feet, on_ground=False)
+        bro["vy"] = min(bro["vy"] + HAMMER_BRO_GRAVITY, ENEMY_FALL)
+        if bro["vy"] > 0:  # falling, it lands on the first top it meets (not the one it dropped through)
+            for r in platform_rects:
+                if r.left < x1 and x0 < r.right and feet <= r.top <= feet + bro["vy"] and r.top != bro["through"]:
+                    bro.update(y=r.top - bro["h"] - bro["foot_offset"], vy=0.0, on_ground=True, through=None)
+                    return
+        bro["y"] += bro["vy"]
+        if bro["y"] > self.height:
+            bro.update(dead=True, gone=True)
+
+    def _throw_hammer(self, bro: dict) -> None:
+        """A hammer appears over ``bro``'s head, held (HAMMER_* notes)."""
+        index = next(k for k, e in enumerate(self.enemies) if e is bro)
+        self.enemies.append({
+            "kind": "hammer", "bro": index, "held": HAMMER_HOLD,
+            "x": bro["x"] + (bro["w"] - HAMMER_W) / 2, "y": bro["y"] - HAMMER_OVER - HAMMER_H / 2,
+            "vx": 0.0, "vy": 0.0, "w": HAMMER_W, "h": HAMMER_H, "speed": bro["speed"], "direction": bro["direction"],
+            "patrol_min": -1e9, "patrol_max": 1e9, "edge_aware": False, "on_ground": False,
+            "dead": False, "stompable": False,
+        })
+
+    def _update_hammer(self, hammer: dict) -> None:
+        """A hammer's frame: held over its Hammer Bro, it moves with it until
+        thrown toward Mario; thrown, it flies under its own gravity through
+        everything until it is off the screen."""
+        if hammer["held"] > 0:
+            bro = self.enemies[hammer["bro"]]
+            hammer["held"] -= 1
+            hammer.update(x=bro["x"] + (bro["w"] - HAMMER_W) / 2, y=bro["y"] - HAMMER_OVER - HAMMER_H / 2,
+                          speed=bro["speed"], direction=bro["direction"])
+            if hammer["held"] == 0 or bro["dead"]:
+                hammer["held"] = 0
+                middle = self.mario["x"] + self.mario["w"] / 2
+                hammer.update(speed=HAMMER_SPEED, direction=1 if middle > hammer["x"] + HAMMER_W / 2 else -1,
+                              vy=HAMMER_THROW)
+            return
+        hammer["vy"] = min(hammer["vy"] + HAMMER_GRAVITY, HAMMER_FALL)
+        hammer["x"] += hammer["speed"] * hammer["direction"]
+        hammer["y"] += hammer["vy"]
+        if hammer["y"] > self.height or not self.camera_x - 64 <= hammer["x"] <= self.camera_x + self.width + 64:
+            hammer.update(dead=True, gone=True)  # (kept, so the others keep their places)
+
     def _update_enemy(self, enemy: dict, platform_rects: list):
         """Move enemy, apply gravity, resolve platform collisions, patrol logic."""
         if enemy.get("kind") == "piranha_plant":
@@ -1557,12 +1661,18 @@ class MarioScenarioEnv:
             if not self.camera_x - 64 <= enemy["x"] <= self.camera_x + self.width + 64:
                 enemy.update(dead=True, gone=True)  # flown off: kept, so the others keep their places
             return
+        if enemy.get("kind") == "hammer":
+            self._update_hammer(enemy)
+            return
         if (enemy.get("kind") == "monster" or enemy.get("game_rules")) and not enemy.get("awake"):
             # Like NES enemies, a monster (and any enemy under the game's
             # rules) starts moving once it is on screen.
             if enemy["x"] >= self.camera_x + self.width:
                 return
             enemy["awake"] = True
+        if enemy.get("kind") == "hammer_bro":
+            self._update_hammer_bro(enemy, platform_rects)
+            return
         # Gravity (a winged Koopa hops each time it lands)
         if enemy.get("wings"):
             if enemy["on_ground"]:
@@ -1693,7 +1803,7 @@ class MarioScenarioEnv:
 
             return parse_plant(e)
         kind = e.get("kind") if isinstance(e, dict) else None
-        if kind not in (None, "monster", "koopa", "paratroopa"):
+        if kind not in (None, "monster", "koopa", "paratroopa", "hammer_bro"):
             raise ValueError(f"unknown enemy kind {kind!r}")
         wings = kind == "paratroopa"
         if wings:

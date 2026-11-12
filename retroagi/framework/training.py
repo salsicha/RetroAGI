@@ -66,7 +66,10 @@ class Data:
     def __init__(self, folder: str, spec: ChoiceSpec, ends: tuple, device):
         d = load(folder)  # (one folder, or several: their shards together)
         self.spec = spec
-        self.tokens = [torch.as_tensor(d[g.name], device=device) for g in spec.groups]
+        # (sampled when a group had fewer numbers: zeros for those added since, sampling._joined)
+        self.tokens = [torch.as_tensor(np.pad(d[g.name], [(0, 0)] * (d[g.name].ndim - 1)
+                                              + [(0, g.width - d[g.name].shape[-1])]), device=device)
+                       for g in spec.groups]
         self.choices = torch.as_tensor(d["choices"].astype(np.int64), device=device)
         self.targets = torch.as_tensor(targets(d["outcomes"], ends), device=device)
 

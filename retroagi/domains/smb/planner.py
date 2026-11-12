@@ -60,8 +60,12 @@ ENEMY_FALL = 3.4
 # it lands, under HOP_GRAVITY; a plant rises out of its pipe at PLANT_SPEED
 # to PLANT_TOP above the pipe's top (its box's bottom) and stays (sinking, it
 # goes down and stays: Mario on or by its pipe keeps it down); a flier (a
-# Bullet Bill, anything else) flies straight through everything.
-ENEMY_KINDS = ("walker", "hopper", "plant", "flier")
+# Bullet Bill, anything else) flies straight through everything; a thrown
+# thing (a Hammer Bro's hammer) flies through everything falling under
+# THROWN_GRAVITY to at most THROWN_FALL (Block SMB's hammer, measured in the
+# game: sim/env.HAMMER_GRAVITY and HAMMER_FALL).
+ENEMY_KINDS = ("walker", "hopper", "plant", "flier", "thrown")
+THROWN_GRAVITY, THROWN_FALL = 0.0625, 4.5
 HOP_SPEED, HOP_GRAVITY, HOPPER_FEET = -3.25, 0.12, 3
 PLANT_SPEED, PLANT_TOP = 0.5, 4
 # A plant's box is at most this far below its pipe's top while it is seen
@@ -409,6 +413,12 @@ def _paths(boxes, velocities, kinds, solids, frames):
         if kinds[e] == 3:  # flier
             for k in range(1, frames + 1):
                 out[e, k] = (x0 + vx * k, y0 + vy * k, x1 + vx * k, y1 + vy * k)
+            continue
+        if kinds[e] == 4:  # thrown
+            for k in range(1, frames + 1):
+                vy = min(vy + THROWN_GRAVITY, THROWN_FALL)
+                x0, x1, y0, y1 = x0 + vx, x1 + vx, y0 + vy, y1 + vy
+                out[e, k] = (x0, y0, x1, y1)
             continue
         if kinds[e] == 2:
             # plant: its pipe is the solid under its middle whose top is

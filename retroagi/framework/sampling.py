@@ -263,7 +263,16 @@ def collect(domain, seeds, folder: str, workers: int = 8, scenes: Sequence[int] 
 
 
 def _joined(shards: list) -> dict:
-    """Shards joined, each choice's state index made global."""
+    """Shards joined, each choice's state index made global. A token group
+    sampled when it had fewer numbers (a kind of thing added to the domain
+    since, whose number is appended at the end) is filled out with zeros:
+    nothing then was of the new kind."""
+    for key in shards[0]:
+        widest = max(s[key].shape[-1] for s in shards)
+        for s in shards:
+            if s[key].ndim >= 2 and s[key].shape[-1] < widest:
+                pad = [(0, 0)] * (s[key].ndim - 1) + [(0, widest - s[key].shape[-1])]
+                s[key] = np.pad(s[key], pad)
     offset, choices = 0, []
     for shard in shards:
         c = shard["choices"].copy()

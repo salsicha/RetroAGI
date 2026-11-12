@@ -31,6 +31,8 @@ from .pixel_labels import (
     ENEMY_POINTERS,
     ENEMY_STATE,
     HIDDEN_ROW,
+    MISC_POINTERS,
+    MISC_STATE,
     OWNER_DRAWINGS,
     SCROLL_PAGE,
     SCROLL_X,
@@ -73,6 +75,25 @@ def _rows(box, page: int, y: int) -> tuple:
     ``y`` on screen ``page`` (1 on screen), which the game keeps apart."""
     top = (page - 1) * 256 + y + (box[1] - y) % 256
     return top, top + (box[3] - box[1]) % 256
+
+
+def hammers(ram, camera) -> dict:
+    """{loose-item slot: the world box its hammer is drawn in} for each
+    Hammer Bro's hammer drawn now (its two spinning 8-pixel pieces)."""
+    out = {}
+    for slot in range(9):
+        if not int(ram[MISC_STATE + slot]) & 0x80:
+            continue
+        first = int(ram[MISC_POINTERS + slot]) // 4
+        boxes = []
+        for piece in range(first, min(first + 2, 64)):
+            row, graphic, _, column = (int(v) for v in ram[SPRITE_LIST + 4 * piece : SPRITE_LIST + 4 * piece + 4])
+            if piece and row < HIDDEN_ROW and graphic in OWNER_DRAWINGS["hammer"]:
+                boxes.append((column + camera, row + 1, column + camera + 8, row + 9))
+        if boxes:
+            out[slot] = (min(b[0] for b in boxes), min(b[1] for b in boxes),
+                         max(b[2] for b in boxes), max(b[3] for b in boxes))
+    return out
 
 
 def _drawn(ram, slot, kind, camera):
