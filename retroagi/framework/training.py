@@ -64,7 +64,7 @@ class Data:
     their targets."""
 
     def __init__(self, folder: str, spec: ChoiceSpec, ends: tuple, device):
-        d = load(folder)
+        d = load(folder)  # (one folder, or several: their shards together)
         self.spec = spec
         self.tokens = [torch.as_tensor(d[g.name], device=device) for g in spec.groups]
         self.choices = torch.as_tensor(d["choices"].astype(np.int64), device=device)
@@ -165,7 +165,8 @@ def main(argv=None) -> int:
 
     parser = argparse.ArgumentParser(description="Train the outcome network on sampled outcomes")
     parser.add_argument("--domain", default="smb")
-    parser.add_argument("--data", required=True)
+    parser.add_argument("--data", required=True, nargs="+",
+                        help="one or more folders of sampled outcomes (trained on together)")
     parser.add_argument("--fresh", required=True, help="outcomes sampled in practice worlds not trained on")
     parser.add_argument("--output", required=True)
     parser.add_argument("--steps", type=int, default=STEPS)

@@ -84,14 +84,19 @@ class SuperMarioBros:
 
     # ── practice (the simulator) ─────────────────────────────────────────────
 
-    # The kinds of practice world: whole random levels, and the skill scenes
-    # (a stretch calling for one skill: sim/levels.SCENE_KINDS).
-    practices = ("level", "pipe", "pit", "goombas", "bricks", "stairs", "questions", "cannon", "pair")
+    # The kinds of practice world: whole random levels, the skill scenes (a
+    # stretch calling for one skill: sim/levels.SCENE_KINDS), and "copy":
+    # one of the real levels copied into Block SMB (sim/copies.py: those set
+    # aside for building it), from its start or a spot along it.
+    practices = ("level", "pipe", "pit", "goombas", "bricks", "stairs", "questions", "cannon", "pair", "copy")
 
     def practice(self, seed: int, kind: str = "level"):
+        from .sim.copies import copied_level
         from .sim.levels import random_level, skill_scene
         from .sim.world import SimWorld
 
+        if kind == "copy":
+            return SimWorld(copied_level(seed))
         return SimWorld(random_level(seed) if kind == "level" else skill_scene(seed, kind))
 
     def truth_source(self):

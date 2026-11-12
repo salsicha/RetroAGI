@@ -126,8 +126,11 @@ def capture(level: str, seeds=(1, 2, 3), frames: int = 60_000, every: int = 4) -
                     elif not on_block:
                         floating[x, x + TILE, int(s.top)] += 1
             for b in scene.blocks:
-                if whole(b.box[0], b.box[2]):
-                    key = (_tile(b.box[0] + camera), int(b.box[1]))
+                # (blocks side by side are labelled as one box: each tile of it that is whole in the picture)
+                for x in range(_tile(b.box[0] + camera), _tile(b.box[2] + camera), TILE):
+                    if not whole(x - camera, x + TILE - camera):
+                        continue
+                    key = (x, int(b.box[1]))
                     # (a question block hit becomes a plain one: what it was first is what it is)
                     if blocks.get(key) != "question_block":
                         blocks[key] = b.kind

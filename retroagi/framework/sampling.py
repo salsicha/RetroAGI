@@ -263,11 +263,12 @@ def _joined(shards: list) -> dict:
     return out
 
 
-def load(folder: str) -> dict:
-    """Every shard in ``folder`` joined."""
+def load(folder) -> dict:
+    """Every shard in ``folder`` (or in each of several folders) joined."""
     from pathlib import Path
 
-    return _joined([dict(np.load(p)) for p in sorted(Path(folder).glob("*.npz"))])
+    folders = [folder] if isinstance(folder, (str, Path)) else list(folder)
+    return _joined([dict(np.load(p)) for f in folders for p in sorted(Path(f).glob("*.npz"))])
 
 
 def pack(folder: str, parts: int = 8) -> None:

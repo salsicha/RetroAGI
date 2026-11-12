@@ -76,6 +76,73 @@ what it would see. It shows what choosing and controlling lose by
 themselves. The agent proper is given the screen's picture and nothing
 else ("from vision").
 
+## Learning from Block SMB alone: how it is set up (2026-11-11)
+
+Each piece has its own data and its own test:
+
+| Piece | Made or learned from | Tested by |
+|---|---|---|
+| Seeing (the vision network) | frames of the real game | frames of the real game not trained on |
+| Block SMB (look and behaviour) | the real game's memory | the same situation in both, compared (`nes/clone.py --check`, `nes/dynamics_check.py`) |
+| Deciding (the outcome network) | every choice tried in Block SMB | the Block SMB exam, on worlds not trained on |
+| The whole agent | nothing more | the Block SMB exam; then the real game, to score |
+
+**Which real levels may be looked at.** Worlds 2-1, 3-1 and 5-1 are for
+building Block SMB: their pieces are measured and their layouts copied.
+Worlds 1-1, 4-1, 6-1, 7-1 and 8-1 are for scoring only: the agent is played
+on them and the score read, and nothing of them goes into Block SMB.
+
+**Where the policy's data comes from** (`framework/sampling.py`): in Block
+SMB every choice open at a decision is played out from a saved copy of that
+moment and its outcome kept. The worlds are
+
+- *skill scenes* (`sim/levels.skill_scene`): a short stretch calling for
+  one skill, one piece of the game (a pipe, a pit, enemies, bricks, stairs,
+  question blocks, a cannon) or two pieces side by side, with no flag;
+- *whole random levels* of the same pieces, where skills follow one another;
+- *copies of the three building levels* (`nes/clone.py`, `sim/copies.py`),
+  played from their start or from a spot along them: what real layouts have
+  that random ones do not.
+
+The play that visits the states is an outcome network's own (`--driver`),
+with a share of its decisions made at random: a policy learns from where
+its own play takes it, and the hand-written chooser is out of the data (it
+remains as a yardstick).
+
+**The Block SMB exam** (`framework/practice.py --levels N --scenes N`):
+worlds not trained on, counted by kind, so a weak skill shows by name.
+Before any new training (100 levels, 100 scenes of each kind, both ways to
+play):
+
+| | Whole levels finished | Skill scenes passed |
+|---|---|---|
+| The hand-written chooser (the yardstick) | 192 of 200 | 1552 of 1600 |
+| The outcome network `outcome_20261109d` | 183 of 200 | 1572 of 1600 |
+
+Every scene failed was an enemy scene, and every one of those was the
+scene's own fault: its enemy started on top of Mario (since put right: no
+piece starts nearer than 5 tiles). Of scenes with a fair start both passed
+all.
+
+**What real levels have that Block SMB's generator did not**
+(`scripts/dev/piece_catalogue.py`, on the three building levels): pipes 5
+and 6 tiles tall (it drew 2 to 4), pieces side by side or one or two tiles
+apart (it left 3 to 8 between them), a pit of 8 tiles under a bridge of
+floating tiles, and Hammer Bros. The pair scenes now put pieces 0 to 2
+tiles apart; the rest comes with the copies.
+
+**The copies and how true they are** (`nes/clone.py --check`): Block SMB's
+Mario is put where the game's Mario is, moving as he moves, and the same
+buttons pressed for 16 frames, at a few hundred moments along each level.
+He ends within 2 pixels of the game's Mario in 93% (2-1), 96% (3-1) and 92%
+(5-1) of them. Left out of the copies for now: lifts, what question blocks
+hold, blocks that are invisible until hit, the last staircase's upper steps
+(the game's memory could not be read once the castle is in view), and the
+two Hammer Bros of 3-1. Played in Block SMB, the copies stop the
+hand-written chooser where the real levels stopped the agent (2-1's first
+staircase, 3-1 before its bridge, 5-1's tall pipe): the real difficulties
+are now in Block SMB, where they may be worked on.
+
 ## The measure
 
 - **Three sets of levels.** *Tuned*: 1-1 and 5-1. *Development*: 2-1 and
