@@ -278,6 +278,33 @@ with it and is now no better than from the screen. Three trainings have
 given 4, 6 and 4 whole plays of 1-1 out of 8: a retraining does not yet
 pass 1-1 reliably.
 
+**Round 3** (`outcome_20261112n`, 2026-11-12): 1.38 million more choices
+in the widened worlds, round 2's network playing; trained on rounds 1 to 3.
+In Block SMB no better than round 2 (165 of 200 level plays, 1,990 of
+2,000 scenes; round 2: 170 and 1,993), in the real game the best so far:
+
+| Scored on the real game | Round 1 | Round 2 | Round 3 |
+|---|---|---|---|
+| Tries at an obstacle failing, held-out levels, from the screen | 41% | 34% | 29% |
+| The same with exact positions | 32% | 35% | 23% |
+| Whole held-out levels finished from the screen | 1 of 32 | 1 of 32 | 1 of 32 |
+| 1-1 whole plays finished, from the screen / exact positions | 6 / 0 of 8 | 4 / 4 of 8 | 6 / 8 of 8 |
+| 4-1 whole plays finished with exact positions | 1 of 8 | 0 of 8 | 6 of 8 |
+
+**A larger network learns more of the same data.** Trained on rounds 1 and
+2's outcomes, a network twice as wide (192 numbers a token), one layer
+deeper (4) and trained twice as long (40,000 steps) against round 2's
+(96, 3, 20,000), both examined in today's Block SMB (Hammer Bros among the
+random levels' pieces, met by neither in training):
+
+| | Random levels | Skill scenes | Hammer Bros scenes |
+|---|---|---|---|
+| Round 2's size | 140 of 200 | 2,115 of 2,200 | 125 of 200 |
+| The larger network | 162 of 200 | 2,138 of 2,200 | 149 of 200 |
+
+The from-nothing run (`scripts/learn_in_block_smb.sh`) is made with the
+larger network.
+
 **What still fails in Block SMB** (round 2's 30 failed level plays of
 200, each played again in Block SMB, 2026-11-12):
 
