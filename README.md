@@ -52,22 +52,22 @@ learns a real level's layout: every practice world is drawn at random from
 the game's pieces ([docs/requirements.md](docs/requirements.md),
 [docs/generalization.md](docs/generalization.md)).
 
-Where it stands (2026-11-11), with outcome_20261111k (learned from 2.08
-million choices tried in Block SMB's skill scenes and random levels):
+Where it stands (2026-11-11), with outcome_20261111m (learned from 5.2
+million choices tried in Block SMB's skill scenes and random levels, in two
+rounds):
 
-- **In Block SMB** (worlds not trained on, both ways to play): the
-  network's chooser finishes 185 of 200 plays of 100 random levels and
-  passes 1,593 of 1,600 skill scenes; the hand-written chooser, kept as a
-  yardstick, finishes 192 of the 200. Since then the random levels have
-  been widened with the kinds of piece measured in three real levels (tall
-  pipes with a way up, bridges, one-sided staircases, pieces touching):
-  on those, never trained on, the same network finishes 153 of 200 plays
-  and the hand-written chooser 83. A second round of learning in the
-  widened worlds is under way.
+- **In Block SMB** (worlds not trained on, both ways to play; the random
+  levels widened on 2026-11-11 with the kinds of piece measured in three
+  real levels: tall pipes with a way up, bridges, one-sided staircases,
+  pieces touching): the network's chooser finishes 170 of 200 plays of 100
+  random levels and passes 1,993 of 2,000 skill scenes. The network of the
+  round before finished 153 of the 200, and the hand-written chooser, kept
+  as a yardstick, 83.
 - **In the real game** (scored, nothing learned there) it finishes World
-  1-1 from the screen alone in 6 of 8 plays, a level its hand-written
-  parts were adjusted on, and on four levels nobody looked at (Worlds 4-1,
-  6-1, 7-1 and 8-1) it passes 0.59 of the obstacles, where a level needs about 98% of them passed to
+  1-1 from the screen alone in 4 of 8 plays (the round before: 6 of 8), a
+  level its hand-written parts were adjusted on, and on four levels nobody
+  looked at (Worlds 4-1, 6-1, 7-1 and 8-1) it passes 0.66 of the obstacles
+  (the round before: 0.59), where a level needs about 98% of them passed to
   be finished in half its plays. That gap is what Block SMB lacks of the
   game (enemies it does not have, pieces and spacings its random levels
   never draw) and what vision's errors cost; the first is closed by
@@ -83,12 +83,14 @@ Paratroopas, Bullet Bill cannons); nothing learns on the real game.
 
 ```bash
 # score an agent on the 24 obstacles of 1-1, from vision
-python -m retroagi.framework.bench --domain smb --bench data/full_smb_obstacles/Level1-1 --source vision --model data/outcome/outcome_20261111k.pt
+python -m retroagi.framework.bench --domain smb --bench data/full_smb_obstacles/Level1-1 --source vision --model data/outcome/outcome_20261111m.pt
 # play a whole level
-python -m retroagi.framework.play --domain smb --level Level1-1 --source vision --model data/outcome/outcome_20261111k.pt
+python -m retroagi.framework.play --domain smb --level Level1-1 --source vision --model data/outcome/outcome_20261111m.pt
 # the scripted chooser, or the outcome network as the chooser, on fresh random levels
-python -m retroagi.framework.practice --domain smb --levels 100 --first-seed 100000 [--model data/outcome/outcome_20261111k.pt]
-# sample outcomes, then train the outcome network
+python -m retroagi.framework.practice --domain smb --levels 100 --first-seed 100000 [--model data/outcome/outcome_20261111m.pt]
+# learn the deciding network from nothing in Block SMB, round after round (hours)
+scripts/learn_in_block_smb.sh NAME
+# or one step at a time: sample outcomes, then train the outcome network
 python -m retroagi.framework.sampling --domain smb --levels 2000 --workers 14 --output data/datasets/block_smb/outcomes_NEW
 python -m retroagi.framework.training --domain smb --data data/datasets/block_smb/outcomes_NEW --fresh data/datasets/block_smb/outcomes_fresh_NEW --output artifacts/block_smb/outcome_NEW
 ```

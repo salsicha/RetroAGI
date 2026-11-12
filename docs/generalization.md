@@ -62,11 +62,15 @@ not of the present one.
 
 Three numbers, on the held-out levels (`scripts/dev/scorecard.py FOLDER`):
 
-| | First contact | After the second round | A working agent |
-|---|---|---|---|
-| Whole levels finished from the screen alone | 0 of 32 plays | 0 of 32 | most |
-| Tries at an obstacle that fail, from the screen alone | 47% | 41% | about 2% |
-| The same with exact positions in place of seeing | 35% | 24% | about 2% |
+| | First contact | After the second round | Learned from Block SMB alone, round 2 | A working agent |
+|---|---|---|---|---|
+| Whole levels finished from the screen alone | 0 of 32 plays | 0 of 32 | 1 of 32 | most |
+| Tries at an obstacle that fail, from the screen alone | 47% | 41% | 34% | about 2% |
+| The same with exact positions in place of seeing | 35% | 24% | 35% | about 2% |
+
+(The first two columns are of policies changed by hand while watching real
+levels, which the rule below forbids and which were put back. The third is
+of the present policy: its deciding network learned in Block SMB alone.)
 
 A level has about 35 obstacles, so half its plays finish only when about 2%
 of tries at an obstacle fail (0.98 to the 35th is a half), and 9 in 10 at
@@ -219,8 +223,51 @@ Two things show. The difficulty the real levels had is now in Block SMB's
 own random worlds: whole levels fell from 185 of 200 to 153 for the same
 network. And the learned chooser carries over to pieces neither it nor the
 hand-written one had met far better than the hand-written one does (153
-against 83). Round 2 samples outcomes in these worlds, round 1's network
-playing (`outcomes_20261111m`), and trains on rounds 1 and 2.
+against 83).
+
+**Round 2** (`outcome_20261111m`, 2026-11-11): 2.55 million choices tried in
+600 plays of widened random levels and 4,000 skill scenes, round 1's
+network playing; trained from nothing on rounds 1 and 2 together (and on
+the 0.5 million choices of the stopped first attempt).
+
+| The Block SMB exam on the widened worlds (plays) | Random levels | Skill scenes | Weakest kind of scene |
+|---|---|---|---|
+| Round 1 | 153 of 200 | 1,987 of 2,000 | two pieces close together, 191 of 200 |
+| Round 2 | 170 of 200 | 1,993 of 2,000 | two pieces close together, 193 of 200 |
+
+Bridges are passed every time (200 of 200, from 196). Of the 30 level
+plays still failed, 28 are deaths, most where a pit stands by another piece
+with enemies about. On outcomes of fresh worlds the network ranks a choice
+that kills above one that does not 98% of the time.
+
+Scored on the real game (nothing learned there, nothing looked into):
+
+| | 1-1 from the screen: obstacles | 1-1 from the screen: whole plays | Held-out levels from the screen | Held-out, exact positions | Held-out whole plays from the screen |
+|---|---|---|---|---|---|
+| The old network | 0.95 | 4 of 8 | 0.59 | 0.74 | 1 of 32 |
+| Round 1 | 0.97 | 6 of 8 | 0.59 | 0.68 | 1 of 32 |
+| Round 2 | 0.88 | 4 of 8 | 0.66 | 0.65 | 1 of 32 |
+
+On the building levels from the screen: 2-1 0.77 (round 1: 0.76), 3-1 0.51
+(0.56), 5-1 0.86 (0.86), where 4 of 8 whole plays now finish (2 of 8).
+
+What it says: learning in the widened worlds raised the score on levels
+nobody looked at, from the screen, for the first time (41% of tries at an
+obstacle failing, now 34%; a working agent about 2%), and lowered it on
+1-1 (3% failing, now 12%). The score with exact positions has not risen
+with it and is now no better than from the screen. Three trainings have
+given 4, 6 and 4 whole plays of 1-1 out of 8: a retraining does not yet
+pass 1-1 reliably.
+
+**One command** learns the deciding network from nothing in Block SMB,
+round after round (`scripts/learn_in_block_smb.sh NAME`): sample, train,
+take the exam, and let the new network's play visit the next round's
+situations. Seeing is trained apart, on real frames. It has been run end
+to end only at a tiny size, to check that it works; a full run from
+nothing has not been made. A sampled play is now given up after 900 frames
+without progress (`framework/sampling.py`): in the widened worlds the
+hand-written chooser, whose play the first round samples, stalls in a
+third of the levels, and a stalled play took over four minutes to sample.
 
 Scored on the real game (nothing learned there), obstacles passed and whole
 levels finished:

@@ -55,8 +55,8 @@ has two dynamics models:
 | `observed` | `framework/observed_dynamics.py`: told nothing of what a thing is, it fits each thing's motion to its own track and remembers by type what things have been seen to do (how they fall, bounce, come out of solids, pace). Its memory starts empty at each play. An experiment: it was shaped against recordings of the real game, which no part of the policy may be, and plays fresh Block SMB levels no better than the rules. |
 
 ```bash
-python -m retroagi.framework.practice --domain smb --use dynamics=observed --levels 100 --first-seed 100000 --model data/outcome/outcome_20261111k.pt
-python -m retroagi.domains.smb.nes.dynamics_check --bench data/full_smb_obstacles/Level2-1 --model data/outcome/outcome_20261111k.pt
+python -m retroagi.framework.practice --domain smb --use dynamics=observed --levels 100 --first-seed 100000 --model data/outcome/outcome_20261111m.pt
+python -m retroagi.domains.smb.nes.dynamics_check --bench data/full_smb_obstacles/Level2-1 --model data/outcome/outcome_20261111m.pt
 ```
 
 The second command scores every dynamics model of the domain on the same
@@ -81,9 +81,9 @@ by frames ahead. [How general is it?](generalization.md) has the results.
 ```bash
 python -m retroagi.framework.sampling --domain smb --levels 2000 --workers 14 --output data/datasets/block_smb/outcomes_NEW
 python -m retroagi.framework.training --domain smb --data data/datasets/block_smb/outcomes_NEW --fresh data/datasets/block_smb/outcomes_fresh_NEW --output artifacts/block_smb/outcome_NEW
-python -m retroagi.framework.practice --domain smb --levels 100 --first-seed 100000 --model data/outcome/outcome_20261111k.pt
-python -m retroagi.framework.bench --domain smb --bench data/full_smb_obstacles/Level1-1 --source vision --model data/outcome/outcome_20261111k.pt
-python -m retroagi.framework.play --domain smb --level Level1-1 --source vision --model data/outcome/outcome_20261111k.pt
+python -m retroagi.framework.practice --domain smb --levels 100 --first-seed 100000 --model data/outcome/outcome_20261111m.pt
+python -m retroagi.framework.bench --domain smb --bench data/full_smb_obstacles/Level1-1 --source vision --model data/outcome/outcome_20261111m.pt
+python -m retroagi.framework.play --domain smb --level Level1-1 --source vision --model data/outcome/outcome_20261111m.pt
 ```
 
 ## What a domain supplies

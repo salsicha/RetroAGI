@@ -89,3 +89,11 @@ def test_a_skill_scene_is_sampled_until_it_is_passed_by_whatever_chooser_drives(
 
     again = sample(DOMAIN, 5, "speed_run", kind="pit", driver=Driver, explore=0.0)
     assert asked and len(again["mario"]) == len(shard["mario"])
+
+    # A play whose driver gets no further is given up, not sampled to the end of its time.
+    class Waiter(ScriptedChooser):
+        def decide(self, state, last_event, last):
+            return next(c.choice for c in SPACE.candidates(state) if KINDS[c.kind] == "wait")
+
+    waited = sample(DOMAIN, 5, "speed_run", kind="pit", driver=Waiter, explore=0.0, stalled=60)
+    assert 1 <= len(waited["mario"]) <= 10

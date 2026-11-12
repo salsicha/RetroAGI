@@ -48,6 +48,12 @@ EXPLORE = 0.3
 # After a choice, the agent is stuck when no probe from where it left it is
 # feasible, safe and makes at least this much progress.
 STUCK_PROGRESS = 16
+# A sampled play is given up once its driver has got no further for this
+# many frames (the obstacle bench's limit for one obstacle): a stalled play
+# samples the same few situations over and over, minutes of work for
+# nothing new (a play of a level where the hand-written chooser stalls took
+# over four minutes to sample).
+STALLED = 900
 OUTCOME_FIELDS = ("died", "died_after", "frames", "progress", "points", "finished", "stuck", "end")
 
 
@@ -176,14 +182,15 @@ class Sampler:
 
 
 def sample(domain, seed: int, mode: str, *, kind: str = "level", driver: Optional[Callable] = None,
-           explore: float = EXPLORE, rng: Optional[random.Random] = None) -> dict:
+           explore: float = EXPLORE, rng: Optional[random.Random] = None, stalled: int = STALLED) -> dict:
     """Play the domain's practice world of ``kind`` and ``seed`` in ``mode``
     (a whole level, or a skill scene until it is passed), sampling every
     candidate's outcome at every decision point: a shard of arrays (see
     module notes). ``driver(mode)`` makes the chooser whose play, with
     ``explore`` of its decisions made at random, visits the states (the
     domain's behaviour chooser if None; an outcome network's, so that a
-    policy learns from where its own play takes it)."""
+    policy learns from where its own play takes it). The play is given up
+    after ``stalled`` frames without progress beyond its furthest."""
     world = domain.practice(seed, kind)
     world.reset()
     source = domain.truth_source()
@@ -191,8 +198,13 @@ def sample(domain, seed: int, mode: str, *, kind: str = "level", driver: Optiona
     agent = Agent(source, lambda _: sampler, domain.controller, domain.idle)
     agent.reset(seed, mode)
     sampler.agent = agent
+    furthest, since = world.progress, 0
     for _ in range(world.budget):
         if world.step(agent.act(world)).over or world.passed:
+            break
+        since = 0 if world.progress > furthest else since + 1
+        furthest = max(furthest, world.progress)
+        if since >= stalled:
             break
     groups = domain.space.spec.groups
     states = len(sampler.tokens[0])
