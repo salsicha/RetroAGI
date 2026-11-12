@@ -1,0 +1,624 @@
+{
+ "mario_big": false,
+ "block_contents": {},
+ "task": {
+  "family": "game_level"
+ },
+ "world_width": 3337,
+ "scroll_x": 115,
+ "frame_budget": 10011,
+ "mario": [
+  40,
+  196
+ ],
+ "platforms": [
+  [
+   0,
+   208,
+   704,
+   32
+  ],
+  [
+   736,
+   208,
+   48,
+   32
+  ],
+  [
+   848,
+   208,
+   624,
+   32
+  ],
+  [
+   1536,
+   208,
+   240,
+   32
+  ],
+  [
+   1792,
+   208,
+   32,
+   32
+  ],
+  [
+   1872,
+   208,
+   480,
+   32
+  ],
+  [
+   2368,
+   208,
+   64,
+   32
+  ],
+  [
+   2480,
+   208,
+   16,
+   32
+  ],
+  [
+   2528,
+   208,
+   16,
+   32
+  ],
+  [
+   2560,
+   208,
+   48,
+   32
+  ],
+  [
+   2640,
+   208,
+   80,
+   32
+  ],
+  [
+   2736,
+   208,
+   176,
+   32
+  ],
+  [
+   2992,
+   208,
+   192,
+   32
+  ],
+  [
+   3200,
+   208,
+   137,
+   32
+  ],
+  [
+   704,
+   160,
+   32,
+   80
+  ],
+  [
+   816,
+   160,
+   32,
+   80
+  ],
+  [
+   2496,
+   112,
+   32,
+   128
+  ],
+  [
+   2608,
+   176,
+   32,
+   64
+  ],
+  [
+   1776,
+   176,
+   16,
+   64
+  ],
+  [
+   1856,
+   160,
+   16,
+   80
+  ],
+  [
+   2352,
+   144,
+   16,
+   96
+  ],
+  [
+   2544,
+   176,
+   16,
+   64
+  ],
+  [
+   2720,
+   176,
+   16,
+   64
+  ],
+  [
+   2912,
+   192,
+   16,
+   48
+  ],
+  [
+   2928,
+   176,
+   16,
+   64
+  ],
+  [
+   2944,
+   160,
+   16,
+   80
+  ],
+  [
+   2960,
+   144,
+   16,
+   96
+  ],
+  [
+   2976,
+   128,
+   16,
+   112
+  ],
+  [
+   3184,
+   192,
+   16,
+   48
+  ],
+  [
+   1440,
+   73,
+   16,
+   16
+  ],
+  [
+   1440,
+   74,
+   16,
+   16
+  ],
+  [
+   1440,
+   75,
+   16,
+   16
+  ],
+  [
+   1440,
+   76,
+   16,
+   16
+  ],
+  [
+   1440,
+   77,
+   16,
+   16
+  ],
+  [
+   1440,
+   79,
+   16,
+   16
+  ],
+  [
+   1440,
+   80,
+   16,
+   16
+  ],
+  [
+   1456,
+   80,
+   16,
+   16
+  ],
+  [
+   1472,
+   73,
+   16,
+   16
+  ],
+  [
+   1472,
+   74,
+   16,
+   16
+  ],
+  [
+   1472,
+   77,
+   16,
+   16
+  ],
+  [
+   1472,
+   80,
+   16,
+   16
+  ],
+  [
+   2384,
+   144,
+   16,
+   16
+  ],
+  [
+   1424,
+   144,
+   16,
+   16
+  ],
+  [
+   1440,
+   144,
+   16,
+   16
+  ],
+  [
+   1456,
+   144,
+   16,
+   16
+  ],
+  [
+   1472,
+   144,
+   16,
+   16
+  ],
+  [
+   1488,
+   144,
+   16,
+   16
+  ],
+  [
+   3024,
+   80,
+   16,
+   16
+  ],
+  [
+   3040,
+   80,
+   16,
+   16
+  ]
+ ],
+ "platform_kinds": [
+  "ground",
+  "ground",
+  "ground",
+  "ground",
+  "ground",
+  "ground",
+  "ground",
+  "ground",
+  "ground",
+  "ground",
+  "ground",
+  "ground",
+  "ground",
+  "ground",
+  "pipe",
+  "pipe",
+  "pipe",
+  "pipe",
+  "cannon",
+  "ground",
+  "ground",
+  "cannon",
+  "cannon",
+  "ground",
+  "ground",
+  "ground",
+  "ground",
+  "ground",
+  "ground",
+  "brick",
+  "brick",
+  "brick",
+  "brick",
+  "brick",
+  "brick",
+  "brick",
+  "brick",
+  "brick",
+  "brick",
+  "brick",
+  "brick",
+  "brick",
+  "ground",
+  "ground",
+  "ground",
+  "ground",
+  "ground",
+  "ground",
+  "ground"
+ ],
+ "enemies": [
+  {
+   "x": 183.0,
+   "y": 194.0,
+   "game_rules": true,
+   "kind": "koopa"
+  },
+  {
+   "x": 211.0,
+   "y": 194.0,
+   "game_rules": true,
+   "kind": "koopa"
+  },
+  {
+   "x": 242.0,
+   "y": 194.0,
+   "game_rules": true,
+   "kind": "koopa"
+  },
+  {
+   "x": 281.0,
+   "y": 194.0,
+   "game_rules": true
+  },
+  {
+   "x": 304.0,
+   "y": 194.0,
+   "game_rules": true
+  },
+  {
+   "x": 324.0,
+   "y": 194.0,
+   "game_rules": true
+  },
+  {
+   "x": 344.0,
+   "y": 194.0,
+   "game_rules": true
+  },
+  {
+   "x": 446.0,
+   "y": 194.0,
+   "game_rules": true
+  },
+  {
+   "x": 481.0,
+   "y": 194.0,
+   "game_rules": true
+  },
+  {
+   "x": 503.0,
+   "y": 194.0,
+   "game_rules": true
+  },
+  {
+   "x": 520.0,
+   "y": 194.0,
+   "game_rules": true
+  },
+  {
+   "x": 656.0,
+   "y": 194.0,
+   "game_rules": true,
+   "kind": "koopa"
+  },
+  {
+   "x": 676.0,
+   "y": 194.0,
+   "game_rules": true,
+   "kind": "koopa"
+  },
+  {
+   "kind": "piranha_plant",
+   "x": 712.0,
+   "pipe_top": 160.0,
+   "phase": 0
+  },
+  {
+   "kind": "piranha_plant",
+   "x": 824.0,
+   "pipe_top": 160.0,
+   "phase": 0
+  },
+  {
+   "x": 965.0,
+   "y": 194.0,
+   "game_rules": true,
+   "kind": "paratroopa"
+  },
+  {
+   "x": 1041.0,
+   "y": 194.0,
+   "game_rules": true
+  },
+  {
+   "x": 1060.0,
+   "y": 194.0,
+   "game_rules": true
+  },
+  {
+   "x": 1080.0,
+   "y": 194.0,
+   "game_rules": true
+  },
+  {
+   "x": 1220.0,
+   "y": 194.0,
+   "game_rules": true
+  },
+  {
+   "x": 1240.0,
+   "y": 194.0,
+   "game_rules": true
+  },
+  {
+   "x": 1260.0,
+   "y": 194.0,
+   "game_rules": true
+  },
+  {
+   "x": 1348.0,
+   "y": 194.0,
+   "game_rules": true,
+   "kind": "paratroopa"
+  },
+  {
+   "x": 1380.0,
+   "y": 194.0,
+   "game_rules": true,
+   "kind": "paratroopa"
+  },
+  {
+   "x": 1399.0,
+   "y": 194.0,
+   "game_rules": true,
+   "kind": "paratroopa"
+  },
+  {
+   "x": 1589.0,
+   "y": 194.0,
+   "game_rules": true
+  },
+  {
+   "x": 1627.0,
+   "y": 194.0,
+   "game_rules": true
+  },
+  {
+   "x": 1649.0,
+   "y": 194.0,
+   "game_rules": true
+  },
+  {
+   "x": 1668.0,
+   "y": 194.0,
+   "game_rules": true
+  },
+  {
+   "x": 1688.0,
+   "y": 194.0,
+   "game_rules": true
+  },
+  {
+   "x": 1935.0,
+   "y": 194.0,
+   "game_rules": true
+  },
+  {
+   "x": 1955.0,
+   "y": 194.0,
+   "game_rules": true
+  },
+  {
+   "x": 1972.0,
+   "y": 194.0,
+   "game_rules": true
+  },
+  {
+   "x": 2023.0,
+   "y": 194.0,
+   "game_rules": true,
+   "kind": "koopa"
+  },
+  {
+   "x": 2162.0,
+   "y": 194.0,
+   "game_rules": true
+  },
+  {
+   "x": 2181.0,
+   "y": 194.0,
+   "game_rules": true
+  },
+  {
+   "x": 2308.0,
+   "y": 194.0,
+   "game_rules": true,
+   "kind": "koopa"
+  },
+  {
+   "x": 2327.0,
+   "y": 194.0,
+   "game_rules": true,
+   "kind": "koopa"
+  },
+  {
+   "kind": "piranha_plant",
+   "x": 2504.0,
+   "pipe_top": 112.0,
+   "phase": 0
+  },
+  {
+   "kind": "piranha_plant",
+   "x": 2616.0,
+   "pipe_top": 176.0,
+   "phase": 0
+  },
+  {
+   "x": 2775.0,
+   "y": 194.0,
+   "game_rules": true,
+   "kind": "paratroopa"
+  },
+  {
+   "x": 2833.0,
+   "y": 194.0,
+   "game_rules": true,
+   "kind": "paratroopa"
+  },
+  {
+   "x": 2854.0,
+   "y": 194.0,
+   "game_rules": true,
+   "kind": "paratroopa"
+  },
+  {
+   "x": 2887.0,
+   "y": 194.0,
+   "game_rules": true,
+   "kind": "paratroopa"
+  },
+  {
+   "x": 2904.0,
+   "y": 194.0,
+   "game_rules": true,
+   "kind": "paratroopa"
+  }
+ ],
+ "goal": [
+  3177,
+  0,
+  16,
+  240
+ ],
+ "metadata": {
+  "game_level": {
+   "copied_from": "Level5-1",
+   "left_out": {
+    "what question blocks hold (each given a coin)": 0,
+    "Bullet Bill with no cannon found": 1
+   }
+  }
+ }
+}
