@@ -183,6 +183,45 @@ the laid-out levels. What it had sampled on them was deleted; what it had
 sampled in random levels and skill scenes, with round 1's network playing,
 is kept (`outcomes_20261111l`, unfinished).
 
+**The generator widened** (2026-11-11, `sim/levels.py`). What the three
+building levels are made of, beyond what the generator drew, was measured
+and added as pieces drawn at random:
+
+| In the building levels | Now drawn |
+|---|---|
+| Pipes 5 and 6 tiles tall, each with something lower to jump from before it | Pipes 2 to 6 tiles; one over 4 has a way up: a lower pipe, a step, or a ledge with a pit between |
+| Staircases that only go up (to 5 and 6 tiles), Goombas standing on their steps, a pit at the foot | Staircases up and down, up only (3 to 6 tiles, Goombas on the steps, sometimes a pit at the foot), or a wall with steps down |
+| Lone steps, and two of unlike heights side by side (3 then 6) | A step of 1 to 4 tiles, half the time with a second beside it |
+| A walkway of floating tiles over a pit 8 tiles wide, five Goombas on it | A bridge: steps up to a walkway over a pit 5 to 8 tiles wide, up to three Goombas on it |
+| Brick rows over pits; rows 5 tiles up; rows 11 tiles long; Koopas walking on rows | Pits roofed with bricks a quarter of the time; rows 4 or 5 tiles up and 1 to 11 long, an enemy on one in four |
+| Koopas, Goombas and Paratroopas in twos and threes | Files of one to three |
+| Pieces touching, or one or two tiles apart | 0 to 8 tiles of floor between pieces in whole levels (it was 3 to 8) |
+
+Still missing: Hammer Bros, lifts, blocks invisible until hit.
+
+**Can every world be passed at all?** `sim/passable.py` searches button
+presses for a way through a world with its enemies taken out, knowing
+nothing of the agent. All 3,000 skill scenes and all 100 whole levels
+checked can be passed, so what the agent fails in them is the policy's to
+learn, not an arrangement no player could pass.
+
+**The exam on the widened worlds**, before any learning in them (100 random
+levels and 100 scenes of each of the ten kinds, both ways to play; counts
+are plays):
+
+| | Random levels | Skill scenes | Weakest kind of scene |
+|---|---|---|---|
+| The hand-written chooser (the yardstick) | 83 of 200 | 1,868 of 2,000 | bridge, 105 of 200 |
+| The old network `outcome_20261109d` | 151 of 200 | 1,962 of 2,000 | bridge, 173 of 200 |
+| Round 1 | 153 of 200 | 1,987 of 2,000 | two pieces close together, 191 of 200 |
+
+Two things show. The difficulty the real levels had is now in Block SMB's
+own random worlds: whole levels fell from 185 of 200 to 153 for the same
+network. And the learned chooser carries over to pieces neither it nor the
+hand-written one had met far better than the hand-written one does (153
+against 83). Round 2 samples outcomes in these worlds, round 1's network
+playing (`outcomes_20261111m`), and trains on rounds 1 and 2.
+
 Scored on the real game (nothing learned there), obstacles passed and whole
 levels finished:
 

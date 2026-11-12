@@ -97,7 +97,7 @@ Mario Bros (`retroagi/domains/smb`):
 | The choices and the state as tokens | `choices.py` |
 | A hand-written chooser (the behaviour that visits the states outcomes are sampled at, and the baseline to beat) | `scripted_chooser.py` |
 | Perception: vision, tracking, motion estimate, vision to state | `perception/` |
-| The practice world: random levels of the game's pieces in a simulator | `sim/` |
+| The practice world: random levels and skill scenes of the game's pieces in a simulator, and a search that tells whether a world can be passed at all | `sim/` |
 | The real game in the emulator, its game-memory state source, the obstacle benches | `nes/` |
 | The ways to play and what a point is worth in each, and the parts with alternatives | `domain.py` |
 
@@ -127,10 +127,12 @@ benches from game memory and from vision.
   it is learned or set from Block SMB alone.
 - **Block SMB does not yet behave as all of the game does**: it lacks
   enemies the real levels have (Lakitu and his Spinies, Hammer Bros, Buzzy
-  Beetles) and lifts, and its random levels do not draw every piece and
-  spacing real levels are made of. (It is not meant to have the game's
+  Beetles), lifts and blocks invisible until hit. Its random levels draw
+  the pieces and spacings measured in three real levels, and may still
+  lack what other levels are made of. (It is not meant to have the game's
   graphics or its levels: [requirements.md](requirements.md).) The agent
-  finishes 92% to 96% of fresh Block SMB levels and one real level.
+  finishes about three quarters of fresh Block SMB levels and one real
+  level.
 - **The controller's parameters are set by hand**, not learned in Block
   SMB and passed in.
 - **Mario's own motion is transcribed from the game**

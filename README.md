@@ -58,7 +58,12 @@ million choices tried in Block SMB's skill scenes and random levels):
 - **In Block SMB** (worlds not trained on, both ways to play): the
   network's chooser finishes 185 of 200 plays of 100 random levels and
   passes 1,593 of 1,600 skill scenes; the hand-written chooser, kept as a
-  yardstick, finishes 192 of the 200.
+  yardstick, finishes 192 of the 200. Since then the random levels have
+  been widened with the kinds of piece measured in three real levels (tall
+  pipes with a way up, bridges, one-sided staircases, pieces touching):
+  on those, never trained on, the same network finishes 153 of 200 plays
+  and the hand-written chooser 83. A second round of learning in the
+  widened worlds is under way.
 - **In the real game** (scored, nothing learned there) it finishes World
   1-1 from the screen alone in 6 of 8 plays, a level its hand-written
   parts were adjusted on, and on four levels nobody looked at (Worlds 4-1,

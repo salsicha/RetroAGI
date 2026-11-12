@@ -151,6 +151,7 @@ What this rules out:
 | The controller takes learned parameters | Not yet: its margins and timings are set by hand. |
 | The controller is much faster than the deep models | Yes, measured below. Nothing it imports is a deep-learning library (kept so by a test). |
 | Block SMB is fast and cheap | Yes, measured below. |
+| Practice worlds are random, of the game's pieces | Random levels and skill scenes drawn from pieces and ranges measured in Worlds 1-1, 2-1, 3-1 and 5-1; every one checked so far can be passed by some sequence of buttons (`sim/passable.py`). |
 | No game assets, no real layouts in Block SMB | Block SMB draws plain boxes and loads no picture. Since 2026-11-11 no practice world has a real level's layout (kept so by a test). Three real levels had been laid out as practice worlds that day; the second training round, which had begun to sample them, was stopped and what it had sampled on them deleted. No kept network learned from them. |
 | In Block SMB the state is a lookup | Yes. |
 | Composable, interchangeable parts | Interfaces for every part; so far one part has an alternative (how other things are predicted to move). |
