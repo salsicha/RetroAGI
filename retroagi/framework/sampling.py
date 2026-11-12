@@ -216,7 +216,17 @@ def sample(domain, seed: int, mode: str, *, kind: str = "level", driver: Optiona
     shard["outcomes"] = np.array(sampler.outcomes, np.float32).reshape(-1, len(OUTCOME_FIELDS))
     shard["seed"] = np.full(states, seed, np.int32)
     shard["mode"] = np.full(states, domain.modes.index(mode), np.int8)
+    shard["kinds"] = np.array([kinds_of(domain.space.spec)])
     return shard
+
+
+def kinds_of(spec) -> str:
+    """The kinds of choice of a choice space (their names, token groups,
+    heads and variants), as a sampled shard records them: what its rows'
+    (kind, modifier) mean."""
+    import json
+
+    return json.dumps([[k.name, k.group, k.first, k.modifiers] for k in spec.kinds])
 
 
 _DRIVERS: dict = {}  # (a worker process loads a driver's network once)
@@ -266,7 +276,10 @@ def _joined(shards: list) -> dict:
     """Shards joined, each choice's state index made global. A token group
     sampled when it had fewer numbers (a kind of thing added to the domain
     since, whose number is appended at the end) is filled out with zeros:
-    nothing then was of the new kind."""
+    nothing then was of the new kind. "kinds" is the set of choice spaces
+    the shards were sampled with (kinds_of; "" for a shard from before they
+    were recorded)."""
+    spaces = sorted({str(s.pop("kinds", [""])[0]) for s in shards})
     for key in shards[0]:
         widest = max(s[key].shape[-1] for s in shards)
         for s in shards:
@@ -281,6 +294,7 @@ def _joined(shards: list) -> dict:
         offset += len(shard["seed"])
     out = {k: np.concatenate([s[k] for s in shards]) for k in shards[0] if k != "choices"}
     out["choices"] = np.concatenate(choices)
+    out["kinds"] = spaces
     return out
 
 
@@ -302,7 +316,10 @@ def pack(folder: str, parts: int = 8) -> None:
         group = files[k::parts]
         if not group:
             continue
-        np.savez_compressed(Path(folder) / f"part_{k:02d}.npz", **_joined([dict(np.load(p)) for p in group]))
+        joined = _joined([dict(np.load(p)) for p in group])
+        if len(joined["kinds"]) != 1:
+            raise ValueError(f"shards in {folder} were sampled for different kinds of choice: {joined['kinds']}")
+        np.savez_compressed(Path(folder) / f"part_{k:02d}.npz", **{**joined, "kinds": np.array(joined["kinds"])})
         for p in group:
             p.unlink()
 

@@ -32,10 +32,11 @@ from .outcome_network import (
     pick,
     save,
 )
-from .sampling import OUTCOME_FIELDS, load
+from .sampling import OUTCOME_FIELDS, kinds_of, load
 
 BATCH = 2048
-STEPS = 20_000
+# (the larger network went on learning to 40,000: outcome_network.OutcomeConfig)
+STEPS = 40_000
 LEARNING_RATE = 3e-4
 
 
@@ -65,6 +66,9 @@ class Data:
 
     def __init__(self, folder: str, spec: ChoiceSpec, ends: tuple, device):
         d = load(folder)  # (one folder, or several: their shards together)
+        if d["kinds"] != [kinds_of(spec)]:
+            raise ValueError(f"outcomes in {folder} were sampled for other kinds of choice than the domain's "
+                             f"(a row's kind and modifier would mean another choice): {d['kinds']}")
         self.spec = spec
         # (sampled when a group had fewer numbers: zeros for those added since, sampling._joined)
         self.tokens = [torch.as_tensor(np.pad(d[g.name], [(0, 0)] * (d[g.name].ndim - 1)

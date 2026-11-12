@@ -13,7 +13,7 @@
 #   scripts/learn_in_block_smb.sh NAME
 #
 # Settings, from the environment: ROUNDS (3), LEVELS (300) and SCENES (400) sampled a round,
-# STEPS (20000) of training, the network's size (WIDTH 96, LAYERS 3, HEADS 4), WORKERS (14), and
+# STEPS (40000) of training, the network's size (WIDTH 192, LAYERS 4, HEADS 4), WORKERS (14), and
 # where things go: DATA (data/datasets/block_smb) and OUT (artifacts/block_smb). The last round's network is OUT/outcome_NAME_<ROUNDS>/outcome.pt.
 #
 # A round that has taken its exam is not done again: the same NAME with more ROUNDS goes on
@@ -24,9 +24,9 @@ NAME=${1:?usage: scripts/learn_in_block_smb.sh NAME}
 ROUNDS=${ROUNDS:-3}
 LEVELS=${LEVELS:-300}
 SCENES=${SCENES:-400}
-STEPS=${STEPS:-20000}
-WIDTH=${WIDTH:-96}
-LAYERS=${LAYERS:-3}
+STEPS=${STEPS:-40000}
+WIDTH=${WIDTH:-192}
+LAYERS=${LAYERS:-4}
 HEADS=${HEADS:-4}
 WORKERS=${WORKERS:-14}
 DATA=${DATA:-data/datasets/block_smb}

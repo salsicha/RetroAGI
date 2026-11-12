@@ -5,6 +5,7 @@ import numpy as np
 import torch
 
 from retroagi.domains.smb.choices import (
+    CARES,
     ENEMY_SLOTS,
     GENERAL,
     ITEM_SLOTS,
@@ -39,8 +40,9 @@ def test_one_pass_gives_every_choice_its_predictions():
     model = OutcomeNetwork(SPEC, SMALL)
     general, land, enemy, item = model(*(torch.as_tensor(t)[None] for t in tokens()))
     n = len(PREDICTIONS)
-    assert land.shape == (1, SURFACE_SLOTS, 4, n) and enemy.shape == (1, ENEMY_SLOTS, 3, n)
-    assert item.shape == (1, ITEM_SLOTS, 1, n) and general.shape == (1, 1, len(GENERAL), n)
+    # (each jump and run in every care: controller.CARE)
+    assert land.shape == (1, SURFACE_SLOTS, 4 * CARES, n) and enemy.shape == (1, ENEMY_SLOTS, 3 * CARES, n)
+    assert item.shape == (1, ITEM_SLOTS, CARES, n) and general.shape == (1, 1, len(GENERAL), n)
     # pick takes each choice's row from its own head.
     out = tuple(o.expand(6, *o.shape[1:]) for o in (general, land, enemy, item))
     kind = torch.tensor([0, 1, 2, 4, 5, 6])
@@ -48,8 +50,8 @@ def test_one_pass_gives_every_choice_its_predictions():
     modifier = torch.tensor([1, 0, 1, 1, 0, 0])
     p = pick(SPEC, out, kind, slot, modifier)
     assert torch.equal(p[0], land[0, 2, 1]) and torch.equal(p[1], enemy[0, 1, 0])
-    assert torch.equal(p[2], enemy[0, 1, 2]) and torch.equal(p[3], general[0, 0, GENERAL.index((4, 1))])
-    assert torch.equal(p[4], land[0, 3, 3]) and torch.equal(p[5], item[0, 1, 0])
+    assert torch.equal(p[2], enemy[0, 1, CARES + 1]) and torch.equal(p[3], general[0, 0, GENERAL.index((4, 1))])
+    assert torch.equal(p[4], land[0, 3, 3 * CARES]) and torch.equal(p[5], item[0, 1, 0])
     chances = predict(model, tokens(), [(0, 0, 0), (3, -1, 1)], "cpu")
     assert chances.shape == (2, n) and ((0 <= chances[:, :3]) & (chances[:, :3] <= 1)).all()
 

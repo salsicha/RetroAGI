@@ -6,13 +6,18 @@ interfaces.ChoiceSpace).
 A choice is a verb, the thing it is about and a modifier, carried out by the
 controller (controller.Controller):
 - "land" on a surface on screen, near, in the middle or far along it;
-- "stomp" an enemy on screen, or "pass" it, beyond it (modifier 0) or back
-  on Mario's side (1);
+- "stomp" an enemy on screen, or "pass" it, beyond it or back on Mario's
+  side;
 - "run" RUN_SHORT or RUN_LONG pixels forward keeping speed, or RUN_BACK back;
 - "wait" WAITS frames;
 - "bump" a block over Mario's reach from below (a question block gives a coin
   or a mushroom; big Mario breaks a brick);
 - "collect" an item on screen (a mushroom).
+Every jump and run comes in each of the controller's ways of carrying it
+out (controller.CARE: bold, usual, careful), so that how carefully is
+chosen, by the outcome network's predictions, as the choice itself is
+(user, 2026-11-12). A modifier is variant * len(CARE) + care, the variant
+being the placement, the side or the run (0 where a choice has none).
 SPACE.candidates lists them for a state; SPACE.tokens turns the state into
 the network's tokens and says which slot each thing took; the rest of
 SPACE tells the chooser what it needs to remember what it tried where.
@@ -23,16 +28,18 @@ import numpy as np
 from retroagi.framework.interfaces import Candidate
 from retroagi.framework.outcome_network import ChoiceSpec, Kind, TokenGroup
 
-from .controller import Choice, State
+from .controller import CARE, Choice, State
 from .planner import ENEMY_KINDS, Goal
 
 KINDS = ("land", "stomp", "pass", "run", "wait", "bump", "collect")
 PREFERS = ("near", "middle", "far")
 RUN_SHORT, RUN_LONG, RUN_BACK = 32, 96, 48
 WAITS = (8, 24)
+# The ways of carrying a choice out (controller.CARE), each a variant.
+CARES = len(CARE)
 # The choices about no thing, in the order the network's general head gives
-# them: (kind, modifier).
-GENERAL = ((3, 0), (3, 1), (3, 2), (4, 0), (4, 1))
+# them: (kind, modifier): the three runs in each care, then the two waits.
+GENERAL = tuple((3, m) for m in range(3 * CARES)) + ((4, 0), (4, 1))
 # How far ahead and behind Mario a surface is a landing candidate (pixels),
 # and at most how many of each kind of thing are candidates (the nearest).
 AHEAD, BEHIND = 176, 64
@@ -54,20 +61,20 @@ X, Y, SPEED = 256.0, 240.0, 4.0
 SPEC = ChoiceSpec(
     groups=(
         TokenGroup("mario", 0, MARIO_WIDTH, len(GENERAL), (X, Y, X, Y, SPEED, SPEED, 1.0)),
-        TokenGroup("surfaces", SURFACE_SLOTS, SURFACE_WIDTH, 4, (X, Y, X, Y) + (1.0,) * len(SURFACE_KINDS),
+        TokenGroup("surfaces", SURFACE_SLOTS, SURFACE_WIDTH, 4 * CARES, (X, Y, X, Y) + (1.0,) * len(SURFACE_KINDS),
                    present=(4, SURFACE_WIDTH)),
-        TokenGroup("enemies", ENEMY_SLOTS, ENEMY_WIDTH, 3, (X, Y, X, Y, SPEED, SPEED, 1.0) + (1.0,) * len(ENEMY_KINDS),
-                   present=(0, ENEMY_WIDTH)),
-        TokenGroup("items", ITEM_SLOTS, ITEM_WIDTH, 1, (X, Y, X, Y, SPEED, SPEED), present=(0, ITEM_WIDTH)),
+        TokenGroup("enemies", ENEMY_SLOTS, ENEMY_WIDTH, 3 * CARES,
+                   (X, Y, X, Y, SPEED, SPEED, 1.0) + (1.0,) * len(ENEMY_KINDS), present=(0, ENEMY_WIDTH)),
+        TokenGroup("items", ITEM_SLOTS, ITEM_WIDTH, CARES, (X, Y, X, Y, SPEED, SPEED), present=(0, ITEM_WIDTH)),
     ),
     kinds=(
-        Kind("land", 1, 0, 3),
-        Kind("stomp", 2, 0, 1),
-        Kind("pass", 2, 1, 2),
-        Kind("run", 0, 0, 3),
-        Kind("wait", 0, 3, 2),
-        Kind("bump", 1, 3, 1),
-        Kind("collect", 3, 0, 1),
+        Kind("land", 1, 0, 3 * CARES),
+        Kind("stomp", 2, 0, CARES),
+        Kind("pass", 2, CARES, 2 * CARES),
+        Kind("run", 0, 0, 3 * CARES),
+        Kind("wait", 0, 3 * CARES, 2),
+        Kind("bump", 1, 3 * CARES, CARES),
+        Kind("collect", 3, 0, CARES),
     ),
 )
 # The chooser's memory of what it tried where: a spot is SPOT pixels square;
@@ -117,26 +124,31 @@ def candidates(state: State) -> list:
     reach = [s for s in state.solids if s.kind in ("ground", "pipe", "block", "question", "moving")
              and s.x1 > mx - BEHIND and s.x0 < mx + AHEAD]
     reach.sort(key=lambda s: max(s.x0 - mx, mx - s.x1, 0.0))
+
+    def each_care(kind, ref, variant, **choice):
+        for care in range(CARES):
+            out.append(Candidate(Choice(**choice, care=care), kind, ref, variant * CARES + care))
+
     for s in reach[:MAX_SURFACES]:
         for m, prefer in enumerate(PREFERS):
-            out.append(Candidate(Choice("jump", Goal("land", s.ref, s.x0, s.x1, prefer=prefer, top=s.top)), 0, s.ref, m))
+            each_care(0, s.ref, m, verb="jump", goal=Goal("land", s.ref, s.x0, s.x1, prefer=prefer, top=s.top))
     for e in sorted(state.enemies, key=lambda e: abs((e.box[0] + e.box[2]) / 2 - mx))[:MAX_ENEMIES]:
         beyond = 1 if (e.box[0] + e.box[2]) / 2 >= mx else -1
-        out.append(Candidate(Choice("jump", Goal("stomp", e.ref)), 1, e.ref, 0))
-        out.append(Candidate(Choice("jump", Goal("pass", e.ref, side=beyond)), 2, e.ref, 0))
-        out.append(Candidate(Choice("jump", Goal("pass", e.ref, side=-beyond)), 2, e.ref, 1))
-    out.append(Candidate(Choice("run", x=mx + RUN_SHORT, keep_speed=True), 3, None, 0))
-    out.append(Candidate(Choice("run", x=mx + RUN_LONG, keep_speed=True), 3, None, 1))
-    out.append(Candidate(Choice("run", x=mx - RUN_BACK), 3, None, 2))
+        each_care(1, e.ref, 0, verb="jump", goal=Goal("stomp", e.ref))
+        each_care(2, e.ref, 0, verb="jump", goal=Goal("pass", e.ref, side=beyond))
+        each_care(2, e.ref, 1, verb="jump", goal=Goal("pass", e.ref, side=-beyond))
+    each_care(3, None, 0, verb="run", x=mx + RUN_SHORT, keep_speed=True)
+    each_care(3, None, 1, verb="run", x=mx + RUN_LONG, keep_speed=True)
+    each_care(3, None, 2, verb="run", x=mx - RUN_BACK)
     for m, frames in enumerate(WAITS):
         out.append(Candidate(Choice("wait", frames=frames), 4, None, m))
     above = [s for s in state.solids if s.kind in ("block", "question") and s.bottom <= body[1]
              and s.bottom >= body[3] - BUMP_REACH and s.x1 > mx - BEHIND and s.x0 < mx + AHEAD]
     above.sort(key=lambda s: abs((s.x0 + s.x1) / 2 - mx))
     for s in above[:MAX_BUMPS]:
-        out.append(Candidate(Choice("jump", Goal("bump", s.ref, s.x0, s.x1, top=s.bottom)), 5, s.ref, 0))
+        each_care(5, s.ref, 0, verb="jump", goal=Goal("bump", s.ref, s.x0, s.x1, top=s.bottom))
     for i in sorted(state.items, key=lambda i: abs((i.box[0] + i.box[2]) / 2 - mx))[:ITEM_SLOTS]:
-        out.append(Candidate(Choice("jump", Goal("collect", i.ref)), 6, i.ref, 0))
+        each_care(6, i.ref, 0, verb="jump", goal=Goal("collect", i.ref))
     return out
 
 

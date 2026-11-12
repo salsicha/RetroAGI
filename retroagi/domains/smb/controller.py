@@ -33,8 +33,10 @@ from .physics import NESPlayerMotion
 from .planner import (
     BLOCK_KINDS,
     BUTTON,
+    ENEMY_MARGIN,
     HORIZON,
     RULES,
+    SAFE_AFTER,
     Enemy,
     Goal,
     Plan,
@@ -73,6 +75,28 @@ THREAT_FRAMES = 48
 LEVEL = 24
 
 
+@dataclass(frozen=True)
+class Care:
+    """How carefully a choice is carried out: enemies kept ``berth`` pixels
+    wider on every side when a jump's path is checked, a landing safe only
+    if no enemy reaches Mario within ``clear`` frames after it, and a run
+    ended by an enemy meeting Mario within ``threat`` frames."""
+
+    name: str
+    berth: float
+    clear: int
+    threat: int
+
+
+# The ways of carrying a choice out, each a variant of every jump and run
+# (choices.py): the outcome network predicts what each leads to and the
+# chooser picks among them as among any choices (user, 2026-11-12: "make
+# them part of each choice"). "usual" is the controller's hand-set way
+# before then.
+CARE = (Care("bold", 0.0, 6, 32), Care("usual", ENEMY_MARGIN, SAFE_AFTER, THREAT_FRAMES), Care("careful", 4.0, 20, 64))
+USUAL = 1
+
+
 @dataclass
 class Choice:
     verb: str  # "run", "jump", "wait"
@@ -81,6 +105,7 @@ class Choice:
     keep_speed: bool = False
     until_clear: Optional[tuple] = None  # wait: (enemy ref, level x)
     frames: int = 120  # wait: at most
+    care: int = USUAL  # jump, run: how carefully (CARE)
 
 
 @dataclass
@@ -213,8 +238,10 @@ class Controller:
             thing = next((e for e in state.enemies + state.items if e.ref == goal.ref), None)
             target = (thing.box[0] + thing.box[2]) / 2 if thing else middle
             direction = 1 if target >= middle else -1
+        care = CARE[self.choice.care]
         self.plan = plan_jump(goal, state.motion, state.body, state.solids, state.enemies, direction,
-                              latest_takeoff=latest_takeoff, items=state.items, dynamics=self.dynamics)
+                              latest_takeoff=latest_takeoff, items=state.items, dynamics=self.dynamics,
+                              berth=care.berth, safe_after=care.clear)
         # The plan's first button is pressed this frame (or, from start, the
         # first press).
         self.plan_frame = max(0, self.frame - 1)
@@ -246,9 +273,10 @@ class Controller:
                 # is ahead, any safe landing taking off as soon (in 5-1 the
                 # pass over two Koopas, vision's one, failed in the run-up,
                 # and Mario coasted into them).
+                care = CARE[self.choice.care]
                 fallback = plan_jump(None, state.motion, state.body, state.solids, state.enemies,
                                      plan.direction, latest_takeoff=plan.pre_run - step, items=state.items,
-                                     dynamics=self.dynamics)
+                                     dynamics=self.dynamics, berth=care.berth, safe_after=care.clear)
                 if fallback is None:
                     return 0
                 self.plan, self.plan_frame, self.event = fallback, max(0, self.frame - 1), None
@@ -289,8 +317,10 @@ class Controller:
         rest = plan.buttons[step:]
         hold_left = next((k for k, b in enumerate(rest) if b not in (2, 4, 5)), len(rest))
         aim = (plan.outcome.body[0] + plan.outcome.body[2]) / 2
+        care = CARE[self.choice.care]
         flight = plan_flight(goal, state.motion, state.body, state.solids, state.enemies, plan.direction,
-                             hold_left, aim, items=state.items, dynamics=self.dynamics)
+                             hold_left, aim, items=state.items, dynamics=self.dynamics, berth=care.berth,
+                             safe_after=care.clear)
         if flight is None or flight.buttons == rest[:len(flight.buttons)]:
             return plan, step
         if flight.outcome.stomped is None:
@@ -311,7 +341,7 @@ class Controller:
             self.event = "blocked"
             return 0
         ahead = [e for e in state.enemies if ((e.box[0] + e.box[2]) / 2 - middle) * direction > 0]
-        if any(meets_soon(state, e) for e in ahead):
+        if any(meets_soon(state, e, CARE[choice.care].threat) for e in ahead):
             self.event = "threat"
             return BUTTON[direction, False] if choice.keep_speed else 0
         if state.grounded and pit_ahead(state, direction):

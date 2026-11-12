@@ -76,8 +76,11 @@ class ChoiceSpec:
 
 @dataclass
 class OutcomeConfig:
-    width: int = 96
-    layers: int = 3
+    # (twice as wide and a layer deeper as at first: trained on the same
+    # outcomes, it finished 162 of 200 plays of fresh Block SMB levels to 140,
+    # 2026-11-12)
+    width: int = 192
+    layers: int = 4
     heads: int = 4
     # How many of each group's numbers the network reads (the first ones;
     # empty: all of them). A network trained before a group gained numbers
