@@ -53,9 +53,9 @@ def main(argv=None) -> int:
     rows = [
         ("pipe heights (tiles)", spans(pipes), f"{made.PIPE_TILES}", max(pipes, default=0) <= max(made.PIPE_TILES)
          and min(pipes, default=9) >= min(made.PIPE_TILES)),
-        ("pit widths (tiles)", spans(pits), f"{tuple(sorted(set(made.PIT_TILES)))}",
-         max(pits, default=0) <= max(made.PIT_TILES) and min(pits, default=9) >= min(made.PIT_TILES)),
-        ("step heights (tiles)", spans(steps), f"1 to {max(made.STAIR_TILES)}, 8 before the flag",
+        ("pit widths (tiles)", spans(pits), f"{tuple(sorted(set(made.PIT_TILES)))}, to {made.BRIDGE_TILES[1]} bridged",
+         max(pits, default=0) <= made.BRIDGE_TILES[1] and min(pits, default=9) >= min(made.PIT_TILES)),
+        ("step heights (tiles)", spans(steps), f"1 to {max(made.STAIR_UP)}, 8 before the flag",
          max(steps, default=0) <= 8),
         ("floor between pieces (tiles)", spans(g for g in gaps if g <= 8), f"{made.FLAT[0]} to {made.FLAT[1]} "
          f"(pairs {made.PAIR_FLAT[0]} to {made.PAIR_FLAT[1]})", min(gaps, default=9) >= made.PAIR_FLAT[0]),

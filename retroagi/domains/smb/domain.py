@@ -22,6 +22,7 @@ from .choices import KINDS, RUN_BACK, RUN_LONG, SPACE
 from .controller import Choice, Controller
 from .planner import ENEMY_FALL, ENEMY_GRAVITY, FEET_BELOW, RULES, WALL_DEPTH, Goal
 from .scripted_chooser import ScriptedChooser
+from .sim.levels import SCENE_KINDS
 
 # What a point is worth, in pixels of progress a frame, in each way to play.
 POINT_VALUE = {"speed_run": 0.0, "max_points": 0.2}
@@ -88,7 +89,7 @@ class SuperMarioBros:
     # (a stretch calling for one skill: sim/levels.SCENE_KINDS). Every one is
     # drawn at random from the game's pieces: no practice world has a real
     # level's layout, which nothing may learn (docs/requirements.md).
-    practices = ("level", "pipe", "pit", "goombas", "bricks", "stairs", "questions", "cannon", "pair")
+    practices = ("level", *SCENE_KINDS)
 
     def practice(self, seed: int, kind: str = "level"):
         from .sim.levels import random_level, skill_scene

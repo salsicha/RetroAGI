@@ -79,3 +79,67 @@ def test_a_skill_scene_is_one_piece_of_its_kind_with_no_flag_and_is_passed_beyon
     rows = practice.run(DOMAIN, [], kinds=("pit", "pipe"), scenes=[100003])
     assert [r["kind"] for r in rows] == ["pit", "pit", "pipe", "pipe"]
     assert practice.summary(rows) == {"pit": (2, 2), "pipe": (2, 2)}  # (the hand-written chooser passes these)
+
+
+def test_the_levels_hold_the_pieces_measured_in_worlds_2_1_3_1_and_5_1():
+    from retroagi.domains.smb.sim.levels import (
+        BETWEEN_PITS,
+        BOTTOM,
+        BRIDGE_TILES,
+        REACH,
+        TILE,
+        skill_scene,
+    )
+
+    def solids(scene):
+        return [(p, kind) for p, kind in zip(scene["platforms"], scene["platform_kinds"])]
+
+    tall = 0
+    for seed in range(80):
+        # A pipe too tall to jump onto from the floor has a lower thing to jump from just before it.
+        scene = skill_scene(seed, "pipe")
+        for p, kind in solids(scene):
+            if kind == "pipe" and FLOOR - p[1] > REACH * TILE:
+                tall += 1
+                assert any(q[1] < FLOOR and 0 <= p[0] - (q[0] + q[2]) <= 4 * TILE and FLOOR - q[1] <= REACH * TILE
+                           and q[1] - p[1] <= REACH * TILE for q, _ in solids(scene))
+        # A bridge: one walkway in the air over a pit as long as it, steps up to it.
+        scene = skill_scene(seed, "bridge")
+        walkways = [p for p, kind in solids(scene) if kind == "ground" and p[1] + p[3] < FLOOR]
+        assert len(walkways) == 1
+        x0, top, width, _ = walkways[0]
+        assert BRIDGE_TILES[0] <= width // TILE <= BRIDGE_TILES[1] and top == FLOOR - REACH * TILE
+        assert not any(kind in ("ground", "pipe", "cannon") and p[1] + p[3] == BOTTOM and p[0] < x0 + width
+                       and x0 < p[0] + p[2] for p, kind in solids(scene))
+        heights = sorted(FLOOR - p[1] for p, kind in solids(scene) if kind == "ground" and p[0] + p[2] <= x0 and p[1] < FLOOR)
+        assert heights == [TILE * k for k in range(1, REACH + 1)]
+        # Enemies stand on what is under them: the floor, a step, a row or the walkway.
+        for enemy in scene["enemies"]:
+            assert enemy["y"] + 14 == top and x0 <= enemy["x"] < x0 + width
+        # Two pits never run together, however close the pieces.
+        pits = random_level(seed, 2, only="pit", flat=(0, 0), flag=False)
+        floor = sorted(p for p, kind in solids(pits) if kind == "ground" and p[1] == FLOOR)
+        assert len(floor) == 3 and floor[1][2] >= BETWEEN_PITS * TILE
+    assert tall >= 5
+    # Whole levels put pieces as close as the game does: some touch.
+    assert any(level["world_width"] != random_level(seed, flat=(3, 8))["world_width"]
+               for seed in range(5) for level in [random_level(seed)])
+
+
+def test_every_kind_of_practice_world_can_be_got_through_by_some_presses():
+    from retroagi.domains.smb.sim.levels import SCENE_KINDS, TILE, skill_scene
+    from retroagi.domains.smb.sim.passable import passable
+
+    for kind in SCENE_KINDS:
+        for seed in range(100200, 100204):
+            assert passable(skill_scene(seed, kind))["passable"], (kind, seed)
+    assert passable(random_level(100200))["passable"]
+    # It tells a world nobody could pass: the same pit made 14 tiles wide.
+    scene = skill_scene(100200, "pit")
+    far = max(range(len(scene["platforms"])), key=lambda k: scene["platforms"][k][0])
+    edge = scene["platforms"][far][0]
+    scene["platforms"][far][0] += 14 * TILE
+    scene["platforms"][far][2] -= 14 * TILE
+    scene["metadata"]["scene"]["passed"] += 14 * TILE
+    found = passable(scene, expansions=1500)
+    assert not found["passable"] and found["x"] < edge + 14 * TILE  # (no press carries him to its far side)
