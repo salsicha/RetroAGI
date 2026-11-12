@@ -13,8 +13,8 @@
 #   scripts/learn_in_block_smb.sh NAME
 #
 # Settings, from the environment: ROUNDS (3), LEVELS (300) and SCENES (400) sampled a round,
-# STEPS (20000) of training, WORKERS (14), and where things go: DATA (data/datasets/block_smb)
-# and OUT (artifacts/block_smb). The last round's network is OUT/outcome_NAME_<ROUNDS>/outcome.pt.
+# STEPS (20000) of training, the network's size (WIDTH 96, LAYERS 3, HEADS 4), WORKERS (14), and
+# where things go: DATA (data/datasets/block_smb) and OUT (artifacts/block_smb). The last round's network is OUT/outcome_NAME_<ROUNDS>/outcome.pt.
 #
 # A round that has taken its exam is not done again: the same NAME with more ROUNDS goes on
 # from where an earlier run stopped (an unfinished round is done again from its start; play
@@ -25,6 +25,9 @@ ROUNDS=${ROUNDS:-3}
 LEVELS=${LEVELS:-300}
 SCENES=${SCENES:-400}
 STEPS=${STEPS:-20000}
+WIDTH=${WIDTH:-96}
+LAYERS=${LAYERS:-3}
+HEADS=${HEADS:-4}
 WORKERS=${WORKERS:-14}
 DATA=${DATA:-data/datasets/block_smb}
 OUT=${OUT:-artifacts/block_smb}
@@ -56,7 +59,7 @@ for round in $(seq 1 "$ROUNDS"); do
   data+=("$sampled")
   echo "round $round: training $(date +%T)"
   python -m retroagi.framework.training --domain smb --data "${data[@]}" --fresh "$fresh" --steps "$STEPS" \
-    --output "$network"
+    --width "$WIDTH" --layers "$LAYERS" --heads "$HEADS" --output "$network"
   driver=(--driver "$network/outcome.pt")
   echo "round $round: the Block SMB exam $(date +%T)"
   python -m retroagi.framework.practice --domain smb --levels "$EXAM_LEVELS" --scenes "$EXAM_SCENES" \

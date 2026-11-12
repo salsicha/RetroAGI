@@ -25,6 +25,7 @@ from retroagi.domains.smb.perception.state import (
     hopper_speed,
     perceived,
     solids_of,
+    thrown_box,
 )
 from retroagi.domains.smb.physics import NESPlayerMotion
 from retroagi.domains.smb.planner import Enemy, floor_behind, screen_edge
@@ -36,7 +37,7 @@ from .pixel_labels import (
     Unexplained,
     label_frame,
 )
-from .truth import true_frame
+from .truth import hammers, true_frame
 
 # The solids are labelled again once the camera has scrolled this far
 # (pixels) or this many frames have passed (blocks bumped, broken): they
@@ -52,9 +53,10 @@ TRACK_FRAMES = 32
 
 
 # The planner's kind of enemy (smb_planner.ENEMY_KINDS) by the game's enemy
-# code (pixel_labels.ENEMY_KIND_TYPES): a Piranha Plant, a Koopa Paratroopa,
-# a Bullet Bill; any other walker walks, anything else flies.
-SLOT_KINDS = {0x0D: "plant", 0x0E: "hopper", 0x33: "flier"}
+# code (pixel_labels.ENEMY_KIND_TYPES): a Hammer Bro, a Piranha Plant, a
+# Koopa Paratroopa, a Bullet Bill; any other walker walks, anything else
+# flies. A Hammer Bro's hammers (loose items, not enemies) are thrown things.
+SLOT_KINDS = {0x05: "walker", 0x0D: "plant", 0x0E: "hopper", 0x33: "flier"}
 
 
 class MemorySource:
@@ -148,6 +150,23 @@ class MemorySource:
                     continue
             enemies.append(Enemy(tuple(float(v) for v in box), vx, vy, ("slots", k), slot["stompable"], kind=kind,
                                  **seen))
+        thrown = hammers(ram, truth["camera"])
+        for slot in range(9):
+            key = ("misc", slot)
+            if slot not in thrown:
+                self.seen.pop(key, None)
+                self.tracks.pop(key, None)
+                continue
+            box = thrown_box(thrown[slot])
+            places, track = self.seen.setdefault(key, []), self.tracks.setdefault(key, [])
+            places.append((self.frame, box[0], box[1]))
+            del places[:-SPEED_FRAMES]
+            track.append((float(box[0]), float(box[1])))
+            del track[:-TRACK_FRAMES]
+            first, frames = places[0], self.frame - places[0][0]
+            vx, vy = ((box[0] - first[1]) / frames, (box[1] - first[2]) / frames) if frames >= MEASURED else (0.0, 0.0)
+            enemies.append(Enemy(tuple(float(v) for v in box), vx, vy, key, stompable=False, kind="thrown",
+                                 track=tuple(track), type="hammer"))
         if labelling:
             # The enemies drawn in the labelled frame hide the floor under them.
             self.solids = floor_behind(solids_of(scene_from_labels(labelled.scene), truth["camera"]), enemies)

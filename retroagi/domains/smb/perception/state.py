@@ -40,11 +40,15 @@ BIG_DRAWN, BIG_BODY_WIDTH, BIG_HEAD_ROOM = 20, 12, 8
 # one (_collision_box).
 KOOPA_DRAWN, MERGED_DRAWN = 20, 20
 # The planner's kind of enemy (smb_planner.ENEMY_KINDS) by the object type
-# vision tells (pixel_labels.ENEMY_TYPE_NUMBERS: a Piranha Plant, a Koopa
-# Paratroopa, a Bullet Bill); otherwise by vision's kind ("other": a flier).
-# A Bullet Bill can be stomped.
-TYPE_KINDS = {4: "plant", 5: "hopper", 9: "flier"}
-BULLET_TYPE = 9
+# vision tells (pixel_labels.ENEMY_TYPE_NUMBERS: a Hammer Bro, a Piranha
+# Plant, a Koopa Paratroopa, a Bullet Bill, a Hammer Bro's hammer);
+# otherwise by vision's kind ("other": a flier). A Bullet Bill can be
+# stomped.
+TYPE_KINDS = {2: "walker", 4: "plant", 5: "hopper", 9: "flier", 10: "thrown"}
+HAMMER_BRO_TYPE, BULLET_TYPE = 2, 9
+# A thrown thing collides by a square this wide at the middle of what is
+# drawn (Block SMB's hammer: sim/env.HAMMER_W).
+THROWN_SIDE = 8
 # A hopper's vertical speed is measured over its last this many frames
 # (hopper_speed).
 HOP_SAMPLES = 4
@@ -167,10 +171,14 @@ def perceived(feedback, scene, items: Optional[ItemTracker] = None) -> Optional[
             continue  # part of Mario's own sprite (big Mario's top half read as an enemy)
         world = (t.box[0] + camera, t.box[1], t.box[2] + camera, t.box[3])
         kind = TYPE_KINDS.get(t.type, "walker" if t.kind == "walker" else "plant" if t.kind == "plant" else "flier")
-        if kind in ("walker", "hopper"):
+        if t.type == HAMMER_BRO_TYPE:
+            world = hammer_bro_box(world)
+        elif kind in ("walker", "hopper"):
             world = _collision_box(world)
         elif kind == "plant":
             world = _plant_box(world)
+        elif kind == "thrown":
+            world = thrown_box(world)
         if len(t.samples) >= MEASURED:
             vx, vy = t.velocity
             if kind == "hopper":
@@ -225,6 +233,19 @@ def _collision_box(drawn) -> tuple:
     if right - left > MERGED_DRAWN:
         x1 = right - (left + 16 - x1)
     return (x0, top, x1, low)
+
+
+def hammer_bro_box(drawn) -> tuple:
+    """A Hammer Bro's collision box inside the 16 by 24 sprite vision draws,
+    as the game collides it (game memory, 3-1): 4 in from each side, from 3
+    below the drawn top to 3 below the drawn bottom."""
+    return (drawn[0] + 4, drawn[1] + 3, drawn[2] - 4, drawn[3] + 3)
+
+
+def thrown_box(drawn) -> tuple:
+    """A thrown thing's box: THROWN_SIDE square at the middle of what is drawn."""
+    mx, my = (drawn[0] + drawn[2]) / 2, (drawn[1] + drawn[3]) / 2
+    return (mx - THROWN_SIDE / 2, my - THROWN_SIDE / 2, mx + THROWN_SIDE / 2, my + THROWN_SIDE / 2)
 
 
 def hopper_speed(moves) -> float:

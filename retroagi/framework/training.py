@@ -66,7 +66,10 @@ class Data:
     def __init__(self, folder: str, spec: ChoiceSpec, ends: tuple, device):
         d = load(folder)  # (one folder, or several: their shards together)
         self.spec = spec
-        self.tokens = [torch.as_tensor(d[g.name], device=device) for g in spec.groups]
+        # (sampled when a group had fewer numbers: zeros for those added since, sampling._joined)
+        self.tokens = [torch.as_tensor(np.pad(d[g.name], [(0, 0)] * (d[g.name].ndim - 1)
+                                              + [(0, g.width - d[g.name].shape[-1])]), device=device)
+                       for g in spec.groups]
         self.choices = torch.as_tensor(d["choices"].astype(np.int64), device=device)
         self.targets = torch.as_tensor(targets(d["outcomes"], ends), device=device)
 
@@ -147,7 +150,7 @@ def train(domain, data_folder: str, eval_folder: str, output: str, steps: int = 
         loss.backward()
         optimizer.step()
         schedule.step()
-        if step % (steps // 10) == 0 or step == steps:
+        if step % max(1, steps // 10) == 0 or step == steps:
             measures = measure(model, fresh)
             log.append({"step": step, "loss": float(loss), "fresh": measures})
             a = measures["all"]
@@ -171,8 +174,14 @@ def main(argv=None) -> int:
     parser.add_argument("--output", required=True)
     parser.add_argument("--steps", type=int, default=STEPS)
     parser.add_argument("--batch", type=int, default=BATCH)
+    defaults = OutcomeConfig()
+    parser.add_argument("--width", type=int, default=defaults.width, help="numbers per token inside the network")
+    parser.add_argument("--layers", type=int, default=defaults.layers, help="transformer layers")
+    parser.add_argument("--heads", type=int, default=defaults.heads, help="attention heads a layer")
     args = parser.parse_args(argv)
-    final = train(registry.load(args.domain), args.data, args.fresh, args.output, args.steps, args.batch)
+    config = OutcomeConfig(width=args.width, layers=args.layers, heads=args.heads)
+    final = train(registry.load(args.domain), args.data, args.fresh, args.output, args.steps, args.batch,
+                  config=config)
     print(json.dumps(final["fresh"], indent=1))
     return 0
 

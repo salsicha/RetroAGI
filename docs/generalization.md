@@ -201,7 +201,26 @@ and added as pieces drawn at random:
 | Koopas, Goombas and Paratroopas in twos and threes | Files of one to three |
 | Pieces touching, or one or two tiles apart | 0 to 8 tiles of floor between pieces in whole levels (it was 3 to 8) |
 
-Still missing: Hammer Bros, lifts, blocks invisible until hit.
+Still missing: lifts, blocks invisible until hit.
+
+**Hammer Bros** (2026-11-12, from World 3-1's memory: 116 throws, three
+jumps, the walk). Block SMB's Hammer Bro has the game's 8 by 24 box (4 in
+from each side of its 16 by 24 drawing), walks 8 pixels either way at a
+quarter pixel a frame, jumps every 215 or 241 frames up to the floor 64
+pixels above (starting 6.25 pixels a frame upward, through the row over
+it) or down through what it stands on (3.25 upward), under 0.25 a frame,
+and throws a hammer every 49 or 50 frames, now and then one left out. A
+hammer is held 13 frames over its head, then thrown toward Mario at 1
+pixel a frame, starting 2 upward and falling a sixteenth of a pixel a
+frame faster each frame, through everything (in the game: 1 pixel a frame,
+gravity 0.0625 within a thousandth, every throw toward Mario). The
+generator has a piece of them (3-1's two rows of bricks 4 and 8 tiles up,
+a Bro under them and perhaps one on the lower row) and a skill scene of
+it. The planner predicts a hammer as a "thrown" thing (falling, through
+solids); the game-memory state reads hammers from the game's loose-item
+slots, and vision's already tells them (their own type). Never trained
+on, the hand-written chooser passes 107 of 200 Hammer Bros scenes and
+round 2's network 125.
 
 **Can every world be passed at all?** `sim/passable.py` searches button
 presses for a way through a world with its enemies taken out, knowing

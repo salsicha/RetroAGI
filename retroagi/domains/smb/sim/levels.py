@@ -24,6 +24,8 @@ and each level draws its own from those ranges (random_level):
 - Goombas, Koopa Troopas (a stomp leaves a shell that a touch kicks) and
   hopping Koopa Paratroopas, alone or in files of two or three;
 - Bullet Bill cannons;
+- Hammer Bros: one or two under and on two rows of bricks 4 and 8 tiles up
+  (3-1's), jumping from row to row and throwing hammers;
 - and a staircase before the flag.
 
 Pieces stand 0 to 8 tiles of floor apart. The floor is cut where a pipe or
@@ -34,8 +36,8 @@ where the real game does (SCROLL_X).
 
 A skill scene (skill_scene) is a short stretch of the same pieces that
 calls for one skill: one piece of a kind (SCENE_KINDS: a pipe, a pit,
-enemies, bricks, stairs, question blocks, a cannon, a step, a bridge) or
-two pieces close together ("pair"), Mario standing a few tiles before it, flat floor after
+enemies, bricks, stairs, question blocks, a cannon, a step, a bridge,
+Hammer Bros) or two pieces close together ("pair"), Mario standing a few tiles before it, flat floor after
 it and no flag. Scenes give outcome sampling its share of every piece, and
 a score for each.
 """
@@ -64,7 +66,13 @@ FLAT = (0, 8)
 END_FLAT = 10
 # The pieces and how often each comes.
 PIECES = {"pipe": 3, "pit": 2, "goombas": 3, "bricks": 2, "stairs": 2, "questions": 1, "cannon": 1, "step": 1,
-          "bridge": 1}
+          "bridge": 1, "hammer_bros": 1}
+# Hammer Bros' rows of bricks: their length (tiles; 3-1's are 10 and 11),
+# the second Bro there this share of the time; each Bro's first throw and
+# jump after a random wait up to its usual gap (sim/env.HAMMER_FRAMES and
+# HAMMER_BRO_JUMPS).
+HAMMER_ROW_TILES = (6, 11)
+SECOND_BRO = 0.5
 # Mario jumps onto a thing up to REACH tiles above where he stands. Pipes
 # (tiles tall; in those three worlds 2 (3 of them), 3 (5), 4 (6), 5 (1), 6
 # (1)): one taller than REACH has a way up before it (random_level).
@@ -301,6 +309,15 @@ def random_level(seed: int, pieces: int = 12, only: Optional[str] = None, start_
             if rng.random() < 0.5:
                 column(x, rng.randint(max(1, first - 3), min(6, first + 3)))
                 x += TILE
+        elif kind == "hammer_bros":  # two rows of bricks, a Bro under them and perhaps one on the lower
+            length = rng.randint(*HAMMER_ROW_TILES)
+            row(x, LOW_ROW, length)
+            row(x, HIGH_ROW, length - rng.randint(0, 1))
+            spots = [(x + 2 * TILE, FLOOR)] + ([(x + (length - 3) * TILE, LOW_ROW)] if rng.random() < SECOND_BRO else [])
+            for bx, top in spots:
+                enemies.append({**_goomba(bx, top, "hammer_bro"), "throw_wait": rng.randint(1, 50),
+                                "jump_wait": rng.randint(1, 241)})
+            x += length * TILE
         else:  # bridge: steps up, a walkway over a long pit, a step or two down
             for k in range(REACH):
                 column(x, k + 1)

@@ -68,7 +68,7 @@ def test_candidates_cover_every_kind_and_tokens_have_their_slots():
 
 
 def test_a_level_gives_states_choices_and_outcomes_that_line_up():
-    shard = sample(DOMAIN, 2, "speed_run", explore=0.3)
+    shard = sample(DOMAIN, 5, "speed_run", explore=0.3)
     states = len(shard["mario"])
     assert states > 10 and len(shard["choices"]) == len(shard["outcomes"])
     assert shard["choices"][:, 0].max() == states - 1
@@ -97,3 +97,17 @@ def test_a_skill_scene_is_sampled_until_it_is_passed_by_whatever_chooser_drives(
 
     waited = sample(DOMAIN, 5, "speed_run", kind="pit", driver=Waiter, explore=0.0, stalled=60)
     assert 1 <= len(waited["mario"]) <= 10
+
+
+def test_outcomes_sampled_before_a_kind_was_added_are_filled_out_with_zeros(tmp_path):
+    import numpy as np
+
+    from retroagi.framework.sampling import load
+
+    shard = sample(DOMAIN, 5, "speed_run", kind="pit", explore=0.0)
+    older = {k: (v[..., :-1] if k == "enemies" else v) for k, v in shard.items()}  # (one kind fewer)
+    np.savez(tmp_path / "a.npz", **shard)
+    np.savez(tmp_path / "b.npz", **older)
+    joined = load(tmp_path)
+    assert joined["enemies"].shape[-1] == shard["enemies"].shape[-1]
+    assert len(joined["mario"]) == 2 * len(shard["mario"]) and not joined["enemies"][len(shard["mario"]):, :, -1].any()
