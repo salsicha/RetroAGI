@@ -126,7 +126,7 @@ benches from game memory and from vision.
   SMB). The rule ([generalization.md](generalization.md)) is that all of
   it is learned or set from Block SMB alone.
 - **Block SMB does not yet behave as all of the game does**: it lacks
-  enemies the real levels have (Lakitu and his Spinies, Hammer Bros, Buzzy
+  enemies the real levels have (Lakitu and his Spinies, Buzzy
   Beetles), lifts and blocks invisible until hit. Its random levels draw
   the pieces and spacings measured in three real levels, and may still
   lack what other levels are made of. (It is not meant to have the game's
