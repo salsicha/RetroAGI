@@ -259,6 +259,37 @@ with it and is now no better than from the screen. Three trainings have
 given 4, 6 and 4 whole plays of 1-1 out of 8: a retraining does not yet
 pass 1-1 reliably.
 
+**What still fails in Block SMB** (round 2's 30 failed level plays of
+200, each played again in Block SMB, 2026-11-12):
+
+| What happened | Plays |
+|---|---|
+| Trapped: the choice before, rated safe, left Mario where every choice was rated likely to kill (Goombas coming down a staircase onto him, enemies on both sides); the least bad, running back, killed him | 14 |
+| A pass or a landing rated under 3% likely to kill ended in a pit | 8 |
+| Waiting or landing by a plant | 5 |
+| Out of time | 2 |
+
+The outcome network already has the answer for a trap: a choice after
+which no choice gets Mario on safely is "stuck", and the chooser avoids
+it. On these fresh levels it did not see it. Every group is the network's
+prediction wrong on a world it had not met, which more data and a larger
+network address, not a change by hand.
+
+**Tried and not kept: the controller's enemy rules made to match Block SMB.**
+Measured in Block SMB alone, the rules the controller plans with put a
+falling Goomba within 4 pixels of where Block SMB put it 16 frames later
+only 39% of the time (a walker already in the air was kept at its speed,
+without gravity or landing) and a hopping Paratroopa 86% (it hopped
+before it had landed, and rose through brick rows). Corrected, 100% and
+99%. Block SMB play did not gain (round 2's network: 166 of 200 level
+plays, 170 before; the hand-written chooser 81, 83 before), so the
+correction is not kept. Seen on the way, measured in the game's memory on
+the building levels: the game's hopping Paratroopa hops as Block SMB's
+does (about 44 pixels up every 56 frames; Block SMB's 44 every 54), and in
+the game's state an enemy often hides the ground under it (a fifth of the
+still Goombas had no solid under them), which Block SMB's state never
+does.
+
 **One command** learns the deciding network from nothing in Block SMB,
 round after round (`scripts/learn_in_block_smb.sh NAME`): sample, train,
 take the exam, and let the new network's play visit the next round's
