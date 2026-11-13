@@ -54,9 +54,12 @@ TRACK_FRAMES = 32
 
 # The planner's kind of enemy (smb_planner.ENEMY_KINDS) by the game's enemy
 # code (pixel_labels.ENEMY_KIND_TYPES): a Hammer Bro, a Piranha Plant, a
-# Koopa Paratroopa, a Bullet Bill; any other walker walks, anything else
-# flies. A Hammer Bro's hammers (loose items, not enemies) are thrown things.
-SLOT_KINDS = {0x03: "pacer", 0x05: "walker", 0x0D: "plant", 0x0E: "hopper", 0x33: "flier"}
+# Koopa Paratroopa (flying ones fly), a Bullet Bill, a red Koopa, Lakitu, a Spiny (an egg
+# while its egg falls); any other walker walks, anything else flies. A
+# Hammer Bro's hammers (loose items, not enemies) are thrown things.
+# A Spiny's walk (Block SMB's sim/env.SPINY_SPEED, measured in the game).
+EGG_WALK = 0.5
+SLOT_KINDS = {0x03: "pacer", 0x05: "walker", 0x0D: "plant", 0x0E: "hopper", 0x0F: "flier", 0x10: "flier", 0x11: "flier", 0x12: "walker", 0x33: "flier"}
 
 
 class MemorySource:
@@ -133,6 +136,8 @@ class MemorySource:
                 items.append(Enemy(tuple(float(v) for v in box), vx, vy, ("slots", k), stompable=False, **seen))
                 continue
             kind = SLOT_KINDS.get(slot["kind"], "walker" if ENEMY_KIND_CLASSES.get(slot["kind"]) == "walker" else "flier")
+            if slot.get("egg"):  # (its vx: the walk it will start on landing, toward Mario)
+                kind, vx = "egg", (EGG_WALK if (box[0] + box[2]) / 2 < (truth["mario"][0] + truth["mario"][2]) / 2 else -EGG_WALK)
             if kind == "plant":
                 # A plant is seen while any of it shows above its pipe: the
                 # game draws it (its drawn box, None while it is down) and

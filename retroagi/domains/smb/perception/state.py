@@ -41,11 +41,13 @@ BIG_DRAWN, BIG_BODY_WIDTH, BIG_HEAD_ROOM = 20, 12, 8
 KOOPA_DRAWN, MERGED_DRAWN = 20, 20
 # The planner's kind of enemy (smb_planner.ENEMY_KINDS) by the object type
 # vision tells (pixel_labels.ENEMY_TYPE_NUMBERS: a Hammer Bro, a Piranha
-# Plant, a Koopa Paratroopa, a Bullet Bill, a Hammer Bro's hammer);
-# otherwise by vision's kind ("other": a flier). A Bullet Bill can be
-# stomped.
-TYPE_KINDS = {2: "walker", 4: "plant", 5: "hopper", 9: "flier", 10: "thrown"}
-HAMMER_BRO_TYPE, BULLET_TYPE = 2, 9
+# Plant, a Koopa Paratroopa, Lakitu, a Spiny, a Bullet Bill, a Hammer Bro's
+# hammer); otherwise by vision's kind ("other": a flier). A Bullet Bill and
+# Lakitu can be stomped, a Spiny cannot; one seen falling faster than
+# EGG_SEEN is its egg (vision tells the two by neither type nor kind).
+TYPE_KINDS = {2: "walker", 4: "plant", 5: "hopper", 6: "flier", 7: "walker", 9: "flier", 10: "thrown"}
+HAMMER_BRO_TYPE, LAKITU_TYPE, SPINY_TYPE, BULLET_TYPE = 2, 6, 7, 9
+EGG_SEEN, EGG_WALK = 1.0, 0.5
 # A thrown thing collides by a square this wide at the middle of what is
 # drawn (Block SMB's hammer: sim/env.HAMMER_W).
 THROWN_SIDE = 8
@@ -187,7 +189,9 @@ def perceived(feedback, scene, items: Optional[ItemTracker] = None) -> Optional[
             vx, vy = (-WALK if world[0] > body[0] else WALK), 0.0
         else:
             vx, vy = 0.0, 0.0  # a plant or anything else: still until measured
-        stompable = kind in ("walker", "hopper") or t.type == BULLET_TYPE
+        if t.type == SPINY_TYPE and vy > EGG_SEEN:  # (its vx: the walk it will start on landing, toward Mario)
+            kind, vx = "egg", (EGG_WALK if (world[0] + world[2]) / 2 < (body[0] + body[2]) / 2 else -EGG_WALK)
+        stompable = (kind in ("walker", "hopper") and t.type != SPINY_TYPE) or t.type in (BULLET_TYPE, LAKITU_TYPE)
         enemies.append(Enemy(world, vx, vy, ("enemies", t.identity), stompable=stompable, kind=kind,
                              track=t.places(world[0], world[1]), type=t.type))
     # Nothing solid lies inside Mario's own drawn box: at the screen's left

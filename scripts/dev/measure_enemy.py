@@ -1,6 +1,7 @@
 """How a kind of enemy of the real game moves, read from its memory: Mario
 is flown into a level (game_catalogue.fly's way of reaching it) until an
-enemy of the kind is on the screen, then held still near the top, and the
+enemy of the kind is on the screen, then held in the air (still, or at a
+speed given; nothing hurts him and he hurts nothing), and the
 enemy's place, speed and collision box are read every frame. For making
 Block SMB move as the game does (docs/requirements.md, section 3). The
 levels scored on are refused.
@@ -19,18 +20,25 @@ import game_catalogue as catalogue
 ENEMY_PAGE, ENEMY_X, ENEMY_Y_PAGE, ENEMY_Y = 0x6E, 0x87, 0xB6, 0xCF  # Enemy_PageLoc, _X_Position, _Y_HighPos, _Y_Position
 ENEMY_SPEED, ENEMY_Y_SPEED, ENEMY_STATE, ENEMY_DIR = 0x58, 0xA0, 0x1E, 0x46  # Enemy_X_Speed, _Y_Speed, Enemy_State, Enemy_MovingDir
 BOXES = 0x4B0  # EnemyBoundingBoxCoord: x0, y0, x1, y1 on the screen, four bytes a slot
-SCREEN_X = 0x3AE  # Enemy_Rel_XPos is per drawn object; the camera is read instead:
 CAMERA_PAGE, CAMERA_X = 0x71A, 0x71C  # ScreenLeft_PageLoc, ScreenLeft_X_Pos
+X_SPEED, X_FORCE = 0x57, 0x705  # Player_X_Speed (sixteenths of a pixel a frame), Player_X_MoveForce
+# While held Mario is not invincible (it would kill what touches him) but
+# flashing as after a hit (InjuryTimer): nothing hurts him and he hurts
+# nothing.
+INJURY = 0x79E
 
 
 def signed(byte: int) -> int:
     return byte - 256 if byte > 127 else byte
 
 
-def measure(level: str, code: int, frames: int = 600, before: int = 20000, hold_x: int = 0) -> dict:
+def measure(level: str, code: int, frames: int = 600, before: int = 20000, hold_x: int = 0,
+            speed: float = 0.0, height: int = catalogue.FLY_HEIGHT) -> dict:
     """Every slot's enemy each frame, from the first frame an enemy of
-    ``code`` is on the screen (Mario then held still; ``hold_x``: or once
-    Mario is that far into the level)."""
+    ``code`` is on the screen (``hold_x``: or once Mario is that far into
+    the level); Mario then held ``height`` from the screen's top, moving
+    ``speed`` pixels a frame (in the air the game keeps his speed: it is
+    written each frame)."""
     import retro
 
     if level in catalogue.SCORED:
@@ -60,9 +68,14 @@ def measure(level: str, code: int, frames: int = 600, before: int = 20000, hold_
             started = started or (frame > 300 and ram[catalogue.ENGINE] == catalogue.PLAYING
                                   and (ram[catalogue.WORLD], ram[catalogue.LEVEL]) == here)
             if started:
-                for address, value in ((catalogue.Y, catalogue.FLY_HEIGHT), (catalogue.Y_PAGE, 1), (catalogue.Y_SPEED, 0),
-                                       (catalogue.Y_FORCE, 0), (catalogue.STAR, 30), (catalogue.TIMER, 3)):
+                for address, value in ((catalogue.Y, height if holding else catalogue.FLY_HEIGHT),
+                                       (catalogue.Y_PAGE, 1), (catalogue.Y_SPEED, 0), (catalogue.Y_FORCE, 0),
+                                       (catalogue.STAR, 0 if holding else 30), (catalogue.TIMER, 3)):
                     write(address, value)
+                if holding:
+                    write(X_SPEED, round(speed * 16) % 256)
+                    write(X_FORCE, 0)
+                    write(INJURY, 8)
             env.step(idle if holding or not started else run)
             if not started:
                 continue
@@ -73,11 +86,14 @@ def measure(level: str, code: int, frames: int = 600, before: int = 20000, hold_
                 holding = (hold_x and mario_x >= hold_x) or (not hold_x and any(ram[catalogue.ENEMY_ID + s] == code for s in slots))
                 if not holding:
                     continue
+            elif speed > 0 and rows and mario_x <= rows[-1]["mario_x"]:  # against a wall: on through it
+                write(catalogue.PAGE, (mario_x + 16) // 256)
+                write(catalogue.X, (mario_x + 16) % 256)
             rows.append({"frame": len(rows), "mario_x": mario_x,
                          "camera": int(ram[CAMERA_PAGE]) * 256 + int(ram[CAMERA_X]),
                          "enemies": [{"slot": s, "code": int(ram[catalogue.ENEMY_ID + s]),
                                       "x": int(ram[ENEMY_PAGE + s]) * 256 + int(ram[ENEMY_X + s]),
-                                      "y": (int(ram[ENEMY_Y_PAGE + s]) - 1) * 240 + int(ram[ENEMY_Y + s]),
+                                      "y": (int(ram[ENEMY_Y_PAGE + s]) - 1) * 256 + int(ram[ENEMY_Y + s]),
                                       "speed": signed(int(ram[ENEMY_SPEED + s])), "y_speed": signed(int(ram[ENEMY_Y_SPEED + s])),
                                       "state": int(ram[ENEMY_STATE + s]), "direction": int(ram[ENEMY_DIR + s]),
                                       "box": [int(b) for b in ram[BOXES + 4 * s:BOXES + 4 * s + 4]]} for s in slots]})
@@ -94,9 +110,12 @@ def main(argv=None) -> int:
     parser.add_argument("--code", type=lambda s: int(s, 0), required=True)
     parser.add_argument("--frames", type=int, default=600)
     parser.add_argument("--hold-x", type=int, default=0)
+    parser.add_argument("--speed", type=float, default=0.0, help="Mario's speed while held (pixels a frame)")
+    parser.add_argument("--height", type=int, default=catalogue.FLY_HEIGHT, help="Mario's top while held")
     parser.add_argument("--output", type=Path)
     args = parser.parse_args(argv)
-    result = measure(args.level, args.code, args.frames, hold_x=args.hold_x)
+    result = measure(args.level, args.code, args.frames, hold_x=args.hold_x, speed=args.speed,
+                     height=args.height)
     tracks = {}
     for row in result["rows"]:
         for e in row["enemies"]:

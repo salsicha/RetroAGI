@@ -24,10 +24,13 @@ and each level draws its own from those ranges (random_level):
 - Goombas, Koopa Troopas (a stomp leaves a shell that a touch kicks), red
   Koopa Troopas (which turn back at ledges) and hopping Koopa Paratroopas,
   alone or in files of two or three (a Buzzy Beetle walks and leaves a
-  shell as a Koopa does: without fireballs it is one);
+  shell as a Koopa does: without fireballs it is one); green Paratroopas
+  flying across, red ones flying up and down over pits;
 - Bullet Bill cannons;
 - Hammer Bros: one or two under and on two rows of bricks 4 and 8 tiles up
   (3-1's), jumping from row to row and throwing hammers;
+- Lakitu (8-2's), flying over Mario and throwing Spiny eggs for a stretch
+  of the pieces after his;
 - and a staircase before the flag.
 
 Pieces stand 0 to 8 tiles of floor apart. The floor is cut where a pipe or
@@ -39,7 +42,7 @@ where the real game does (SCROLL_X).
 A skill scene (skill_scene) is a short stretch of the same pieces that
 calls for one skill: one piece of a kind (SCENE_KINDS: a pipe, a pit,
 enemies, bricks, stairs, question blocks, a cannon, a step, a bridge,
-Hammer Bros) or two pieces close together ("pair"), Mario standing a few tiles before it, flat floor after
+Hammer Bros, Lakitu) or two pieces close together ("pair"), Mario standing a few tiles before it, flat floor after
 it and no flag. Scenes give outcome sampling its share of every piece, and
 a score for each.
 """
@@ -68,7 +71,13 @@ FLAT = (0, 8)
 END_FLAT = 10
 # The pieces and how often each comes.
 PIECES = {"pipe": 3, "pit": 2, "goombas": 3, "bricks": 2, "stairs": 2, "questions": 1, "cannon": 1, "step": 1,
-          "bridge": 1, "hammer_bros": 1}
+          "bridge": 1, "hammer_bros": 1, "lakitu": 1}
+# Lakitu (8-2's: game memory): he comes on as the screen reaches where he
+# is placed and stays over Mario until Mario is LAKITU_SPANS tiles on (8-2's
+# about 32 from where he is placed; in 4-1 and 6-1 he stays the whole level),
+# over the pieces that follow; his piece is LAKITU_FLOOR tiles of floor.
+LAKITU_SPANS = (24, 32, 48, 64)
+LAKITU_FLOOR = 12
 # Hammer Bros' rows of bricks: their length (tiles; 3-1's are 10 and 11),
 # the second Bro there this share of the time; each Bro's first throw and
 # jump after a random wait up to its usual gap (sim/env.HAMMER_FRAMES and
@@ -137,6 +146,15 @@ PARATROOPA_SHARE = 0.2
 # the time, and a Koopa on a brick row is red half the time, above the
 # game's so the outcome network meets them often enough.
 RED_KOOPA_SHARE = 0.1
+# Flying Koopa Paratroopas: a red one flies up and down over a pit
+# RED_OVER_PIT of the time, its swing from RED_TOP tiles over the floor (1-3's
+# starts some 9 up and swings 6 down); an enemy piece is a green one flying
+# across GREEN_FLYER_SHARE of the time, GREEN_TOP tiles up (7-3's, over a
+# bridge, 7); each at a random point of its swing.
+RED_OVER_PIT = 0.25
+RED_TOP = 9
+GREEN_FLYER_SHARE = 0.05
+GREEN_TOP = 7
 CANNON_TILES = (1, 2)
 # A Goomba's body as the simulator places it: its feet this far below the
 # y it is given.
@@ -243,6 +261,9 @@ def random_level(seed: int, pieces: int = 12, only: Optional[str] = None, start_
             if rng.random() < ROOFED_PIT:
                 for tiles in rng.choice(ROOFS):
                     row(x, FLOOR - tiles * TILE, width)
+            elif rng.random() < RED_OVER_PIT:
+                enemies.append({**_goomba(x + (width * TILE) / 2 - 6, FLOOR - RED_TOP * TILE, "red_paratroopa"),
+                                "phase": rng.randrange(400)})
             x += width * TILE
             ends_in_pit = True
         elif kind == "goombas":
@@ -250,10 +271,15 @@ def random_level(seed: int, pieces: int = 12, only: Optional[str] = None, start_
             walker = ("paratroopa" if roll < PARATROOPA_SHARE
                       else "koopa" if roll < PARATROOPA_SHARE + KOOPA_SHARE
                       else "red_koopa" if roll < PARATROOPA_SHARE + KOOPA_SHARE + RED_KOOPA_SHARE else None)
-            count = rng.choice(GROUPS)
-            for k in range(count):
-                enemies.append(_goomba(x + k * PAIR_GAP, FLOOR, walker))
-            x += (2 + count) * TILE
+            if roll > 1 - GREEN_FLYER_SHARE:
+                enemies.append({**_goomba(x + 4 * TILE, FLOOR - GREEN_TOP * TILE, "green_flyer"),
+                                "phase": rng.randrange(320)})
+                x += 6 * TILE
+            else:
+                count = rng.choice(GROUPS)
+                for k in range(count):
+                    enemies.append(_goomba(x + k * PAIR_GAP, FLOOR, walker))
+                x += (2 + count) * TILE
         elif kind == "questions":
             for k in range(rng.randint(1, 3)):
                 block(x + 2 * k * TILE, LOW_ROW, True)
@@ -327,6 +353,10 @@ def random_level(seed: int, pieces: int = 12, only: Optional[str] = None, start_
                 enemies.append({**_goomba(bx, top, "hammer_bro"), "throw_wait": rng.randint(1, 50),
                                 "jump_wait": rng.randint(1, 241)})
             x += length * TILE
+        elif kind == "lakitu":
+            enemies.append({"kind": "lakitu", "x": float(x + 4 * TILE), "y": 0.0, "game_rules": True,
+                            "until": float(x + rng.choice(LAKITU_SPANS) * TILE)})
+            x += LAKITU_FLOOR * TILE
         else:  # bridge: steps up, a walkway over a long pit, a step or two down
             for k in range(REACH):
                 column(x, k + 1)

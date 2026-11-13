@@ -63,9 +63,15 @@ ENEMY_FALL = 3.4
 # Bullet Bill, anything else) flies straight through everything; a thrown
 # thing (a Hammer Bro's hammer) flies through everything falling under
 # THROWN_GRAVITY to at most THROWN_FALL (Block SMB's hammer, measured in the
-# game: sim/env.HAMMER_GRAVITY and HAMMER_FALL).
-ENEMY_KINDS = ("walker", "hopper", "plant", "flier", "thrown", "pacer")
+# game: sim/env.HAMMER_GRAVITY and HAMMER_FALL); a pacer (a red Koopa) is a
+# walker that turns back where the floor under its middle would end; an egg
+# (Lakitu's) falls straight down under EGG_GRAVITY to at most EGG_FALL until
+# its feet (EGG_FEET below its box) meet a top, then walks at its vx, the
+# walk a Spiny starts on landing (Block SMB's: sim/env.EGG_GRAVITY,
+# EGG_FALL).
+ENEMY_KINDS = ("walker", "hopper", "plant", "flier", "thrown", "pacer", "egg")
 THROWN_GRAVITY, THROWN_FALL = 0.0625, 4.5
+EGG_GRAVITY, EGG_FALL, EGG_FEET = 0.125, 3.25, 4.0
 HOP_SPEED, HOP_GRAVITY, HOPPER_FEET = -3.25, 0.12, 3
 PLANT_SPEED, PLANT_TOP = 0.5, 4
 # A plant's box is at most this far below its pipe's top while it is seen
@@ -413,6 +419,22 @@ def _paths(boxes, velocities, kinds, solids, frames):
         if kinds[e] == 3:  # flier
             for k in range(1, frames + 1):
                 out[e, k] = (x0 + vx * k, y0 + vy * k, x1 + vx * k, y1 + vy * k)
+            continue
+        if kinds[e] == 6:  # egg
+            landed = False
+            for k in range(1, frames + 1):
+                if landed:
+                    x0, x1 = x0 + vx, x1 + vx
+                else:
+                    vy = min(vy + EGG_GRAVITY, EGG_FALL)
+                    feet, dy = y1 + EGG_FEET, vy
+                    if vy > 0:
+                        for i in range(solids.shape[0]):
+                            if x0 < solids[i, 2] and solids[i, 0] < x1 and feet <= solids[i, 1] <= feet + vy:
+                                dy, landed = solids[i, 1] - feet, True
+                                break
+                    y0, y1 = y0 + dy, y1 + dy
+                out[e, k] = (x0, y0, x1, y1)
             continue
         if kinds[e] == 4:  # thrown
             for k in range(1, frames + 1):

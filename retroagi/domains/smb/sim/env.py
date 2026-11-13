@@ -147,6 +147,43 @@ HAMMER_SPEED, HAMMER_THROW, HAMMER_GRAVITY, HAMMER_FALL = 1.0, -2.0, 0.0625, 4.5
 # Pre-episode frames ("watch_frames") end with Mario standing: up to this many
 # more are watched while one who starts above the floor drops onto it.
 LANDING_WATCH = 64
+# Lakitu and his Spinies (8-2's, game memory, 2026-11-12). Lakitu flies with
+# his top LAKITU_Y from the screen's top; his speed (sixteenths of a pixel a
+# frame) is a base less a quarter of how far he is from Mario (counted to
+# LAKITU_REACH): the base LAKITU_BASE[0] while the screen does not scroll,
+# [1] while Mario scrolls it, [2] while he runs at LAKITU_FAST or more and it
+# scrolls 2 pixels or more. He keeps on past Mario until LAKITU_REACH beyond
+# him, then turns back (going right he first slows by one each frame to a
+# stop; going left he turns at once). His collision box is the game's for a
+# Koopa (LAKITU_BOX: inside his drawn 16 by 24, not read from memory). He
+# throws an egg when he comes on the screen and every LAKITU_THROW frames
+# after while fewer than LAKITU_COMPANY other enemies are on it; at the end
+# of his stretch he flies off left at LAKITU_LEAVE. An egg starts 8 pixels
+# above him, EGG_UP a frame upward, under EGG_GRAVITY to EGG_FALL, never
+# sideways; landed, it is a Spiny walking SPINY_SPEED toward Mario (four
+# landings in five), which cannot be stomped (neither can an egg) and has a
+# Goomba's collision box.
+LAKITU_Y = 40
+LAKITU_BASE = (20, 47, 63)
+LAKITU_REACH = 60
+LAKITU_FAST = 25
+LAKITU_BOX = (2, 9, 12, 12)  # x, y from his place; width, height
+LAKITU_THROW = 128
+LAKITU_COMPANY = 4
+LAKITU_LEAVE = 1.0
+EGG_ABOVE, EGG_UP, EGG_GRAVITY, EGG_FALL = 8, -3.06, 0.125, 3.25
+SPINY_SPEED = 0.5
+# Flying Koopa Paratroopas (game memory): a red one (1-3's) swings straight
+# down RED_FLIGHT[0] pixels from where it is placed and back each
+# RED_FLIGHT[1] frames, a green one (7-3's) GREEN_FLIGHT[0] to the left and
+# back each GREEN_FLIGHT[1] frames, bobbing GREEN_BOB[0] up and down each
+# GREEN_BOB[1] frames; each a sine fitted to what was read (on average 2.7,
+# 1.4 and 0.5 pixels off: the game's slows less near its ends, and the red
+# one dips 5 above where it starts there). Stomped, either loses its wings
+# and walks as a Koopa of its colour.
+RED_FLIGHT = (104.0, 402.6)
+GREEN_FLIGHT = (95.0, 319.8)
+GREEN_BOB = (8.0, 128.0)
 
 # What each strategy is paid for, as multipliers of the reward terms (training
 # only; a layout names its strategy in "strategy", see strategy_families).
@@ -516,6 +553,8 @@ class MarioScenarioEnv:
             elif enemy.get("kind") == "koopa":
                 # (its feet where a Goomba's would be: 14 below the y given)
                 enemy.update(w=KOOPA_W, h=KOOPA_H, foot_offset=KOOPA_FEET, y=enemy["y"] + 14 - KOOPA_FEET - KOOPA_H)
+                if enemy.get("flight"):
+                    enemy["home"] = (enemy["x"], enemy["y"])  # (its swing's start: where it is placed)
             elif enemy.get("kind") == "hammer_bro":
                 # (standing, its feet where a Goomba's would be; its first
                 # throw and jump after the frames given, or the game's first)
@@ -524,6 +563,12 @@ class MarioScenarioEnv:
                              patrol_min=enemy["x"] - HAMMER_BRO_WALK, patrol_max=enemy["x"] + HAMMER_BRO_WALK,
                              throw_timer=int(e.get("throw_wait", 11)), throws=0,
                              jump_timer=int(e.get("jump_wait", HAMMER_BRO_JUMPS[0])), jumps=0, through=None)
+            elif enemy.get("kind") == "lakitu":
+                # (x where the game would place him; he flies at LAKITU_Y;
+                # he leaves once Mario is "until" into the level)
+                bx, by, bw, bh = LAKITU_BOX
+                enemy.update(x=enemy["x"] + bx, y=float(LAKITU_Y + by), w=bw, h=bh, foot_offset=0, speed=0.0,
+                             direction=-1, lakitu_speed=0, until=float(e.get("until", 1e9)), throw_timer=1)
             elif enemy.get("kind") != "piranha_plant":
                 # NES Goomba damage body is 10x6, four pixels above its
                 # physical feet. Background support is a separate probe.
@@ -607,6 +652,7 @@ class MarioScenarioEnv:
         self.camera_x = max(
             0.0, min(self.mario["x"] - self.scroll_x, self.world_width - self.width)
         )
+        self.scrolled = 0.0
         obs = self.render() if self.draws else None
         # Pre-episode frames (scenario "watch_frames"): the world runs while
         # Mario stands, and their pictures are kept for the agent to watch
@@ -830,9 +876,11 @@ class MarioScenarioEnv:
 
         # ── 10. Camera (right-only scroll, clamped) ───────────────────────────
         target_cam = self.mario["x"] - self.scroll_x
+        before = self.camera_x
         if target_cam > self.camera_x:
             self.camera_x = target_cam
         self.camera_x = max(0.0, min(self.camera_x, self.world_width - self.width))
+        self.scrolled = self.camera_x - before
 
         # ── 11. World boundaries ──────────────────────────────────────────────
         # The screen's left edge (the camera never scrolls back) and the
@@ -1259,8 +1307,8 @@ class MarioScenarioEnv:
                 yield "enemy", "plant", partial(self._draw_plant, rect=rect)
             elif enemy.get("kind") == "monster":
                 yield "enemy", "other", partial(self._draw_monster, enemy=enemy, rect=rect)
-            elif enemy.get("kind") in ("bullet", "hammer", "hammer_bro"):
-                if not enemy.get("gone") and not (enemy.get("kind") == "hammer_bro" and enemy["dead"]):
+            elif enemy.get("kind") in ("bullet", "hammer", "hammer_bro", "lakitu", "spiny"):
+                if not enemy.get("gone") and not (enemy.get("kind") in ("hammer_bro", "lakitu") and enemy["dead"]):
                     yield "enemy", "other", partial(self._draw_monster, enemy=enemy, rect=rect)
             else:
                 kind = "defeated" if enemy["dead"] else "walker"
@@ -1647,6 +1695,82 @@ class MarioScenarioEnv:
         if hammer["y"] > self.height or not self.camera_x - 64 <= hammer["x"] <= self.camera_x + self.width + 64:
             hammer.update(dead=True, gone=True)  # (kept, so the others keep their places)
 
+    def _fly(self, koopa: dict) -> None:
+        """A flying Paratroopa's swing (RED_FLIGHT, GREEN_FLIGHT, GREEN_BOB)
+        from where it was placed; its speed and direction as it moves."""
+        koopa["flight_tick"] += 1
+        tick, (home_x, home_y) = koopa["flight_tick"], koopa["home"]
+        if koopa["flight"] == "down":
+            reach, period = RED_FLIGHT
+            x, y = home_x, home_y + reach / 2 * (1 - math.cos(2 * math.pi * tick / period))
+        else:
+            reach, period = GREEN_FLIGHT
+            bob, bob_period = GREEN_BOB
+            x = home_x - reach / 2 * (1 - math.cos(2 * math.pi * tick / period))
+            phase = (tick % bob_period) / bob_period
+            y = home_y - bob + 2 * bob * abs(2 * phase - 1)
+        dx, dy = x - koopa["x"], y - koopa["y"]
+        koopa.update(x=x, y=y, vy=dy, speed=abs(dx), direction=(1 if dx > 0 else -1) if dx else koopa["direction"])
+
+    def _update_lakitu(self, lakitu: dict) -> None:
+        """Lakitu's flight after Mario (LAKITU_BASE), his eggs, and his
+        leaving at the end of his stretch."""
+        if self.mario["x"] >= lakitu["until"]:
+            lakitu.update(speed=LAKITU_LEAVE, direction=-1)
+            lakitu["x"] -= LAKITU_LEAVE
+            if lakitu["x"] + lakitu["w"] < self.camera_x - 64:
+                lakitu.update(dead=True, gone=True)  # flown off: kept, so the others keep their places
+            return
+        apart = (lakitu["x"] + lakitu["w"] / 2) - (self.mario["x"] + self.mario["w"] / 2)
+        toward = 1 if apart < 0 else -1  # the way to Mario
+        if abs(apart) >= LAKITU_REACH and toward != lakitu["direction"] and lakitu["direction"] > 0:
+            lakitu["lakitu_speed"] -= 1  # going right, past him: slowed to a stop first
+            if lakitu["lakitu_speed"] > 0:
+                lakitu["x"] += lakitu["lakitu_speed"] / 16
+                lakitu["speed"] = lakitu["lakitu_speed"] / 16
+                return
+        if abs(apart) >= LAKITU_REACH:
+            lakitu["direction"] = toward
+        fast = abs(self.motion.x_speed) >= LAKITU_FAST and self.scrolled >= 2
+        base = LAKITU_BASE[0] if self.scrolled <= 0 else LAKITU_BASE[2 if fast else 1]
+        lakitu["lakitu_speed"] = max(1, base - int(min(abs(apart), LAKITU_REACH)) // 4)
+        lakitu["speed"] = lakitu["lakitu_speed"] / 16
+        lakitu["x"] += lakitu["direction"] * lakitu["speed"]
+        lakitu["throw_timer"] -= 1
+        if lakitu["throw_timer"] > 0:
+            return
+        lakitu["throw_timer"] = LAKITU_THROW
+        left, right = self.camera_x, self.camera_x + self.width
+        company = sum(1 for e in self.enemies if e is not lakitu and not e["dead"] and left <= e["x"] < right)
+        if company >= LAKITU_COMPANY:
+            return
+        bx, by, _, _ = LAKITU_BOX
+        middle = self.mario["x"] + self.mario["w"] / 2
+        # (an egg has a Goomba's body: 10 by 6, 14 below where the game places it)
+        x, y = lakitu["x"] - bx + 3, LAKITU_Y - EGG_ABOVE + 14
+        self.enemies.append({
+            "kind": "spiny", "egg": True, "x": x, "y": float(y), "vx": 0.0, "vy": EGG_UP, "w": 10, "h": 6,
+            "foot_offset": 4, "speed": 0.0, "direction": 1 if middle > x + 5 else -1,
+            "patrol_min": -1e9, "patrol_max": 1e9, "edge_aware": False, "on_ground": False,
+            "dead": False, "stompable": False, "game_rules": True, "awake": True,
+        })
+
+    def _update_egg(self, egg: dict, platform_rects: list) -> None:
+        """A Spiny's egg falling (EGG_GRAVITY); landed, a Spiny walking
+        toward Mario."""
+        feet = egg["y"] + egg["h"] + egg["foot_offset"]
+        egg["vy"] = min(egg["vy"] + EGG_GRAVITY, EGG_FALL)
+        for r in platform_rects:
+            if (egg["vy"] > 0 and r.left < egg["x"] + egg["w"] and egg["x"] < r.right
+                    and feet <= r.top <= feet + egg["vy"]):
+                middle = self.mario["x"] + self.mario["w"] / 2
+                egg.update(y=r.top - egg["h"] - egg["foot_offset"], vy=0.0, egg=False, on_ground=True,
+                           speed=SPINY_SPEED, direction=1 if middle > egg["x"] + egg["w"] / 2 else -1)
+                return
+        egg["y"] += egg["vy"]
+        if egg["y"] > self.height:
+            egg.update(dead=True, gone=True)
+
     def _update_enemy(self, enemy: dict, platform_rects: list):
         """Move enemy, apply gravity, resolve platform collisions, patrol logic."""
         if enemy.get("kind") == "piranha_plant":
@@ -1672,6 +1796,15 @@ class MarioScenarioEnv:
             enemy["awake"] = True
         if enemy.get("kind") == "hammer_bro":
             self._update_hammer_bro(enemy, platform_rects)
+            return
+        if enemy.get("kind") == "lakitu":
+            self._update_lakitu(enemy)
+            return
+        if enemy.get("egg"):
+            self._update_egg(enemy, platform_rects)
+            return
+        if enemy.get("flight") and enemy.get("wings"):
+            self._fly(enemy)
             return
         # Gravity (a winged Koopa hops each time it lands)
         if enemy.get("wings"):
@@ -1804,11 +1937,14 @@ class MarioScenarioEnv:
 
             return parse_plant(e)
         kind = e.get("kind") if isinstance(e, dict) else None
-        if kind not in (None, "monster", "koopa", "red_koopa", "paratroopa", "hammer_bro"):
+        if kind not in (None, "monster", "koopa", "red_koopa", "paratroopa", "red_paratroopa", "green_flyer",
+                        "hammer_bro", "lakitu"):
             raise ValueError(f"unknown enemy kind {kind!r}")
-        wings = kind == "paratroopa"
+        wings = kind in ("paratroopa", "red_paratroopa", "green_flyer")
         # A red Koopa: a Koopa that turns back at ledges (edge_aware)
-        red = kind == "red_koopa"
+        red = kind in ("red_koopa", "red_paratroopa")
+        # A flying Paratroopa: its swing, from where it is placed (FLIGHTS)
+        flight = {"red_paratroopa": "down", "green_flyer": "across"}.get(kind)
         if wings or red:
             kind = "koopa"
         game_rules = isinstance(e, dict) and bool(e.get("game_rules", False))
@@ -1848,6 +1984,7 @@ class MarioScenarioEnv:
             **({"game_rules": True} if game_rules else {}),
             **({"wings": True} if wings else {}),
             **({"red": True} if red else {}),
+            **({"flight": flight, "flight_tick": int(e.get("phase", 0))} if flight else {}),
         }
 
     # ── Procedural level generator ────────────────────────────────────────────

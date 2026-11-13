@@ -17,7 +17,7 @@ from retroagi.domains.smb.controller import State
 from retroagi.domains.smb.planner import Enemy, Solid, screen_edge
 from retroagi.framework.interfaces import Step
 
-from .env import MarioScenarioEnv
+from .env import SPINY_SPEED, MarioScenarioEnv
 from .env_state import restore_env_state, snapshot_env_state
 
 # The places of a thing kept as its track (frames).
@@ -108,6 +108,12 @@ def enemy_kind(enemy: dict) -> str:
         return "flier"
     if enemy.get("kind") == "hammer":
         return "thrown"
+    if enemy.get("kind") == "lakitu":
+        return "flier"
+    if enemy.get("egg"):
+        return "egg"
+    if enemy.get("flight") and enemy.get("wings"):
+        return "flier"
     if enemy.get("red") and not enemy.get("shell"):
         return "pacer"
     return "hopper" if enemy.get("wings") else "walker"
@@ -149,12 +155,15 @@ class SimSource:
                 continue  # (a plant down in its pipe among them)
             box = (e["x"], e["y"], e["x"] + e["w"], e["y"] + e["h"])
             kind = enemy_kind(e)
+            vx = e["speed"] * e["direction"]
             if kind == "plant":
                 vy = plant_velocity(e)
             else:
                 # (standing, its fall speed is gravity's step the floor stopped)
                 vy = 0.0 if e["on_ground"] else e["vy"]
-            enemies.append(Enemy(box, e["speed"] * e["direction"], vy, ("enemies", k),
+            if kind == "egg":  # (its vx: the walk it will start on landing, toward Mario)
+                vx = SPINY_SPEED * (1 if env.mario["x"] + env.mario["w"] / 2 > (box[0] + box[2]) / 2 else -1)
+            enemies.append(Enemy(box, vx, vy, ("enemies", k),
                                  stompable=bool(e.get("stompable", True)), kind=kind, track=e.get("track") or None,
                                  type=kind))
         items = [Enemy((i["x"], i["y"], i["x"] + i["w"], i["y"] + i["h"]), i["vx"], i["vy"], ("items", k),

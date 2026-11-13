@@ -51,6 +51,8 @@ OFF_SCREEN = 0xFF
 SCORE, COINS, TIME = 0x7DD, 0x75E, 0x7F8  # score: 6 digits; time: 3 digits
 # Enemies Mario cannot stomp: Piranha Plant, Spiny, fire bars.
 UNSTOMPABLE = frozenset((0x0D, 0x12, 0x1B, 0x1D))
+# A Spiny's slot holds its egg while the egg falls (Enemy_State 5).
+SPINY, EGG_STATE = 0x12, 5
 # The game's object codes by name (the disassembly's), for reports.
 KIND_NAMES = {
     0x00: "green Koopa", 0x02: "Buzzy Beetle", 0x03: "red Koopa", 0x05: "Hammer Bro", 0x06: "Goomba",
@@ -142,6 +144,7 @@ def true_frame(ram, start=None) -> dict:
                 "enemy": kind_type == "enemy",
                 "platform": kind_type == "moving_platform",
                 "stompable": kind not in UNSTOMPABLE,
+                "egg": kind == SPINY and state == EGG_STATE,
             }
         )
     return {

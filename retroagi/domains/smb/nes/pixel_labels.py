@@ -159,6 +159,8 @@ ENEMY_KIND_TYPES = {
     0x06: "enemy",  # Goomba
     0x0D: "enemy",  # Piranha Plant
     0x0E: "enemy",  # green Koopa Paratroopa
+    0x0F: "enemy",  # red Koopa Paratroopa, flying up and down (drawings not yet inspected)
+    0x10: "enemy",  # green Koopa Paratroopa, flying across (drawings not yet inspected)
     0x11: "enemy",  # Lakitu
     0x12: "enemy",  # Spiny and its falling egg
     0x16: "background",  # fireworks after the flagpole
@@ -184,6 +186,8 @@ ENEMY_KIND_CLASSES = {
     0x06: "walker",  # Goomba
     0x0D: "plant",  # Piranha Plant
     0x0E: "walker",  # green Koopa Paratroopa
+    0x0F: "other",  # red Koopa Paratroopa, flying
+    0x10: "other",  # green Koopa Paratroopa, flying
     0x11: "other",  # Lakitu
     0x12: "other",  # Spiny and its falling egg
     0x1B: "other",  # fire bar
