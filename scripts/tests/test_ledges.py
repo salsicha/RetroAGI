@@ -13,11 +13,12 @@ from retroagi.domains.smb.sim.passable import passable
 def test_a_ledges_scene_is_a_pit_crossed_on_ledges_each_within_a_jump_of_the_one_before():
     for seed in range(30):
         scene = skill_scene(seed, "ledges")
-        floor = [p for p, k in zip(scene["platforms"], scene["platform_kinds"]) if p[1] == FLOOR]
+        fixed = [p for p in scene["platforms"] if not isinstance(p, dict)]  # (lifts are dictionaries)
+        floor = [p for p in fixed if p[1] == FLOOR]
         gaps = [(a[0] + a[2], b[0]) for a, b in zip(sorted(floor), sorted(floor)[1:]) if b[0] > a[0] + a[2]]
         assert len(gaps) == 1  # one stretch with no floor
         start, end = gaps[0]
-        ledges = sorted(p for p in scene["platforms"] if p[1] < FLOOR and start <= p[0] < end)
+        ledges = sorted(p for p in fixed if p[1] < FLOOR and start <= p[0] < end)
         assert made.LEDGE_COUNT[0] <= len(ledges) <= made.LEDGE_COUNT[1]
         before_x, before_height = start, 0
         for x, top, width, _ in ledges:

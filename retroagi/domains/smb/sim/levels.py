@@ -32,7 +32,8 @@ and each level draws its own from those ranges (random_level):
 - Lakitu (8-2's), flying over Mario and throwing Spiny eggs for a stretch
   of the pieces after his;
 - the sky levels' ledges over a stretch with no floor (1-3's, 3-3's, 4-3's,
-  5-3's and 6-3's tree tops and mushrooms), red Koopas pacing some;
+  5-3's and 6-3's tree tops and mushrooms), red Koopas pacing some, lifts
+  in some gaps (swinging across, going up and down, falling when stood on);
 - a Bullet Bill frenzy (5-3's) over a stretch of the pieces after it, and
   leaping Cheep Cheeps (2-3's) over some bridges;
 - and a staircase before the flag.
@@ -54,6 +55,7 @@ a score for each.
 import random
 from typing import Optional, Sequence
 
+from .env import LIFT_H, LIFT_W
 from .piranha import EXPOSED_FRAMES, HIDDEN_FRAMES, RISE_FRAMES
 
 PLANT_CYCLE = 2 * RISE_FRAMES + EXPOSED_FRAMES + HIDDEN_FRAMES
@@ -97,6 +99,13 @@ LEDGE_HEIGHTS = (1, 1, 1, 2, 3, 4, 4, 4, 4, 5, 6, 6, 7, 8, 8, 9, 10)
 LEDGE_GAPS = (1, 1, 2, 2, 2, 3, 4, 4, 5, 5)
 RISE_GAP = 3
 LEDGE_KOOPA = 0.3
+# A lift (game memory: 1-3's, 3-3's) in a gap of LIFT_GAP tiles or more
+# between ledges LIFT_IN_GAP of the time: one swinging across at the far end
+# of the gap (the gap made as wide as its swing), one going up and down in
+# its middle, or one that falls when stood on (sim/env.py LIFT_*).
+LIFT_IN_GAP = 0.4
+LIFT_GAP = 3
+LIFT_KINDS = ("across", "updown", "falls")
 # Lakitu (8-2's: game memory): he comes on as the screen reaches where he
 # is placed and stays over Mario until Mario is LAKITU_SPANS tiles on (8-2's
 # about 32 from where he is placed; in 4-1 and 6-1 he stays the whole level),
@@ -383,9 +392,10 @@ def random_level(seed: int, pieces: int = 12, only: Optional[str] = None, start_
                                 "jump_wait": rng.randint(1, 241)})
             x += length * TILE
         elif kind == "ledges":
-            start, height, gap = x, 0, rng.choice(LEDGE_GAPS)
+            start, height, gap, lifted = x, 0, rng.choice(LEDGE_GAPS), False
             for _ in range(rng.randint(*LEDGE_COUNT)):
-                rising = max(1, min(height + REACH, rng.choice(LEDGE_HEIGHTS)))
+                # (after a lift the gap is the lift's and the next ledge no higher: reached from the lift)
+                rising = max(1, min(height if lifted else height + REACH, rng.choice(LEDGE_HEIGHTS)))
                 if rising > height:
                     gap = min(gap, RISE_GAP)
                 x += gap * TILE
@@ -395,8 +405,17 @@ def random_level(seed: int, pieces: int = 12, only: Optional[str] = None, start_
                 if width >= 3 and rng.random() < LEDGE_KOOPA:
                     enemies.append(_goomba(x + (width - 1) * TILE, top, "red_koopa"))
                 x += width * TILE
-                gap = rng.choice(LEDGE_GAPS)
-                if gap >= 3 and rng.random() < RED_OVER_PIT:
+                gap, lifted = rng.choice(LEDGE_GAPS), False
+                if gap >= LIFT_GAP and rng.random() < LIFT_IN_GAP:
+                    lift = LIFT_KINDS[int(rng.random() * len(LIFT_KINDS))]
+                    if lift == "across":
+                        gap = max(gap, 5)
+                        spot, at = x + gap * TILE - LIFT_W, top
+                    else:
+                        spot, at = x + (gap * TILE - LIFT_W) / 2, top if lift == "falls" else top - 2 * TILE
+                    solids.append([spot, at, LIFT_W, LIFT_H, None, {"lift": lift, "phase": rng.randrange(340)}])
+                    lifted = True
+                elif gap >= 3 and rng.random() < RED_OVER_PIT:
                     enemies.append({**_goomba(x + gap * TILE / 2 - 6, FLOOR - RED_TOP * TILE, "red_paratroopa"),
                                     "phase": rng.randrange(400)})
             x += gap * TILE  # (down to the floor beyond)
@@ -465,7 +484,8 @@ def random_level(seed: int, pieces: int = 12, only: Optional[str] = None, start_
         "scroll_x": SCROLL_X,
         "frame_budget": width * FRAMES_PER_PIXEL,
         "mario": [START_X, FLOOR - 12],
-        "platforms": [p[:4] for p in platforms],
+        # (a lift: a dictionary with what it does, sim/env.py LIFT_W)
+        "platforms": [{"x": p[0], "y": p[1], "w": p[2], "h": p[3], **p[5]} if len(p) > 5 else p[:4] for p in platforms],
         "platform_kinds": [p[4] for p in platforms],
         "enemies": enemies,
         "frenzies": frenzies,

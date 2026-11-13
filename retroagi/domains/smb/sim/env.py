@@ -199,6 +199,17 @@ CHEEP_REACH, CHEEP_FROM = 128, 262
 CHEEP_GAPS = (16, 16, 16, 32, 64, 72, 72, 96, 96, 112, 120, 160, 168)
 CHEEP_UP, CHEEP_GRAVITY = -4.97, 0.0524
 CHEEP_SPEEDS = (5 / 16, 6 / 16, 12 / 16, 14 / 16)
+# Lifts (game memory, Mario riding them: 1-3's and 3-3's): LIFT_W wide (the
+# game's large lifts, six 8-pixel pieces), LIFT_H thick; one going "across"
+# swings LIFT_ACROSS[0] pixels to the left of where it is placed and back
+# each LIFT_ACROSS[1] frames, one going "updown" LIFT_UPDOWN[0] down and
+# back each LIFT_UPDOWN[1] (each a sine, as the flying Paratroopas'), and
+# one that "falls" drops LIFT_FALL pixels a frame while Mario stands on it.
+# A lift carries Mario standing on it, up and down as well as across.
+LIFT_W, LIFT_H = 48, 8
+LIFT_ACROSS = (53.0, 240.0)
+LIFT_UPDOWN = (137.0, 340.0)
+LIFT_FALL = 2.25
 
 # What each strategy is paid for, as multipliers of the reward terms (training
 # only; a layout names its strategy in "strategy", see strategy_families).
@@ -515,6 +526,11 @@ class MarioScenarioEnv:
         for p in scenario.get("platforms", []):
             self.platforms.append(self._parse_platform(p))
         self.platform_kinds = self._platform_kinds(scenario.get("platform_kinds"))
+        for plat in self.platforms:
+            if plat.get("lift"):  # (at its point of the swing from the start: no move counted)
+                plat["tick"] -= 1
+                self._move_lift(plat, False)
+                plat.update(vx=0.0, vy=0.0, delta_x=0, delta_y=0)
         self.cannons = [
             {"x": p["rect"].x, "w": p["rect"].w, "top": p["rect"].y, "timer": CANNON_FRAMES[0], "shots": 0}
             for p, kind in zip(self.platforms, self.platform_kinds) if kind == "cannon"
@@ -799,6 +815,9 @@ class MarioScenarioEnv:
             old_px = plat["rect"].x
             # Track a float position so fractional speeds accumulate instead of
             # truncating to zero motion every frame.
+            if plat.get("lift"):
+                self._move_lift(plat, plat is support_before)
+                continue
             plat["move_x"] += plat["move_speed"] * plat["move_dir"]
             if plat["move_x"] <= plat["move_min"]:
                 plat["move_x"] = float(plat["move_min"])
@@ -832,6 +851,9 @@ class MarioScenarioEnv:
                 self.motion.wall_contact()
 
         # ── 7. Resolve Y collisions ───────────────────────────────────────────
+        if self.mario["on_ground"] and support_before is not None and support_before.get("delta_y"):
+            self.mario["y"] += support_before["delta_y"]  # carried up or down by the lift he stands on
+            mario_rect.y = self.mario["y"]
         previous_y = self.mario["y"]
         previous_bottom = previous_y + self.mario["h"]
         self.mario["y"] += dy
@@ -1586,6 +1608,27 @@ class MarioScenarioEnv:
                 "dead": False, "stompable": True,
             })
 
+    def _move_lift(self, lift: dict, stood_on: bool) -> None:
+        """A lift's move this frame (LIFT_ACROSS, LIFT_UPDOWN, LIFT_FALL):
+        its place (whole pixels, as Mario's collisions take it), its move
+        (delta_x, delta_y) and its speed (vx, vy)."""
+        lift["tick"] += 1
+        home_x, home_y = lift["home"]
+        x, y = lift["lift_x"], lift["lift_y"]
+        if lift["lift"] == "across":
+            reach, period = LIFT_ACROSS
+            x = home_x - reach / 2 * (1 - math.cos(2 * math.pi * lift["tick"] / period))
+        elif lift["lift"] == "updown":
+            reach, period = LIFT_UPDOWN
+            y = home_y + reach / 2 * (1 - math.cos(2 * math.pi * lift["tick"] / period))
+        elif stood_on and y < self.height + 32:
+            y += LIFT_FALL
+        rect = lift["rect"]
+        old = (rect.x, rect.y)
+        rect.x, rect.y = int(round(x)), int(round(y))
+        lift.update(lift_x=x, lift_y=y, vx=x - lift["lift_x"], vy=y - lift["lift_y"],
+                    delta_x=rect.x - old[0], delta_y=rect.y - old[1])
+
     def _frenzies(self) -> None:
         """Bullet Bills and leaping Cheep Cheeps of the frenzies Mario is in
         (BILL_GAP, CHEEP_GAPS)."""
@@ -1983,6 +2026,10 @@ class MarioScenarioEnv:
             "delta_x": 0,
         }
         plat["move_x"] = float(plat["rect"].x)
+        if isinstance(p, dict) and p.get("lift"):
+            # (a lift: "across", "updown" or "falls", from where it is placed, at a point of its swing)
+            plat.update(moving=True, lift=p["lift"], home=(float(x), float(y)), lift_x=float(x), lift_y=float(y),
+                        tick=int(p.get("phase", 0)), vx=0.0, vy=0.0, delta_y=0)
         return plat
 
     @staticmethod

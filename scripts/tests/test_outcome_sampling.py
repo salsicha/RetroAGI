@@ -67,8 +67,9 @@ def test_candidates_cover_every_kind_and_tokens_have_their_slots():
     assert mario[6] == 1.0  # standing
 
 
-def test_a_level_gives_states_choices_and_outcomes_that_line_up():
-    shard = sample(DOMAIN, 2, "speed_run", explore=0.3)
+def test_a_world_gives_states_choices_and_outcomes_that_line_up():
+    # (a scene of two pieces: a whole random level takes minutes to sample)
+    shard = sample(DOMAIN, 5, "speed_run", kind="pair", explore=0.3)
     states = len(shard["mario"])
     assert states > 10 and len(shard["choices"]) == len(shard["outcomes"])
     assert shard["choices"][:, 0].max() == states - 1

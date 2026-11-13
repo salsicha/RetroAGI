@@ -150,7 +150,8 @@ class SimSource:
             if r.width == 0 or r.right <= left or r.left >= right:
                 continue
             seen = QUESTION if p.get("contents") and not p.get("used") else _KINDS.get(kind, "block")
-            solids.append(Solid(max(r.left, left), r.top, min(r.right, right), r.bottom, seen, ("platforms", k)))
+            solids.append(Solid(max(r.left, left), r.top, min(r.right, right), r.bottom, seen, ("platforms", k),
+                                vx=p.get("vx", 0.0), vy=p.get("vy", 0.0)))
         enemies = []
         for k, e in enumerate(env.enemies):
             if not in_sight(env, e):
