@@ -54,8 +54,10 @@ NAMES = {
     0x2A: "lift going right", 0x2B: "short lift going up (looping)", 0x2C: "short lift going down (looping)",
     0x2D: "Bowser", 0x2E: "power-up", 0x32: "springboard", 0x33: "Bullet Bill (from a cannon)",
 }
-# What Block SMB has, by the same codes (sim/levels.py, sim/env.py).
-IN_BLOCK_SMB = {0x00, 0x05, 0x06, 0x0D, 0x0E, 0x2E, 0x33}
+# What Block SMB has, by the same codes (sim/levels.py, sim/env.py; a Buzzy
+# Beetle walks and leaves a shell as a Koopa does, which without fireballs
+# makes it one).
+IN_BLOCK_SMB = {0x00, 0x02, 0x03, 0x05, 0x06, 0x0D, 0x0E, 0x2E, 0x33}
 # Not things to meet: the flag, the warp zone, Toad.
 NOT_MET = {0x30, 0x31, 0x34, 0x35}
 

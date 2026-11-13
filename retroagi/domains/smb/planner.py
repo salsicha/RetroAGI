@@ -64,7 +64,7 @@ ENEMY_FALL = 3.4
 # thing (a Hammer Bro's hammer) flies through everything falling under
 # THROWN_GRAVITY to at most THROWN_FALL (Block SMB's hammer, measured in the
 # game: sim/env.HAMMER_GRAVITY and HAMMER_FALL).
-ENEMY_KINDS = ("walker", "hopper", "plant", "flier", "thrown")
+ENEMY_KINDS = ("walker", "hopper", "plant", "flier", "thrown", "pacer")
 THROWN_GRAVITY, THROWN_FALL = 0.0625, 4.5
 HOP_SPEED, HOP_GRAVITY, HOPPER_FEET = -3.25, 0.12, 3
 PLANT_SPEED, PLANT_TOP = 0.5, 4
@@ -458,6 +458,12 @@ def _paths(boxes, velocities, kinds, solids, frames):
                         vx = -vx
                         nx0, nx1 = x0 + vx, x1 + vx
                         break
+            if kinds[e] == 5 and offset >= -2.0 and vx != 0.0:
+                # pacer: turned back where the floor under its middle would end
+                middle = (nx0 + nx1) / 2
+                if _floor_under(middle - 0.5, middle + 0.5, y1 + offset, solids) < 0:
+                    vx = -vx
+                    nx0, nx1 = x0 + vx, x1 + vx
             if kinds[e] == 1:  # hopper: up each time it stands, then down under its own gravity
                 if offset >= -2.0 and vy >= 0.0 and _floor_under(nx0, nx1, y1 + offset, solids) >= 0:
                     vy = HOP_SPEED

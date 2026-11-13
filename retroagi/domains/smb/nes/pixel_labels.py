@@ -154,6 +154,7 @@ BLOCK_TYPES = {
 ENEMY_KIND_TYPES = {
     0x00: "enemy",  # green Koopa Troopa
     0x02: "enemy",  # Buzzy Beetle
+    0x03: "enemy",  # red Koopa Troopa (its drawings not yet inspected: frames showing it are refused)
     0x05: "enemy",  # Hammer Bro
     0x06: "enemy",  # Goomba
     0x0D: "enemy",  # Piranha Plant
@@ -178,6 +179,7 @@ ENEMY_KIND_TYPES = {
 ENEMY_KIND_CLASSES = {
     0x00: "walker",  # green Koopa Troopa
     0x02: "walker",  # Buzzy Beetle
+    0x03: "walker",  # red Koopa Troopa
     0x05: "other",  # Hammer Bro
     0x06: "walker",  # Goomba
     0x0D: "plant",  # Piranha Plant

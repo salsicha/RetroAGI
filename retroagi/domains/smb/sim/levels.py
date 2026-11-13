@@ -21,8 +21,10 @@ and each level draws its own from those ranges (random_level):
 - rows of bricks and question blocks 4 or 5 and 8 tiles above the floor,
   enemies sometimes walking on them (a question block holds a coin or a
   mushroom, big Mario breaks bricks); question blocks over the floor;
-- Goombas, Koopa Troopas (a stomp leaves a shell that a touch kicks) and
-  hopping Koopa Paratroopas, alone or in files of two or three;
+- Goombas, Koopa Troopas (a stomp leaves a shell that a touch kicks), red
+  Koopa Troopas (which turn back at ledges) and hopping Koopa Paratroopas,
+  alone or in files of two or three (a Buzzy Beetle walks and leaves a
+  shell as a Koopa does: without fireballs it is one);
 - Bullet Bill cannons;
 - Hammer Bros: one or two under and on two rows of bricks 4 and 8 tiles up
   (3-1's), jumping from row to row and throwing hammers;
@@ -129,6 +131,12 @@ KOOPA_SHARE = 0.25
 # PARATROOPA_SHARE of the time; a cannon is CANNON_TILES tall.
 PLANT_SHARE = 0.4
 PARATROOPA_SHARE = 0.2
+# Red Koopa Troopas (which turn back at ledges: game memory, 1-3 and 3-3)
+# are about a fifth of the Koopas in the levels not scored on (19 of some
+# 100 in their enemy lists); an enemy piece is of red Koopas this share of
+# the time, and a Koopa on a brick row is red half the time, above the
+# game's so the outcome network meets them often enough.
+RED_KOOPA_SHARE = 0.1
 CANNON_TILES = (1, 2)
 # A Goomba's body as the simulator places it: its feet this far below the
 # y it is given.
@@ -240,7 +248,8 @@ def random_level(seed: int, pieces: int = 12, only: Optional[str] = None, start_
         elif kind == "goombas":
             roll = rng.random()
             walker = ("paratroopa" if roll < PARATROOPA_SHARE
-                      else "koopa" if roll < PARATROOPA_SHARE + KOOPA_SHARE else None)
+                      else "koopa" if roll < PARATROOPA_SHARE + KOOPA_SHARE
+                      else "red_koopa" if roll < PARATROOPA_SHARE + KOOPA_SHARE + RED_KOOPA_SHARE else None)
             count = rng.choice(GROUPS)
             for k in range(count):
                 enemies.append(_goomba(x + k * PAIR_GAP, FLOOR, walker))
@@ -254,7 +263,7 @@ def random_level(seed: int, pieces: int = 12, only: Optional[str] = None, start_
             low = rng.choice(LOW_TILES)
             row(x, low_top, low)
             if low >= 2 and rng.random() < ON_ROW:
-                enemies.append(_goomba(x + rng.randrange(1, low) * TILE, low_top, rng.choice((None, "koopa"))))
+                enemies.append(_goomba(x + rng.randrange(1, low) * TILE, low_top, rng.choice((None, None, "koopa", "red_koopa"))))
             end = x + low * TILE
             if rng.random() < 0.5:
                 start = x + rng.randint(1, 2) * TILE

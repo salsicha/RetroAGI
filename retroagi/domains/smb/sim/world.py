@@ -108,6 +108,8 @@ def enemy_kind(enemy: dict) -> str:
         return "flier"
     if enemy.get("kind") == "hammer":
         return "thrown"
+    if enemy.get("red") and not enemy.get("shell"):
+        return "pacer"
     return "hopper" if enemy.get("wings") else "walker"
 
 

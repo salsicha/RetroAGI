@@ -56,7 +56,7 @@ TRACK_FRAMES = 32
 # code (pixel_labels.ENEMY_KIND_TYPES): a Hammer Bro, a Piranha Plant, a
 # Koopa Paratroopa, a Bullet Bill; any other walker walks, anything else
 # flies. A Hammer Bro's hammers (loose items, not enemies) are thrown things.
-SLOT_KINDS = {0x05: "walker", 0x0D: "plant", 0x0E: "hopper", 0x33: "flier"}
+SLOT_KINDS = {0x03: "pacer", 0x05: "walker", 0x0D: "plant", 0x0E: "hopper", 0x33: "flier"}
 
 
 class MemorySource:

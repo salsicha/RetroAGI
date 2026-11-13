@@ -1685,12 +1685,13 @@ class MarioScenarioEnv:
 
         # Horizontal move — check edge-awareness before stepping
         step_x = enemy["speed"] * enemy["direction"]
-        if enemy["edge_aware"] and enemy["on_ground"]:
-            # Peek one pixel ahead at feet level; turn if no platform below
-            peek_x = enemy["x"] + step_x + (enemy["w"] if enemy["direction"] > 0 else -1)
+        if enemy["edge_aware"] and enemy["on_ground"] and not enemy.get("shell"):
+            # As the game's red Koopa does (game memory, 1-3 and 3-3): turned
+            # back where the floor under its middle would end
+            peek_x = enemy["x"] + enemy["w"] / 2 + step_x
             feet_y = enemy["y"] + enemy["h"] + enemy.get("foot_offset", 0) + 1
             supported = any(
-                r.left <= peek_x <= r.right and r.top <= feet_y <= r.bottom for r in platform_rects
+                r.left <= peek_x < r.right and r.top <= feet_y <= r.bottom for r in platform_rects
             )
             if not supported:
                 enemy["direction"] *= -1
@@ -1803,10 +1804,12 @@ class MarioScenarioEnv:
 
             return parse_plant(e)
         kind = e.get("kind") if isinstance(e, dict) else None
-        if kind not in (None, "monster", "koopa", "paratroopa", "hammer_bro"):
+        if kind not in (None, "monster", "koopa", "red_koopa", "paratroopa", "hammer_bro"):
             raise ValueError(f"unknown enemy kind {kind!r}")
         wings = kind == "paratroopa"
-        if wings:
+        # A red Koopa: a Koopa that turns back at ledges (edge_aware)
+        red = kind == "red_koopa"
+        if wings or red:
             kind = "koopa"
         game_rules = isinstance(e, dict) and bool(e.get("game_rules", False))
         if isinstance(e, dict):
@@ -1816,7 +1819,7 @@ class MarioScenarioEnv:
             pmin = float(e.get("patrol_min", -1e9 if game_rules else x))
             pmax = float(e.get("patrol_max", 1e9 if game_rules else x))
             speed = float(e.get("speed", 0.5 if game_rules else 1.5))
-            edge_aware = bool(e.get("edge_aware", False))
+            edge_aware = bool(e.get("edge_aware", red))
             direction = int(e.get("direction", -1 if game_rules else 1))
         else:
             x, y = float(e[0]), float(e[1])
@@ -1844,6 +1847,7 @@ class MarioScenarioEnv:
             "dead": False,
             **({"game_rules": True} if game_rules else {}),
             **({"wings": True} if wings else {}),
+            **({"red": True} if red else {}),
         }
 
     # ── Procedural level generator ────────────────────────────────────────────
