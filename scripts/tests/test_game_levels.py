@@ -119,8 +119,12 @@ def test_the_levels_hold_the_pieces_measured_in_worlds_2_1_3_1_and_5_1():
                        and x0 < p[0] + p[2] for p, kind in solids(scene))
         heights = sorted(FLOOR - p[1] for p, kind in solids(scene) if kind == "ground" and p[0] + p[2] <= x0 and p[1] < FLOOR)
         assert heights == [TILE * k for k in range(1, REACH + 1)]
-        # Enemies stand on what is under them: the floor, a step, a row or the walkway.
+        # Enemies stand on what is under them: the floor, a step, a row or the
+        # walkway (a lava fireball jumps from the pit under it).
         for enemy in scene["enemies"]:
+            if enemy.get("kind") == "lava":
+                assert x0 <= enemy["x"] < x0 + width
+                continue
             assert enemy["y"] + 14 == top and x0 <= enemy["x"] < x0 + width
         # Two pits never run together, however close the pieces.
         pits = random_level(seed, 2, only="pit", flat=(0, 0), flag=False)

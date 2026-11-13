@@ -111,6 +111,8 @@ def enemy_kind(enemy: dict) -> str:
         return "thrown"
     if enemy.get("kind") == "firebar":
         return "turner"
+    if enemy.get("kind") == "lava":
+        return "fountain"
     if enemy.get("kind") == "lakitu":
         return "flier"
     if enemy.get("kind") == "cheep":

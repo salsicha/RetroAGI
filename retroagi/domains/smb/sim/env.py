@@ -227,6 +227,15 @@ SPRING_W = 16
 # counts up).
 FIREBAR_BALLS, FIREBAR_LONG, FIREBAR_GAP, FIREBAR_BALL = 6, 12, 8, 8
 FIREBAR_TURN, FIREBAR_STEPS = 0.15625, 32
+# Lava fireballs (game memory, 2-4's): one jumps up out of its pit from
+# LAVA_FROM (the game's y: under the screen) at a speed from LAVA_UP (by
+# the fraction the game draws at random; the game's two leaps measured
+# peaked at 73 and 90), under LAVA_GRAVITY, falling at
+# most LAVA_FALL, and jumps again LAVA_WAIT frames times one of LAVA_WAITS
+# later; its box is the game's (LAVA_BOX: in from its place, and size).
+LAVA_FROM, LAVA_UP, LAVA_GRAVITY, LAVA_FALL = 258.0, (-5.95, -6.35), 28 / 256, 3.25
+LAVA_WAIT, LAVA_WAITS = 21, tuple(range(6, 16))
+LAVA_BOX = (3, 14, 10, 6)
 
 # What each strategy is paid for, as multipliers of the reward terms (training
 # only; a layout names its strategy in "strategy", see strategy_families).
@@ -600,6 +609,9 @@ class MarioScenarioEnv:
         for e in scenario.get("enemies", []):
             if isinstance(e, dict) and e.get("kind") == "firebar":
                 self.enemies.extend(self._firebar(e))  # (each fireball its own enemy)
+                continue
+            if isinstance(e, dict) and e.get("kind") == "lava":
+                self.enemies.append(self._lava(e))
                 continue
             enemy = self._parse_enemy(e)
             if enemy.get("kind") == "monster":
@@ -1382,7 +1394,7 @@ class MarioScenarioEnv:
                 yield "enemy", "plant", partial(self._draw_plant, rect=rect)
             elif enemy.get("kind") == "monster":
                 yield "enemy", "other", partial(self._draw_monster, enemy=enemy, rect=rect)
-            elif enemy.get("kind") in ("bullet", "hammer", "hammer_bro", "lakitu", "spiny", "cheep", "firebar"):
+            elif enemy.get("kind") in ("bullet", "hammer", "hammer_bro", "lakitu", "spiny", "cheep", "firebar", "lava"):
                 if not enemy.get("gone") and not (enemy.get("kind") in ("hammer_bro", "lakitu") and enemy["dead"]):
                     yield "enemy", "other", partial(self._draw_monster, enemy=enemy, rect=rect)
             else:
@@ -1697,6 +1709,31 @@ class MarioScenarioEnv:
         return balls
 
     @staticmethod
+    def _lava(spec: dict) -> dict:
+        """A lava fireball in its pit at ``x``, first jumping after ``wait``
+        frames (its later jumps and speeds from its ``turn``)."""
+        bx, by, bw, bh = LAVA_BOX
+        return {"kind": "lava", "x": float(spec["x"]) + bx, "y": LAVA_FROM + by, "vx": 0.0, "vy": 0.0,
+                "w": bw, "h": bh, "speed": 0.0, "direction": 1, "patrol_min": -1e9, "patrol_max": 1e9,
+                "edge_aware": False, "on_ground": False, "foot_offset": 0, "dead": False, "stompable": False,
+                "timer": int(spec.get("wait", 1)), "turn": int(spec.get("turn", 1))}
+
+    def _leap(self, lava: dict) -> None:
+        """A lava fireball's frame: jumping when its time comes (LAVA_UP,
+        LAVA_WAITS), else rising and falling (LAVA_GRAVITY, LAVA_FALL)."""
+        lava["timer"] -= 1
+        if lava["timer"] <= 0:
+            lava["turn"] = (lava["turn"] * 1103515245 + 12345) % 2**31
+            low, high = LAVA_UP
+            lava["vy"] = low + (high - low) * (lava["turn"] % 1024) / 1023
+            lava["y"] = LAVA_FROM + LAVA_BOX[1]
+            lava["timer"] = LAVA_WAIT * LAVA_WAITS[(lava["turn"] // 1024) % len(LAVA_WAITS)]
+        elif lava["y"] > self.height + 64:
+            return  # (far under the screen it waits for its next jump)
+        lava["y"] += lava["vy"]
+        lava["vy"] = min(lava["vy"] + LAVA_GRAVITY, LAVA_FALL)
+
+    @staticmethod
     def _place_fireball(ball: dict) -> None:
         """A fire bar's fireball where the whole step its bar has reached
         puts it."""
@@ -1752,7 +1789,7 @@ class MarioScenarioEnv:
             shell["kick_grace"] = max(0, shell.get("kick_grace", 0) - 1)
             body = pygame.Rect(shell["x"], shell["y"], shell["w"], shell["h"])
             for other in self.enemies:
-                if other is shell or other["dead"] or other.get("kind") in ("piranha_plant", "hammer", "firebar"):
+                if other is shell or other["dead"] or other.get("kind") in ("piranha_plant", "hammer", "firebar", "lava"):
                     continue
                 if body.colliderect(pygame.Rect(other["x"], other["y"], other["w"], other["h"])):
                     other["dead"] = True
@@ -1968,6 +2005,9 @@ class MarioScenarioEnv:
         if enemy.get("kind") == "firebar":
             enemy["angle"] = (enemy["angle"] + enemy["turn"]) % FIREBAR_STEPS
             self._place_fireball(enemy)
+            return
+        if enemy.get("kind") == "lava":
+            self._leap(enemy)
             return
         if enemy.get("kind") == "cheep":
             enemy["vy"] += CHEEP_GRAVITY

@@ -75,8 +75,11 @@ ENEMY_FALL = 3.4
 # EGG_FALL); a leaper (a leaping Cheep Cheep) flies through everything
 # falling under LEAPER_GRAVITY (sim/env.CHEEP_GRAVITY); a turner (a fire
 # bar's fireball) goes round its hub (Enemy.hub) at its turn (Enemy.turn),
-# through everything.
-ENEMY_KINDS = ("walker", "hopper", "plant", "flier", "thrown", "pacer", "egg", "leaper", "turner")
+# through everything; a fountain (a lava fireball) goes straight up and
+# down through everything under FOUNTAIN_GRAVITY, falling at most
+# FOUNTAIN_FALL (sim/env.LAVA_GRAVITY, LAVA_FALL).
+ENEMY_KINDS = ("walker", "hopper", "plant", "flier", "thrown", "pacer", "egg", "leaper", "turner", "fountain")
+FOUNTAIN_GRAVITY, FOUNTAIN_FALL = 28 / 256, 3.25
 THROWN_GRAVITY, THROWN_FALL = 0.0625, 4.5
 EGG_GRAVITY, EGG_FALL, EGG_FEET = 0.125, 3.25, 4.0
 LEAPER_GRAVITY = 0.0524
@@ -202,10 +205,12 @@ def enemy_paths(enemies: Sequence[Enemy], solids: Sequence[Solid], frames: int) 
     into a wall (a solid rising above its feet), as the game turns walkers
     at pipes and steps, and falling once it walks off what it stands on (a
     Goomba off a brick row); hopping; rising from its pipe; flying."""
-    turners = [e for e in enemies if e.kind == "turner"]
-    for e in turners:
-        e.path = _turning(e, frames)
-    enemies = [e for e in enemies if e.kind != "turner"]
+    for e in enemies:
+        if e.kind == "turner":
+            e.path = _turning(e, frames)
+        elif e.kind == "fountain":
+            e.path = _fountain(e, frames)
+    enemies = [e for e in enemies if e.kind not in ("turner", "fountain")]
     if not enemies:
         return
     boxes = np.array([e.box for e in enemies], np.float64)
@@ -215,6 +220,14 @@ def enemy_paths(enemies: Sequence[Enemy], solids: Sequence[Solid], frames: int) 
     paths = _paths(boxes, velocities, kinds, _solid_array([s for s in solids if s.kind != "edge"]), frames)
     for e, path in zip(enemies, paths):
         e.path = path
+
+
+def _fountain(e: Enemy, frames: int) -> np.ndarray:
+    """A fountain's boxes for ``frames`` frames from now: up and down
+    under FOUNTAIN_GRAVITY from its vy, falling at most FOUNTAIN_FALL."""
+    vy = e.vy + FOUNTAIN_GRAVITY * np.arange(frames, dtype=np.float64)
+    drop = np.concatenate([[0.0], np.cumsum(np.minimum(vy, FOUNTAIN_FALL))])
+    return np.asarray(e.box, np.float64)[None, :] + drop[:, None] * np.array([0.0, 1.0, 0.0, 1.0])
 
 
 # A fire bar's fireballs are where the whole step of its turn puts them,

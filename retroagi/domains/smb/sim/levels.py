@@ -56,7 +56,7 @@ import random
 from typing import Optional, Sequence
 
 from ..physics import SPRING_REST
-from .env import FIREBAR_BALLS, FIREBAR_LONG, FIREBAR_STEPS, LIFT_H, LIFT_W, SPRING_W
+from .env import FIREBAR_BALLS, FIREBAR_LONG, FIREBAR_STEPS, LAVA_WAIT, LAVA_WAITS, LIFT_H, LIFT_W, SPRING_W
 from .piranha import EXPOSED_FRAMES, HIDDEN_FRAMES, RISE_FRAMES
 
 PLANT_CYCLE = 2 * RISE_FRAMES + EXPOSED_FRAMES + HIDDEN_FRAMES
@@ -79,7 +79,16 @@ END_FLAT = 10
 # The pieces and how often each comes.
 PIECES = {"pipe": 3, "pit": 2, "goombas": 3, "bricks": 2, "stairs": 2, "questions": 1, "cannon": 1, "step": 1,
           "bridge": 1, "hammer_bros": 1, "lakitu": 1, "ledges": 1, "bill_frenzy": 1, "spring": 1,
-          "firebar": 1}
+          "firebar": 1, "lava": 1}
+# Lava fireballs (game memory: 2-4 to 7-4; sim/env.py LAVA_FROM): a piece
+# of LAVA_PITS pits, each LAVA_PIT_TILES wide (the game's, castles' lava
+# under them) and LAVA_APART tiles after the one before, a lava fireball
+# jumping from the middle of each; one under a bridge LAVA_UNDER_BRIDGE of
+# the time (2-4's and 5-4's long pits, Bowser's bridge).
+LAVA_PITS = (1, 1, 2, 3)
+LAVA_PIT_TILES = (1, 2, 2, 2, 2, 2, 3, 3, 3, 3, 3)
+LAVA_APART = (3, 3, 6)
+LAVA_UNDER_BRIDGE = 0.2
 # Fire bars (game memory: the 47 in the castles 1-4 to 6-4; sim/env.py
 # FIREBAR_BALLS): FIREBAR_GROUPS of them FIREBAR_APART tiles apart, each on
 # a block FIREBAR_HEIGHTS tiles over the floor (counts of the game's, over
@@ -277,6 +286,11 @@ def random_level(seed: int, pieces: int = 12, only: Optional[str] = None, start_
     def pit(x0, tiles):
         pits.append((x0, x0 + tiles * TILE))
 
+    def lava(x0):
+        """A lava fireball at ``x0``, at a point of its wait for its jump."""
+        return {"kind": "lava", "x": float(x0), "wait": rng.randint(1, LAVA_WAIT * LAVA_WAITS[-1]),
+                "turn": rng.randrange(2**31)}
+
     def way_up(x0, tiles):
         """What stands before a pipe ``tiles`` tall, too tall to jump onto
         from the floor, and where the pipe then starts: a lower pipe (as in
@@ -451,6 +465,17 @@ def random_level(seed: int, pieces: int = 12, only: Optional[str] = None, start_
                 pit(x, rng.choice(PIT_TILES))
                 x = pits[-1][1]
                 ends_in_pit = True
+        elif kind == "lava":
+            if behind_pit and after < BETWEEN_PITS:  # (two pits never run together)
+                x += (BETWEEN_PITS - after) * TILE
+            for k in range(rng.choice(LAVA_PITS)):
+                if k:
+                    x += rng.choice(LAVA_APART) * TILE
+                width = rng.choice(LAVA_PIT_TILES)
+                pit(x, width)
+                enemies.append(lava(x + (width // 2) * TILE))
+                x += width * TILE
+            ends_in_pit = True
         elif kind == "firebar":
             for k in range(rng.choice(FIREBAR_GROUPS)):
                 if k:
@@ -479,6 +504,8 @@ def random_level(seed: int, pieces: int = 12, only: Optional[str] = None, start_
                 x += TILE
             width, top = rng.randint(*BRIDGE_TILES), FLOOR - REACH * TILE
             pit(x, width)
+            if rng.random() < LAVA_UNDER_BRIDGE:
+                enemies.append(lava(x + (width // 2) * TILE))
             solids.append([x, top, width * TILE, TILE, "ground"])
             for k in range(rng.choice(ON_BRIDGE)):
                 enemies.append(_goomba(x + (width - 1) * TILE - k * PAIR_GAP, top))
