@@ -291,6 +291,28 @@ In Block SMB no better than round 2 (165 of 200 level plays, 1,990 of
 | 1-1 whole plays finished, from the screen / exact positions | 6 / 0 of 8 | 4 / 4 of 8 | 6 / 8 of 8 |
 | 4-1 whole plays finished with exact positions | 1 of 8 | 0 of 8 | 6 of 8 |
 
+**From nothing, in one run** (`outcome_scratch_20261112`, 2026-11-12):
+`scripts/learn_in_block_smb.sh` with the larger network below, three rounds
+of sampling, training and the exam in today's Block SMB (Hammer Bros among
+the pieces), nothing carried over from earlier networks; the choices
+without the care variants (the baseline the care run is compared with).
+About 7.7 hours. In Block SMB: 159 of 200 level plays finished, 2,170 of
+2,200 skill scenes passed, 174 of 200 Hammer Bros scenes (round 2: 148).
+On the real game, against round 3 (built up over three runs):
+
+| Scored on the real game | Round 3 | From nothing |
+|---|---|---|
+| Tries at an obstacle failing, held-out levels, from the screen | 29% | 36% |
+| The same with exact positions | 23% | 25% |
+| Whole held-out levels finished from the screen | 1 of 32 | 2 of 32 |
+| 1-1 whole plays finished, from the screen / exact positions | 6 / 8 of 8 | 4 / 8 of 8 |
+| 4-1 whole plays finished with exact positions | 6 of 8 | 2 of 8 |
+
+One run from nothing comes near three rounds built up, with exact
+positions; from the screen it loses more (36% against 29%), and it passes
+1-1 from the screen in half its plays. Not yet a system that passes 1-1
+reliably.
+
 **A larger network learns more of the same data.** Trained on rounds 1 and
 2's outcomes, a network twice as wide (192 numbers a token), one layer
 deeper (4) and trained twice as long (40,000 steps) against round 2's
