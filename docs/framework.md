@@ -125,14 +125,13 @@ benches from game memory and from vision.
   and the controller's. Only the outcome network is learned (from Block
   SMB). The rule ([generalization.md](generalization.md)) is that all of
   it is learned or set from Block SMB alone.
-- **Block SMB does not yet behave as all of the game does**: it lacks
-  enemies the real levels have (Lakitu and his Spinies, Buzzy
-  Beetles), lifts and blocks invisible until hit. Its random levels draw
-  the pieces and spacings measured in three real levels, and may still
-  lack what other levels are made of. (It is not meant to have the game's
-  graphics or its levels: [requirements.md](requirements.md).) The agent
-  finishes about three quarters of fresh Block SMB levels and one real
-  level.
+- **Block SMB does not yet behave as all of the game does**: of what the
+  levels not scored on hold (read from the game's memory, 2026-11-13) it
+  lacks looping and balance lifts, springboards, the castles' fire bars,
+  lava fireballs and Bowser, water levels and blocks invisible until hit.
+  (It is not meant to have the game's graphics or its levels:
+  [requirements.md](requirements.md).) The agent finishes about three
+  quarters of fresh Block SMB levels and one real level.
 - **The controller's settings are chosen among three hand-made sets**
   (bold, usual, careful; `controller.CARE`): each choice comes in each,
   and the outcome network's predictions pick one per situation. The sets

@@ -375,6 +375,64 @@ levels finished:
 | The old network | 0.95 | 4 of 8 plays | 0.59 | 0.74 |
 | Round 1 | 0.97 | 6 of 8 plays | 0.59 | 0.68 |
 
+## Every kind of thing the game has (2026-11-13)
+
+Block SMB had been measured in four levels. To find what else the game
+holds, `scripts/dev/game_catalogue.py` flies Mario through every level not
+scored on (27 of 32: 1-1, 4-1, 6-1, 7-1 and 8-1 are not read) and reads
+the game's memory as he goes. He gets to a level by writing its numbers
+into memory and letting the timer run out, is held near the top of the
+screen, made invincible and pushed through walls. Every frame it records
+which kind of thing is in each of the game's enemy slots (what the level
+lists place and what the game makes as it goes: Cheep Cheeps, a Lakitu's
+Spinies, frenzies), the level's blocks and its area type. The three
+castles whose corridors loop (4-4, 7-4, 8-4) are not flown to their ends.
+`scripts/dev/measure_enemy.py` then reads how one kind moves: Mario is
+held still or at a set speed, unhurtable, or set down to ride a lift, and
+the thing's place, speed and box are read every frame.
+`scripts/dev/level_shapes.py` measures the levels' shapes from the block
+maps.
+
+The game has 34 kinds of things in those levels; Block SMB had 6. Added,
+each measured in a level not scored on:
+
+| Kind | Measured in | What Block SMB now does |
+|---|---|---|
+| Buzzy Beetle | 4-2, 5-2, 6-2 | Walks at half a pixel a frame and leaves a shell, as a Koopa: to an agent without fireballs it is one |
+| Red Koopa | 1-3, 3-3 | A Koopa turned back where the floor under its middle would end; red Koopas in enemy files and on brick rows and ledges. A new kind for the planner (a pacer) |
+| Lakitu and Spinies | 8-2 | Flies 40 from the top at a base speed less a quarter of his distance from Mario (base 20, 47 or 63 by how Mario scrolls the screen), turns back 60 past him, throws an egg every 128 frames while there is room, leaves at the end of his stretch; an egg rises at 3.06, falls under 0.125 and hatches into a Spiny walking at Mario, which cannot be stomped. A new kind for the planner (an egg) |
+| Flying Paratroopas | 1-3 (red), 7-3 (green) | The red one swings 104 down and back every 400 frames, the green one 95 across every 320, bobbing 8 (sines, 1 to 3 pixels off the game's); stomped, a walking Koopa of its colour |
+| Bullet Bill frenzy | 5-3 | A Bill from the right every 240 frames at three heights in turn |
+| Leaping Cheep Cheeps | 2-3 | From below near Mario, up at 4.97 under 0.052, across at one of four speeds; over some bridges. A new kind for the planner (a leaper) |
+| Lifts | 1-3, 3-3 (Mario riding) | 48 wide; across (53 pixels, 240 frames), up and down (137, 340), falling while stood on (2.25 a frame); they carry Mario both ways |
+
+The levels' shapes, from the block maps:
+
+| In the game | Block SMB before | Now |
+|---|---|---|
+| Sky levels (1-3, 3-3, 4-3, 5-3, 6-3): stretches of 24 to 51 tiles with no floor, crossed on 16 to 20 ledges each, 1 to 12 tiles wide, 1 to 10 up, 0 to 8 apart | None | A piece of 3 to 8 ledges over a stretch with no floor, of the game's widths, heights and gaps, each within a jump of the one before; red Koopas on some, red Paratroopas and lifts in some gaps |
+| Pits 1 tile wide (25, 14 of them in 8-2) | 2 to 4 | 1 to 4 |
+| Brick rows 3 tiles up (36) | 4 or 5 | 3 to 5 |
+| Bridges over pits of 8 to 15 (2-3, 7-3) | to 8 | to 15 |
+
+The planner now takes each solid's box frame by frame: a lift moves at
+its speed and carries Mario standing on it; still solids plan exactly as
+before. Every new skill scene checked can be passed (the passability
+search counts where the lifts are as part of a situation). The
+hand-written chooser, never trained on them, passes 28 of 40 Lakitu
+scenes and 27 of 40 ledge scenes; on the skill scenes both Block SMBs
+have it scores the same as before.
+
+Still missing: lifts that loop up or down (1-2, 4-2) and balance lifts
+(3-3, 4-3, 6-3); springboards (2-1, 3-1, 5-2, 6-3, 8-2); the castles'
+fire bars, lava fireballs, Bowser and his flames (measured: lava
+fireballs leap from below at about 6 a frame under 0.109; flames fly left
+at 1.25 at 112, 128 or 144 from the top); water levels (swimming,
+Bloopers, swimming Cheep Cheeps); blocks invisible until hit. In the real
+game, the state from memory and from vision show lifts without their
+speed. None of the networks has learned from the widened Block SMB yet:
+that is the next run from nothing.
+
 ## The measure
 
 - **Three sets of levels.** *Tuned*: 1-1 and 5-1. *Development*: 2-1 and
