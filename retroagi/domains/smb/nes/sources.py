@@ -54,12 +54,13 @@ TRACK_FRAMES = 32
 
 # The planner's kind of enemy (smb_planner.ENEMY_KINDS) by the game's enemy
 # code (pixel_labels.ENEMY_KIND_TYPES): a Hammer Bro, a Piranha Plant, a
-# Koopa Paratroopa (flying ones fly), a Bullet Bill, a red Koopa, Lakitu, a Spiny (an egg
-# while its egg falls); any other walker walks, anything else flies. A
+# Koopa Paratroopa (flying ones fly), a Bullet Bill (a frenzy's too), a
+# leaping Cheep Cheep, a red Koopa, Lakitu, a Spiny (an egg while its egg
+# falls); any other walker walks, anything else flies. A
 # Hammer Bro's hammers (loose items, not enemies) are thrown things.
 # A Spiny's walk (Block SMB's sim/env.SPINY_SPEED, measured in the game).
 EGG_WALK = 0.5
-SLOT_KINDS = {0x03: "pacer", 0x05: "walker", 0x0D: "plant", 0x0E: "hopper", 0x0F: "flier", 0x10: "flier", 0x11: "flier", 0x12: "walker", 0x33: "flier"}
+SLOT_KINDS = {0x08: "flier", 0x14: "leaper", 0x03: "pacer", 0x05: "walker", 0x0D: "plant", 0x0E: "hopper", 0x0F: "flier", 0x10: "flier", 0x11: "flier", 0x12: "walker", 0x33: "flier"}
 
 
 class MemorySource:

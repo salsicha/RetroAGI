@@ -31,6 +31,10 @@ and each level draws its own from those ranges (random_level):
   (3-1's), jumping from row to row and throwing hammers;
 - Lakitu (8-2's), flying over Mario and throwing Spiny eggs for a stretch
   of the pieces after his;
+- the sky levels' ledges over a stretch with no floor (1-3's, 3-3's, 4-3's,
+  5-3's and 6-3's tree tops and mushrooms), red Koopas pacing some;
+- a Bullet Bill frenzy (5-3's) over a stretch of the pieces after it, and
+  leaping Cheep Cheeps (2-3's) over some bridges;
 - and a staircase before the flag.
 
 Pieces stand 0 to 8 tiles of floor apart. The floor is cut where a pipe or
@@ -42,7 +46,7 @@ where the real game does (SCROLL_X).
 A skill scene (skill_scene) is a short stretch of the same pieces that
 calls for one skill: one piece of a kind (SCENE_KINDS: a pipe, a pit,
 enemies, bricks, stairs, question blocks, a cannon, a step, a bridge,
-Hammer Bros, Lakitu) or two pieces close together ("pair"), Mario standing a few tiles before it, flat floor after
+Hammer Bros, Lakitu, ledges, a Bullet Bill frenzy) or two pieces close together ("pair"), Mario standing a few tiles before it, flat floor after
 it and no flag. Scenes give outcome sampling its share of every piece, and
 a score for each.
 """
@@ -71,7 +75,28 @@ FLAT = (0, 8)
 END_FLAT = 10
 # The pieces and how often each comes.
 PIECES = {"pipe": 3, "pit": 2, "goombas": 3, "bricks": 2, "stairs": 2, "questions": 1, "cannon": 1, "step": 1,
-          "bridge": 1, "hammer_bros": 1, "lakitu": 1}
+          "bridge": 1, "hammer_bros": 1, "lakitu": 1, "ledges": 1, "bill_frenzy": 1}
+# Frenzies (game memory: 5-3's Bullet Bills, 2-3's leaping Cheep Cheeps,
+# sim/env.py): a Bullet Bill frenzy's piece is LAKITU_FLOOR tiles of floor
+# and it lasts while Mario goes on LAKITU_SPANS tiles from it, over the
+# pieces that follow; leaping Cheep Cheeps come over a bridge CHEEP_BRIDGE
+# of the time, from its foot to a little beyond it.
+CHEEP_BRIDGE = 0.4
+# Ledges over a stretch with no floor (the sky levels' tree tops and
+# mushrooms: 1-3, 3-3, 4-3, 5-3 and 6-3 read from game memory, 16 to 20 a
+# level): LEDGE_COUNT of them, each LEDGE_TILES wide, LEDGE_HEIGHTS tiles
+# over where the floor would be, LEDGE_GAPS tiles after the one before, as
+# often as the game's; a ledge rises at most REACH tiles over the one
+# before (the floor the first), and one higher than the one before is at
+# most RISE_GAP tiles from it (what a jump reaches); a ledge 3 or more wide has a red Koopa pacing it LEDGE_KOOPA of
+# the time, and a gap 3 or more wide a red Paratroopa flying over it
+# RED_OVER_PIT of the time.
+LEDGE_COUNT = (3, 8)
+LEDGE_TILES = (2, 3, 3, 3, 3, 4, 4, 4, 5, 5, 5, 6, 7, 8, 10, 12)
+LEDGE_HEIGHTS = (1, 1, 1, 2, 3, 4, 4, 4, 4, 5, 6, 6, 7, 8, 8, 9, 10)
+LEDGE_GAPS = (1, 1, 2, 2, 2, 3, 4, 4, 5, 5)
+RISE_GAP = 3
+LEDGE_KOOPA = 0.3
 # Lakitu (8-2's: game memory): he comes on as the screen reaches where he
 # is placed and stays over Mario until Mario is LAKITU_SPANS tiles on (8-2's
 # about 32 from where he is placed; in 4-1 and 6-1 he stays the whole level),
@@ -89,7 +114,9 @@ SECOND_BRO = 0.5
 # (1)): one taller than REACH has a way up before it (random_level).
 REACH = 4
 PIPE_TILES = (2, 2, 3, 3, 3, 4, 4, 4, 5, 6)
-PIT_TILES = (2, 2, 3, 3, 4)
+# Pits (tiles wide; in the levels not scored on, read from game memory, 1
+# (25 of them: 8-2 has 14), 2 (43), 3 (23), 4 (8)).
+PIT_TILES = (1, 2, 2, 2, 3, 3, 4)
 # A pit has a row of bricks over it this share of the time, at one of these
 # heights or both (2-1: 8 tiles up; 3-1: 5 and 8).
 ROOFED_PIT = 0.25
@@ -109,13 +136,15 @@ STAIR_UP = (3, 4, 5, 6)
 STAIR_TOPS = (1, 2)
 ON_STAIRS = 0.3
 PIT_AT_FOOT = 0.4
-# A bridge's pit (tiles wide; 3-1's is 8) and the Goombas on its walkway.
-BRIDGE_TILES = (5, 8)
+# A bridge's pit (tiles wide; 3-1's is 8, 2-3's and 7-3's 8 to 15) and the
+# Goombas on its walkway.
+BRIDGE_TILES = (5, 15)
 ON_BRIDGE = (0, 0, 1, 2, 3)
 # Brick rows: the lower one's height (tiles above the floor) and length,
 # the upper one's top (pixels) and length; an enemy walks on the lower one
-# ON_ROW of the time.
-LOW_ROWS = (4, 4, 4, 5)
+# ON_ROW of the time (the game's are 3 tiles up some 36 times in the levels
+# not scored on, 4 some 84, 5 some 12).
+LOW_ROWS = (3, 4, 4, 4, 4, 5)
 LOW_ROW, HIGH_ROW = FLOOR - 4 * TILE, FLOOR - 8 * TILE
 LOW_TILES, HIGH_TILES = (1, 2, 3, 3, 4, 5, 5, 8, 11), (3, 8)
 ON_ROW = 0.25
@@ -195,7 +224,7 @@ def random_level(seed: int, pieces: int = 12, only: Optional[str] = None, start_
     nothing is to be reached: metadata "scene" has where it is passed."""
     rng = random.Random(seed)
     x = start_flat * TILE
-    pits, solids, enemies = [], [], []  # pits (x0, x1); solids [x, y, w, h, kind]
+    pits, solids, enemies, frenzies = [], [], [], []  # pits (x0, x1); solids [x, y, w, h, kind]
     contents = {}  # index in solids -> "coin" or "mushroom"
 
     def column(x0, tiles):
@@ -353,11 +382,35 @@ def random_level(seed: int, pieces: int = 12, only: Optional[str] = None, start_
                 enemies.append({**_goomba(bx, top, "hammer_bro"), "throw_wait": rng.randint(1, 50),
                                 "jump_wait": rng.randint(1, 241)})
             x += length * TILE
+        elif kind == "ledges":
+            start, height, gap = x, 0, rng.choice(LEDGE_GAPS)
+            for _ in range(rng.randint(*LEDGE_COUNT)):
+                rising = max(1, min(height + REACH, rng.choice(LEDGE_HEIGHTS)))
+                if rising > height:
+                    gap = min(gap, RISE_GAP)
+                x += gap * TILE
+                height, width = rising, rng.choice(LEDGE_TILES)
+                top = FLOOR - height * TILE
+                solids.append([x, top, width * TILE, TILE, "ground"])
+                if width >= 3 and rng.random() < LEDGE_KOOPA:
+                    enemies.append(_goomba(x + (width - 1) * TILE, top, "red_koopa"))
+                x += width * TILE
+                gap = rng.choice(LEDGE_GAPS)
+                if gap >= 3 and rng.random() < RED_OVER_PIT:
+                    enemies.append({**_goomba(x + gap * TILE / 2 - 6, FLOOR - RED_TOP * TILE, "red_paratroopa"),
+                                    "phase": rng.randrange(400)})
+            x += gap * TILE  # (down to the floor beyond)
+            pit(start, (x - start) // TILE)
+            ends_in_pit = True
+        elif kind == "bill_frenzy":
+            frenzies.append({"kind": "bills", "from": float(x), "until": float(x + rng.choice(LAKITU_SPANS) * TILE)})
+            x += LAKITU_FLOOR * TILE
         elif kind == "lakitu":
             enemies.append({"kind": "lakitu", "x": float(x + 4 * TILE), "y": 0.0, "game_rules": True,
                             "until": float(x + rng.choice(LAKITU_SPANS) * TILE)})
             x += LAKITU_FLOOR * TILE
         else:  # bridge: steps up, a walkway over a long pit, a step or two down
+            foot = x
             for k in range(REACH):
                 column(x, k + 1)
                 x += TILE
@@ -369,6 +422,9 @@ def random_level(seed: int, pieces: int = 12, only: Optional[str] = None, start_
             x += width * TILE
             column(x, REACH)
             x += TILE
+            if rng.random() < CHEEP_BRIDGE:
+                frenzies.append({"kind": "cheeps", "from": float(foot), "until": float(x + 4 * TILE),
+                                 "turn": rng.randrange(2**31)})
             if rng.random() < 0.5:
                 column(x, 2)
                 x += TILE
@@ -412,6 +468,7 @@ def random_level(seed: int, pieces: int = 12, only: Optional[str] = None, start_
         "platforms": [p[:4] for p in platforms],
         "platform_kinds": [p[4] for p in platforms],
         "enemies": enemies,
+        "frenzies": frenzies,
         **({"goal": [goal, 0, TILE, BOTTOM]} if flag else {}),
         "metadata": {"game_level": {"seed": seed, "pieces": pieces}, **({} if flag else {"scene": {"passed": passed}})},
     }

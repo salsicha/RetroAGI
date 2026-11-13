@@ -68,10 +68,12 @@ ENEMY_FALL = 3.4
 # (Lakitu's) falls straight down under EGG_GRAVITY to at most EGG_FALL until
 # its feet (EGG_FEET below its box) meet a top, then walks at its vx, the
 # walk a Spiny starts on landing (Block SMB's: sim/env.EGG_GRAVITY,
-# EGG_FALL).
-ENEMY_KINDS = ("walker", "hopper", "plant", "flier", "thrown", "pacer", "egg")
+# EGG_FALL); a leaper (a leaping Cheep Cheep) flies through everything
+# falling under LEAPER_GRAVITY (sim/env.CHEEP_GRAVITY).
+ENEMY_KINDS = ("walker", "hopper", "plant", "flier", "thrown", "pacer", "egg", "leaper")
 THROWN_GRAVITY, THROWN_FALL = 0.0625, 4.5
 EGG_GRAVITY, EGG_FALL, EGG_FEET = 0.125, 3.25, 4.0
+LEAPER_GRAVITY = 0.0524
 HOP_SPEED, HOP_GRAVITY, HOPPER_FEET = -3.25, 0.12, 3
 PLANT_SPEED, PLANT_TOP = 0.5, 4
 # A plant's box is at most this far below its pipe's top while it is seen
@@ -434,6 +436,12 @@ def _paths(boxes, velocities, kinds, solids, frames):
                                 dy, landed = solids[i, 1] - feet, True
                                 break
                     y0, y1 = y0 + dy, y1 + dy
+                out[e, k] = (x0, y0, x1, y1)
+            continue
+        if kinds[e] == 7:  # leaper
+            for k in range(1, frames + 1):
+                vy += LEAPER_GRAVITY
+                x0, x1, y0, y1 = x0 + vx, x1 + vx, y0 + vy, y1 + vy
                 out[e, k] = (x0, y0, x1, y1)
             continue
         if kinds[e] == 4:  # thrown

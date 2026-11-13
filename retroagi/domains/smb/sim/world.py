@@ -27,7 +27,7 @@ TRACK_FRAMES = 32
 def in_sight(env, thing: dict) -> bool:
     """Whether an enemy or item of the simulator is seen: on the screen,
     and for an enemy alive, awake and, a plant, out of its pipe."""
-    if thing["x"] + thing["w"] <= env.camera_x or thing["x"] >= env.camera_x + env.width:
+    if thing["x"] + thing["w"] <= env.camera_x or thing["x"] >= env.camera_x + env.width or thing["y"] >= env.height:
         return False
     if "dead" not in thing:
         return True  # (an item)
@@ -110,6 +110,8 @@ def enemy_kind(enemy: dict) -> str:
         return "thrown"
     if enemy.get("kind") == "lakitu":
         return "flier"
+    if enemy.get("kind") == "cheep":
+        return "leaper"
     if enemy.get("egg"):
         return "egg"
     if enemy.get("flight") and enemy.get("wings"):

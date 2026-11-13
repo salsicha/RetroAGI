@@ -46,7 +46,7 @@ def test_the_state_shows_only_the_screen_and_its_left_edge():
 
 
 def test_the_scripted_chooser_finishes_a_random_level():
-    rows = practice.run(DOMAIN, [3])
+    rows = practice.run(DOMAIN, [10])
     assert rows[0]["mode"] == "speed_run" and rows[0]["end"] == "finished"
 
 

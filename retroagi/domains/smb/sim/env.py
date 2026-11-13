@@ -184,6 +184,21 @@ SPINY_SPEED = 0.5
 RED_FLIGHT = (104.0, 402.6)
 GREEN_FLIGHT = (95.0, 319.8)
 GREEN_BOB = (8.0, 128.0)
+# Frenzies (game memory): over a stretch of level (scenario "frenzies": its
+# kind and the x Mario is at from and until), things come on their own. A
+# Bullet Bill frenzy (5-3's) sends a Bill from BILL_FROM pixels right of the
+# screen's left edge every BILL_GAP frames, flying left at BULLET_SPEED, its
+# box BILL_HEIGHTS from the top in turn. A leaping Cheep Cheep frenzy (2-3's)
+# sends one up from below the screen within CHEEP_REACH of Mario after each
+# of CHEEP_GAPS (frames, the game's, in a pseudo-random turn), CHEEP_UP a
+# frame upward under CHEEP_GRAVITY, across at one of CHEEP_SPEEDS, toward
+# Mario seven times in eight; it can be stomped, and its box is 10 by 6 (the
+# game's, 2 in from where it is placed and 14 down).
+BILL_FROM, BILL_GAP, BILL_HEIGHTS = 290, 240, (70, 118, 166)
+CHEEP_REACH, CHEEP_FROM = 128, 262
+CHEEP_GAPS = (16, 16, 16, 32, 64, 72, 72, 96, 96, 112, 120, 160, 168)
+CHEEP_UP, CHEEP_GRAVITY = -4.97, 0.0524
+CHEEP_SPEEDS = (5 / 16, 6 / 16, 12 / 16, 14 / 16)
 
 # What each strategy is paid for, as multipliers of the reward terms (training
 # only; a layout names its strategy in "strategy", see strategy_families).
@@ -385,6 +400,7 @@ class MarioScenarioEnv:
         self.power_ups = []
         self.items = []  # mushrooms out of question blocks
         self.cannons = []  # Bullet Bill cannons: x, w, top, timer, shots
+        self.frenzies = []  # stretches where things come on their own: kind, from, until, timer, count, turn
         self.stomped = False
         self.enemies = []
         self.goal = None
@@ -503,6 +519,8 @@ class MarioScenarioEnv:
             {"x": p["rect"].x, "w": p["rect"].w, "top": p["rect"].y, "timer": CANNON_FRAMES[0], "shots": 0}
             for p, kind in zip(self.platforms, self.platform_kinds) if kind == "cannon"
         ]
+        self.frenzies = [{"kind": f["kind"], "from": float(f["from"]), "until": float(f["until"]), "timer": 1,
+                          "count": 0, "turn": int(f.get("turn", 1))} for f in scenario.get("frenzies", [])]
         if scenario.get("mario_big"):
             self._resize(big=True)  # (standing where small Mario would)
         # What each question block holds ({platform index: "coin" or
@@ -933,6 +951,7 @@ class MarioScenarioEnv:
             self._update_enemy(enemy, rects)
         self._shells_hit(reward_terms)
         self._fire_cannons()
+        self._frenzies()
         self._track_goal_to_enemy()
 
         # ── 15. Enemy collision ───────────────────────────────────────────────
@@ -1307,7 +1326,7 @@ class MarioScenarioEnv:
                 yield "enemy", "plant", partial(self._draw_plant, rect=rect)
             elif enemy.get("kind") == "monster":
                 yield "enemy", "other", partial(self._draw_monster, enemy=enemy, rect=rect)
-            elif enemy.get("kind") in ("bullet", "hammer", "hammer_bro", "lakitu", "spiny"):
+            elif enemy.get("kind") in ("bullet", "hammer", "hammer_bro", "lakitu", "spiny", "cheep"):
                 if not enemy.get("gone") and not (enemy.get("kind") in ("hammer_bro", "lakitu") and enemy["dead"]):
                     yield "enemy", "other", partial(self._draw_monster, enemy=enemy, rect=rect)
             else:
@@ -1567,6 +1586,35 @@ class MarioScenarioEnv:
                 "dead": False, "stompable": True,
             })
 
+    def _frenzies(self) -> None:
+        """Bullet Bills and leaping Cheep Cheeps of the frenzies Mario is in
+        (BILL_GAP, CHEEP_GAPS)."""
+        for frenzy in self.frenzies:
+            if not frenzy["from"] <= self.mario["x"] < frenzy["until"]:
+                continue
+            frenzy["timer"] -= 1
+            if frenzy["timer"] > 0:
+                continue
+            frenzy["count"] += 1
+            # (the game's turns are pseudo-random: a fixed sequence from the scenario's turn)
+            frenzy["turn"] = (frenzy["turn"] * 1103515245 + 12345) % 2**31
+            turn = frenzy["turn"] >> 8
+            base = {"vx": 0.0, "patrol_min": -1e9, "patrol_max": 1e9, "edge_aware": False, "on_ground": False,
+                    "dead": False, "stompable": True}
+            if frenzy["kind"] == "bills":
+                frenzy["timer"] = BILL_GAP
+                self.enemies.append({**base, "kind": "bullet", "x": self.camera_x + BILL_FROM, "vy": 0.0,
+                                     "y": float(BILL_HEIGHTS[frenzy["count"] % len(BILL_HEIGHTS)]),
+                                     "w": BULLET_W, "h": BULLET_H, "speed": BULLET_SPEED, "direction": -1})
+                continue
+            frenzy["timer"] = CHEEP_GAPS[turn % len(CHEEP_GAPS)]
+            middle = self.mario["x"] + self.mario["w"] / 2
+            x = middle + (turn // 16) % (2 * CHEEP_REACH + 1) - CHEEP_REACH
+            toward = 1 if x < middle else -1
+            self.enemies.append({**base, "kind": "cheep", "x": x, "y": float(CHEEP_FROM), "vy": CHEEP_UP, "w": 10,
+                                 "h": 6, "speed": CHEEP_SPEEDS[(turn // 8192) % len(CHEEP_SPEEDS)],
+                                 "direction": toward if (turn // 65536) % 8 else -toward})
+
     def _shells_hit(self, reward_terms: dict) -> None:
         """Moving shells kill the enemies they meet."""
         for shell in self.enemies:
@@ -1787,6 +1835,14 @@ class MarioScenarioEnv:
             return
         if enemy.get("kind") == "hammer":
             self._update_hammer(enemy)
+            return
+        if enemy.get("kind") == "cheep":
+            enemy["vy"] += CHEEP_GRAVITY
+            enemy["x"] += enemy["speed"] * enemy["direction"]
+            enemy["y"] += enemy["vy"]
+            if (enemy["vy"] > 0 and enemy["y"] > CHEEP_FROM) or not (
+                    self.camera_x - 64 <= enemy["x"] <= self.camera_x + self.width + 64):
+                enemy.update(dead=True, gone=True)  # back down or off the screen: kept, so the others keep their places
             return
         if (enemy.get("kind") == "monster" or enemy.get("game_rules")) and not enemy.get("awake"):
             # Like NES enemies, a monster (and any enemy under the game's

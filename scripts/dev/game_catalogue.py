@@ -34,6 +34,14 @@ ENGINE, PLAYING, FLAGPOLE, LEVEL_END = 0x0E, 8, 4, 5  # GameEngineSubroutine and
 PAGE, X = 0x6D, 0x86  # Player_PageLoc, Player_X_Position
 Y, Y_PAGE, Y_SPEED, Y_FORCE, STAR = 0xCE, 0xB5, 0x9F, 0x433, 0x79F  # Player_Y_Position, ..._HighPos, ..._Y_Speed, ..._Y_MoveForce, StarInvincibleTimer
 ENEMY_ON, ENEMY_ID, SLOTS = 0x0F, 0x16, 5  # Enemy_Flag, Enemy_ID
+CAMERA_PAGE, CAMERA_X = 0x71A, 0x71C  # ScreenLeft_PageLoc, ScreenLeft_X_Pos
+# The block buffer (Block_Buffer_1 and _2): two screens of 16 columns by 13
+# rows of the game's block codes, its first row 32 pixels from the top; each
+# column is read while it is on the screen (pixel_labels.BLOCK_TYPES says
+# what a code is).
+BLOCKS, BLOCK_ROWS, BLOCK_TOP = 0x500, 13, 32
+AREA_TYPE = 0x74E  # AreaType: 0 under water, 1 above ground, 2 underground, 3 castle
+AREA_TYPES = ("water", "ground", "underground", "castle")
 # Worlds with a short walk to a pipe before level 2: an area of its own,
 # so level 2 on is one area further.
 INTRO_BEFORE_2 = (1, 2, 4, 7)
@@ -57,7 +65,7 @@ NAMES = {
 # What Block SMB has, by the same codes (sim/levels.py, sim/env.py; a Buzzy
 # Beetle walks and leaves a shell as a Koopa does, which without fireballs
 # makes it one).
-IN_BLOCK_SMB = {0x00, 0x02, 0x03, 0x05, 0x06, 0x0D, 0x0E, 0x0F, 0x10, 0x11, 0x12, 0x2E, 0x33}
+IN_BLOCK_SMB = {0x00, 0x02, 0x03, 0x05, 0x06, 0x08, 0x0D, 0x0E, 0x0F, 0x10, 0x11, 0x12, 0x14, 0x17, 0x2E, 0x33}
 # Not things to meet: the flag, the warp zone, Toad.
 NOT_MET = {0x30, 0x31, 0x34, 0x35}
 
@@ -68,7 +76,8 @@ def area_of(world: int, level: int) -> int:
 
 def fly(world: int, level: int, frames: int = 9000) -> dict:
     """Mario flown through one level: for each code met, the screens
-    (256-pixel pages) it was met on; how far he got."""
+    (256-pixel pages) it was met on; how far he got; the level's blocks,
+    a column of BLOCK_ROWS block codes for each 16 pixels."""
     import retro
 
     env = retro.make("SuperMarioBros-Nes", state="Level2-1", inttype=retro.data.Integrations.STABLE, render_mode=None)
@@ -87,7 +96,7 @@ def fly(world: int, level: int, frames: int = 9000) -> dict:
                            (LIVES, 5), (TIMER, 0), (TIMER + 1, 0), (TIMER + 2, 1)):
         write(address, value)
     here = (world - 1, level - 1)
-    started, seen, furthest, still, frame = False, defaultdict(set), 0, 0, 0
+    started, seen, furthest, still, frame, columns, area = False, defaultdict(set), 0, 0, 0, {}, None
     try:
         for frame in range(frames):
             ram = env.get_ram()
@@ -99,10 +108,15 @@ def fly(world: int, level: int, frames: int = 9000) -> dict:
             if not started:
                 continue
             ram = env.get_ram()
+            area = AREA_TYPES[int(ram[AREA_TYPE]) & 3]
             x = int(ram[PAGE]) * 256 + int(ram[X])
             for slot in range(SLOTS):
                 if ram[ENEMY_ON + slot]:
                     seen[int(ram[ENEMY_ID + slot])].add(x // 256)
+            first = (int(ram[CAMERA_PAGE]) * 256 + int(ram[CAMERA_X])) // 16
+            for column in range(first, first + 16):
+                at = BLOCKS + ((column // 16) % 2) * 16 * BLOCK_ROWS + column % 16
+                columns[column] = [int(ram[at + 16 * row]) for row in range(BLOCK_ROWS)]
             still = still + 1 if x <= furthest else 0
             furthest = max(furthest, x)
             if still and still % 6 == 0:  # against a wall: on through it
@@ -113,7 +127,9 @@ def fly(world: int, level: int, frames: int = 9000) -> dict:
                 break
     finally:
         env.close()
-    return {"furthest": furthest, "frames": frame, "seen": {code: sorted(pages) for code, pages in sorted(seen.items())}}
+    return {"furthest": furthest, "frames": frame, "seen": {code: sorted(pages) for code, pages in sorted(seen.items())},
+            "blocks": [columns.get(c, [0] * BLOCK_ROWS) for c in range(max(columns, default=-1) + 1)],
+            "area": area}
 
 
 def _fly(name: str):
