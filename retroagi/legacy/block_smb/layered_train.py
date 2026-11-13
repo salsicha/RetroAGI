@@ -2598,7 +2598,7 @@ def train_layer(config: LayeredTrainConfig) -> dict:
         raise ValueError(
             "the action predictor is replaced by the world model, trained apart from recorded "
             "ground truth: skills and tactics train with the teacher carrying out their "
-            "actions (docs/design-decisions.md 2026-10-15)"
+            "actions (retroagi/legacy/docs/design-decisions.md 2026-10-15)"
         )
     output = Path(config.output)
     output.mkdir(parents=True, exist_ok=True)

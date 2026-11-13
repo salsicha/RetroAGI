@@ -105,11 +105,11 @@ Adding a domain means writing these for it; nothing in `framework/` changes.
 `scripts/tests/test_architecture.py` keeps it so: the framework imports no
 domain, and no domain imports the retired code.
 
-## The retired layered agent
+## Retired code
 
-`retroagi/legacy` holds the earlier design (strategy, tactic and skill
-layers, its teachers and curriculum) and `scripts/tests/legacy` its tests.
-It still runs; the framework and the domains import nothing from it.
+`retroagi/legacy` holds retired code, with its own documents
+(`retroagi/legacy/docs`) and tests (`scripts/tests/legacy`). It still runs;
+the framework and the domains import nothing from it.
 
 ## Checking a change that should not change behaviour
 
@@ -146,7 +146,7 @@ benches from game memory and from vision.
 - **Vision's errors cost the agent in the real game** (9 to 15 obstacles in
   100 on levels nobody looked at). In Block SMB the state is a fast lookup
   by design, so this is seeing's problem to solve, not the policy's.
-- **Leftovers of the retired design in live files:** vision's scene lists
-  are still capped at the old policy's slot counts
-  (`perception/scene_lists.py`), and the simulator still carries the
-  curriculum's reward and schedule features (`sim/env.py`).
+- **Leftovers of retired code in live files:** vision's scene lists are
+  still capped at an old policy's slot counts (`perception/scene_lists.py`),
+  and the simulator still carries an old curriculum's reward and schedule
+  features (`sim/env.py`).

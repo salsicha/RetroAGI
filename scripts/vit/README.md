@@ -1,6 +1,10 @@
 # Super Mario Bros Vision Transformer Training
 
-Both Super Mario Bros games read the screen through one vision model class,
+The agent sees the real game through a vision network: in the real game the
+state comes from what it reports (in Block SMB the state is looked up in the
+simulator, and no vision network runs there; docs/requirements.md). A second
+set of weights for Block SMB's plain blocks is kept for measuring seeing on
+it. Both games' networks are one model class,
 `retroagi.domains.smb.perception.vision.SceneVisionTransformer`. It gives every pixel of the
 256x240 screen one of nine types, listed in
 `retroagi.domains.smb.perception.pixel_types.PIXEL_TYPES`:
@@ -18,8 +22,8 @@ The agent never reads the model's internal values. What it reads is built
 from the pixel types by shared rules: `objects_from_types` in
 `retroagi/domains/smb/perception/scene_labels.py` turns each group of touching pixels of one
 type into an object (Mario, a surface, a gap, a pipe, a coin, an enemy), and
-`retroagi/legacy/core/smb_observer.py` turns those objects into the report the
-decision layers read. Because both games use
+`retroagi/domains/smb/perception/state.py` turns those objects, tracked from
+frame to frame, into the state the agent's other parts read. Because both games use
 the same types and the same rules, the two models cannot drift apart in
 meaning.
 

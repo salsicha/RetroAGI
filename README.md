@@ -1,198 +1,194 @@
 # RetroAGI
 
-A vision-based agent for Super Mario Bros, built as a game-neutral framework
-with the game as its first domain: an adaptive controller plus
-interchangeable models, composed through declared interfaces
-([the framework](docs/framework.md)).
+A Super Mario Bros agent that learns to play in a fast, cheap stand-in for
+the game. It meets the real game only after it has been trained, and it
+plays the real game from the screen's picture alone. The game stands in for
+a robot's real situation, where nothing can be trained by trial and error.
+
+The project is a game-neutral framework (`retroagi/framework`) with Super
+Mario Bros as its first domain (`retroagi/domains/smb`). It is built from
+an adaptive controller and interchangeable models, composed through
+declared interfaces ([the framework](docs/framework.md)).
 
 **What the project must be** is in
-[docs/requirements.md](docs/requirements.md), in the project owner's words:
-a system trained and working before it meets the real game, learned in a
-fast, cheap simulator (Block SMB) that has none of the game's graphics or
-levels, with a controller far faster than the deep models.
+[docs/requirements.md](docs/requirements.md), in the project owner's words.
+That page is the authority: where any other document or the code disagrees
+with it, they are wrong and are corrected.
 
-## Current design: choose and control
+## The real game and Block SMB
 
-Since 2026-11-07 the agent is built around sparse decisions and a fast
-controller ([the plan](docs/choose-and-control-plan.md)). Five parts, each
-behind an interface in `retroagi/framework/interfaces.py`:
+Block SMB is a simulator that copies how the game behaves: Mario's motion,
+each enemy's rules, the pieces levels are made of and their sizes. It is
+drawn as plain blocks and loads none of the game's pictures, levels or
+program. Everything that decides and controls learns there.
 
-1. **A state source** turns the world into the state the others read: in
-   the real game from vision alone (`domains/smb/perception/`,
-   `domains/smb/nes/sources.py`), in the simulator from its truth.
-2. **The choice space** (`domains/smb/choices.py`) lists what can be done
-   now: jump onto a thing, stomp or pass an enemy, run to a place, wait,
-   bump a block, collect an item. Every jump and run comes in three ways
-   of carrying it out (bold, usual, careful: how wide a berth enemies get,
-   how long a landing must stay clear of them, how soon a coming enemy
-   ends a run), so that the controller's settings are chosen per situation
-   by what they lead to, not set by hand.
-3. **The outcome network** (`framework/outcome_network.py`): from the
-   state, one pass predicts the outcome of every candidate choice at once
-   (the chance of dying, of being infeasible, of leaving Mario stuck, of
-   reaching the flag, and the progress, frames and points). It learns from
-   outcomes measured, not taught: in practice worlds every candidate is
-   played from saved states by the controller (`framework/sampling.py`).
-4. **The chooser** (`framework/chooser.py`): fixed priorities on those
-   predictions, in order: don't die, progress to the right, get coins and
-   power-ups. A hand-written chooser (`domains/smb/scripted_chooser.py`) is
-   kept to compare against.
-5. **The controller** (`domains/smb/controller.py`, `planner.py`): a
-   model-based controller run every frame. It takes one choice at a time,
-   plans the jump (run-up frames and how long the button is held) with the
-   NES motion model against what it sees, re-plans before takeoff and
-   corrects the flight in the air, and reports how the choice ended
-   (landed, stomped, arrived, a threat, infeasible).
+```mermaid
+flowchart LR
+    subgraph REAL["The real game (emulator)"]
+        G[Frames and memory]
+    end
+    subgraph SIM["Block SMB (simulator)"]
+        R["Random levels and skill scenes,<br/>drawn from the game's pieces"]
+    end
+    G -- "1. frames and labels from memory" --> V[Vision network]
+    G -- "2. measured: how things move,<br/>what levels are made of" --> R
+    R -- "outcomes of every choice,<br/>played from saved states" --> P["The policy:<br/>outcome network, chooser, controller"]
+    P -- "3. scored, nothing learned" --> G
+    V -. "what is on the screen" .-> P
+```
 
-Nothing learns on the real game: training data comes from random levels
-built in the Block SMB simulator from the real game's pieces and rules
-(`domains/smb/sim/`).
+The real game is used for three things only:
 
-**The rule** (2026-11-11): the real game is looked at only to train the
-vision network, to measure how the game behaves so that Block SMB behaves
-the same, and to score the finished system. Everything that decides and
-controls is learned from Block SMB alone, and is debugged there. No model
-learns a real level's layout: every practice world is drawn at random from
-the game's pieces ([docs/requirements.md](docs/requirements.md),
-[docs/generalization.md](docs/generalization.md)).
+1. **To train seeing.** The vision network learns from the game's frames,
+   labelled from its memory.
+2. **To measure how the game behaves**, so that Block SMB behaves the same.
+   Things are read from the game's memory while Mario is flown through a
+   level or held still beside an enemy.
+3. **To score the finished agent.** Nothing learns while it plays, and a
+   failure there is only ever turned into the question "what does Block
+   SMB lack?".
 
-Where it stands (2026-11-11), with outcome_20261111m (learned from 5.2
-million choices tried in Block SMB's skill scenes and random levels, in two
-rounds):
+No model learns a real level's layout. Every practice world is drawn at
+random from the game's pieces. The levels scored on (Worlds 1-1, 4-1, 6-1,
+7-1 and 8-1) are not even read for building Block SMB.
 
-- **In Block SMB** (worlds not trained on, both ways to play; the random
-  levels widened on 2026-11-11 with the kinds of piece measured in three
-  real levels: tall pipes with a way up, bridges, one-sided staircases,
-  pieces touching): the network's chooser finishes 170 of 200 plays of 100
-  random levels and passes 1,993 of 2,000 skill scenes. The network of the
-  round before finished 153 of the 200, and the hand-written chooser, kept
-  as a yardstick, 83.
-- **In the real game** (scored, nothing learned there) it finishes World
-  1-1 from the screen alone in 4 of 8 plays (the round before: 6 of 8), a
-  level its hand-written parts were adjusted on, and on four levels nobody
-  looked at (Worlds 4-1, 6-1, 7-1 and 8-1) it passes 0.66 of the obstacles
-  (the round before: 0.59), where a level needs about 98% of them passed to
-  be finished in half its plays. That gap is what Block SMB lacks of the
-  game (enemies it does not have, pieces and spacings its random levels
-  never draw) and what vision's errors cost; the first is closed by
-  widening Block SMB, the second is seeing's own work.
-- **Speed** (one processor core): the controller's work is about 0.04
-  milliseconds a frame, the outcome network's 1.4 to 2.3 a decision,
-  vision's 4 a frame; the whole agent plays Block SMB 70 to 105 times
-  faster than the game runs.
+## The design: choose and control
 
-The outcome network was trained only on Block SMB's skill scenes and random levels (question
-blocks, mushrooms, big Mario, Koopa Troopas, piranha plants, hopping
-Paratroopas, Bullet Bill cannons); nothing learns on the real game.
+The agent has five parts, each behind an interface in
+`retroagi/framework/interfaces.py`, so any one can be exchanged for
+another that answers the same question.
+
+```mermaid
+flowchart LR
+    W[World:<br/>Block SMB or the real game] --> S[State source]
+    S -- "Mario, solids, enemies, items" --> C[Choice space]
+    C -- "candidate choices,<br/>each bold, usual or careful" --> O[Outcome network]
+    O -- "each candidate's<br/>predicted outcome" --> H[Chooser]
+    H -- "one choice" --> K[Controller]
+    S -- "the state, every frame" --> K
+    K -- "buttons, every frame" --> W
+    K -- "the choice has ended" --> C
+```
+
+| Part | What it reads | What it gives |
+|---|---|---|
+| **State source** | the world | where Mario, the solids, the enemies and the items are. In Block SMB a lookup in the simulator; in the real game from the vision network (`domains/smb/perception/`) |
+| **Choice space** (`domains/smb/choices.py`) | the state | what can be done now: jump onto a thing, stomp or pass an enemy, run to a place, wait, bump a block, collect an item. Each comes in three ways of being carried out (bold, usual, careful: how wide a berth enemies get, how long a landing must stay clear of them, how soon a coming enemy ends a run) |
+| **Outcome network** (`framework/outcome_network.py`) | the state and every candidate | in one pass, for every candidate: the chance of dying, of being infeasible, of getting stuck, of reaching the flag; the progress, frames and points |
+| **Chooser** (`framework/chooser.py`) | the predictions | one choice, by the game's fixed priorities: don't die, progress to the right, get coins and power-ups |
+| **Controller** (`domains/smb/controller.py`, `planner.py`) | the choice, and the state every frame | the buttons each frame. It plans the jump (run-up, how long the button is held) with Mario's motion as the game computes it, plans again before takeoff, corrects in the air, and says how the choice ended |
+
+The deep model is consulted seldom; the controller runs every frame
+between decisions, with no network inside it:
+
+```mermaid
+sequenceDiagram
+    participant N as Outcome network and chooser
+    participant K as Controller
+    participant W as World
+    N->>K: a choice (frame 0), e.g. jump onto the pipe, careful
+    K->>K: plan the jump: run-up frames, how long A is held
+    loop every frame, about 25 of them
+        W->>K: the state
+        K->>W: the buttons
+    end
+    K->>N: the choice has ended: landed, stomped, arrived, a threat, infeasible
+    N->>K: the next choice
+```
+
+| Measured on one processor core | Time |
+|---|---|
+| The controller, each frame | 0.03 to 0.05 ms |
+| The controller, planning a jump | 0.7 to 1.0 ms, once a choice |
+| The outcome network, one decision | 1.4 ms (2.3 on the GPU), once a choice |
+| Vision in the real game, each frame | 4 ms |
+| Block SMB, a step and a state lookup | 0.09 ms |
+
+The whole agent plays Block SMB 70 to 105 times faster than the game's 60
+frames a second, so training data is cheap.
+
+## How the outcome network learns
+
+It learns from outcomes measured, not from a teacher. At states the agent
+reaches in Block SMB, every candidate choice is played out from a saved
+copy of the world by the controller, and what happened is recorded.
+
+```mermaid
+flowchart TD
+    A["Fresh random levels and skill scenes<br/>(drawn from the game's pieces)"] --> B[Play them with the present agent]
+    B --> C["At each decision: save the world,<br/>play every candidate from the save,<br/>record how each ended"]
+    C --> D[Train the outcome network on all the outcomes so far]
+    D --> E["The Block SMB exam:<br/>worlds never trained on"]
+    E -- next round --> B
+    E --> F["Scored once on the real game<br/>(nothing learned there)"]
+```
+
+A skill scene is a short world that calls for one skill (a gap, a
+springboard, a fire bar, a Hammer Bro); a random level strings the game's
+pieces together at the spacings measured in the game.
+
+## What Block SMB has of the game
+
+Each thing was measured in the game's memory, in levels not scored on:
+
+- Goombas, green and red Koopa Troopas and their shells, Buzzy Beetles,
+  hopping and flying Paratroopas, piranha plants;
+- Hammer Bros, Lakitu and his Spinies, Bullet Bills and their cannons,
+  Bullet Bill and Cheep Cheep frenzies;
+- question blocks, bricks, mushrooms and big Mario;
+- lifts across, up and down and falling, springboards;
+- castle fire bars and lava fireballs;
+- pipes, staircases, pits, bridges, and the sky levels' ledges.
+
+Still missing: Bowser and his flames (being measured), the fast fire bar,
+looping and balance lifts, water levels, and blocks invisible until hit.
+[How general is it?](docs/generalization.md) has every measurement.
+
+## Where it stands (2026-11-13)
+
+Learned from nothing in Block SMB in one run (`scripts/learn_in_block_smb.sh`),
+then scored on the real game from the screen alone:
+
+| | Without the care variants | With them |
+|---|---|---|
+| World 1-1, whole plays finished | 4 of 8 | 7 of 8 |
+| Held-out real levels (4-1, 6-1, 7-1, 8-1): tries at an obstacle that fail | 36% | 38% |
+| Held-out real levels finished | 2 of 32 | 1 of 32 |
+| Fresh Block SMB levels finished | 159 of 200 | 152 of 200 |
+
+A working agent needs about 2% of tries to fail: a level has about 35
+obstacles. The gap is what Block SMB still lacks of the game, which is
+closed by measuring more of it, and what vision's errors cost, which is
+seeing's own work. Neither network has yet learned in the Block SMB
+widened since (springboards, fire bars, lava, lifts, Lakitu and more).
+
+## Usage
+
+The [reproducibility procedure](docs/reproducibility.md) goes from a clean
+checkout to a trained and scored agent. The main commands:
 
 ```bash
-# score an agent on the 24 obstacles of 1-1, from vision
-python -m retroagi.framework.bench --domain smb --bench data/full_smb_obstacles/Level1-1 --source vision --model data/outcome/outcome_20261111m.pt
-# play a whole level
-python -m retroagi.framework.play --domain smb --level Level1-1 --source vision --model data/outcome/outcome_20261111m.pt
-# the scripted chooser, or the outcome network as the chooser, on fresh random levels
-python -m retroagi.framework.practice --domain smb --levels 100 --first-seed 100000 [--model data/outcome/outcome_20261111m.pt]
 # learn the deciding network from nothing in Block SMB, round after round (hours)
 scripts/learn_in_block_smb.sh NAME
-# or one step at a time: sample outcomes, then train the outcome network
-python -m retroagi.framework.sampling --domain smb --levels 2000 --workers 14 --output data/datasets/block_smb/outcomes_NEW
-python -m retroagi.framework.training --domain smb --data data/datasets/block_smb/outcomes_NEW --fresh data/datasets/block_smb/outcomes_fresh_NEW --output artifacts/block_smb/outcome_NEW
+# play fresh random Block SMB levels with a network choosing
+python -m retroagi.framework.practice --domain smb --levels 100 --first-seed 100000 --model data/outcome/outcome_care_20261112.pt
+# score it on each obstacle of a real level, from the screen
+python -m retroagi.framework.bench --domain smb --bench data/full_smb_obstacles/Level1-1 --source vision --model data/outcome/outcome_care_20261112.pt
+# play a whole real level from its start
+python -m retroagi.framework.play --domain smb --level Level1-1 --source vision --model data/outcome/outcome_care_20261112.pt
+# run the tests
+python -m pytest scripts/tests
 ```
 
-## Earlier design: the layered agent
+Other tools:
 
-This is the design the rebuild replaces; its code and trainers are still in
-the repository (`retroagi/legacy`). The hierarchy is **strategy → tactic → skill → predictive
-executor**:
+- `python scripts/mario_scenario_env.py` plays Block SMB by keyboard.
+- `python scripts/dev/game_catalogue.py` and `scripts/dev/measure_enemy.py`
+  read what the game holds and how each thing moves.
+- `python scripts/smb_physics_audit.py --output <file>` checks that Block
+  SMB moves Mario exactly as the emulator does.
 
-1. **Strategy:** externally selected `speed_run` or `max_points` objective.
-2. **Tactic:** persistent option-critic choosing advance, retreat, climb or
-   descend in either direction, or hold ground. There is no direction number
-   in its categorical token.
-3. **Skill:** reads the tactic, strategy context, ViT scene, its last 16
-   actions and the executor's feedback; no prediction. Chooses an action: a
-   verb (run, jump or wait), then for a run or a jump where Mario ends up,
-   one of the objects the vision reports (a surface, or an enemy he lands
-   on).
-4. **Executor:** carries the action out to its end: predicts movement,
-   chooses buttons and jump duration, brakes on arrival, and holds a spot
-   relative to a moving platform. A wait is one action, as long as until a
-   move is needed.
-
-Beside them are two prediction networks, trained apart from recorded ground
-truth and not used while the skills and tactics train (until then each
-"prediction" is the simulator's truth):
-
-- **World model:** an LSTM run once at the start of each action, after the
-  skill has chosen it, predicting that action's outcome: where Mario and its
-  object end, how many frames it takes (for a wait, how long), the chance
-  it succeeds, and whether a run keeps its speed into the jump after it.
-  Its prediction is the executor's destination; a landing on a still thing
-  vision sees takes that thing's height from vision.
-- **Target trackers:** run every frame, each predicting when and where its
-  enemy and Mario will collide (a stomp or a hit). The executor aims stomps
-  at the collision point and ends a wait or walk when a collision calls for
-  a move.
-
-Evaluation is Full SMB played many times, learning continuing on every
-playthrough (the world model and the trackers included), in speed mode
-(time to each checkpoint) and points mode; the measure is how few
-playthroughs it takes before Mario plays the level successfully.
-
-Each game has its own weights for the shared vision model. Simulator state
-supplies teacher labels, ground truth and scores in training, never deployed
-network inputs.
-
-```text
-screen → ViT → scene encoder
-                 │
-strategy → tactic (option-critic)
-                 │
-                 └──→ skill ← current scene + last 16 actions + executor feedback
-                       │
-                       ↓ action: verb + object
-             world model (LSTM) → outcome (destination; a wait's length)
-                       │            [Block SMB training: the ground truth]
-                       ↓
-                     predictive executor ← per-frame vision
-                       │  ↑ target trackers: when and where each enemy collides
-                       ↓ buttons            [Block SMB training: the ground truth]
-```
-
-Training proceeds **skill → tactic**, freezing lower layers. The executor has
-no learned weights. Every family belongs to exactly one stage:
-
-- **Skill: 44 families**, each played under one supplied tactic from start to
-  finish: the 20 isolated maneuvers (walk, jump a gap, climb a step, jump onto
-  a raised platform, walk off a ledge, jump down and stomp, each right and
-  left, plus stomping an enemy on a raised platform both ways, holding a
-  spot on a moving platform, climbing onto a pipe, stomping down from one
-  onto a walker below, and jumping a pit reached running), two enemy-bypass families, nine local route
-  maneuvers, and 13 older local families (flat runs, single gaps, a pit
-  before an enemy, enemy hops, stomps and patrols, pipe and stomp mounts, pit
-  leaps, platform hops, landing on an enemy, holding an area, the direct
-  route of the choice scene).
-- **Tactic: 49 families**, for strategy-dependent selection and termination:
-  18 strategy families (seven tactics, a Goomba under a block and a pen seen
-  from a pipe, under each strategy), ten composed
-  levels, five scene-driven route/response families, three alternate-route
-  families, three waiting/proceeding families, and 10 families whose tactic
-  changes partway through. These are excluded from skill training and
-  evaluation.
-
-Both learned stages sample their scene families; an optional parameter sweep
-supports selected small skill families.
-
-Legacy spatial-skill checkpoints warm-start by discarding the action network
-and preserving skill, tactic, scene encoder, and memory weights. No action
-training or action checkpoint is required.
-
-See [the architecture and training guide](docs/layered-agent.md) for the
-layered agent's exact inputs, outputs, timing, curriculum, qualification
-gates and known limits, and [design decisions](docs/design-decisions.md)
-for what was decided, why, and what is still to be built.
-
-## Project Layout
+## Project layout
 
 ```text
 retroagi/
@@ -208,84 +204,27 @@ retroagi/
   domains/smb/                   # Super Mario Bros
     domain.py                    # the game as the framework sees it
     controller.py, planner.py    # one choice at a time, every frame; the jump planner (compiled)
-    physics.py                   # Mario's NES motion
-    choices.py                   # the candidate choices and the state's tokens
-    scripted_chooser.py          # the hand-written chooser
-    perception/                  # the vision transformer, tracks, motion estimate, vision to state
-    sim/                         # Block SMB: the simulator and random levels of the game's pieces
-    nes/                         # the real game: emulator, game memory, frame labels, obstacle benches,
-                                 #   the dynamics models scored against the game (dynamics_check.py)
-  legacy/                        # the retired layered agent: its layers, teachers and curriculum
+    physics.py                   # Mario's motion, as the game computes it
+    choices.py                   # the candidate choices and the state as numbers
+    scripted_chooser.py          # a hand-written chooser, the yardstick
+    perception/                  # the vision network, tracking, vision to state
+    sim/                         # Block SMB: the simulator, random levels and skill scenes
+    nes/                         # the real game: emulator, game memory, obstacle benches
+  legacy/                        # retired code, kept running; nothing above imports it
 scripts/
-  vit/                           # train the two vision transformers
-  vision/                        # measure the two vision transformers
-  dev/                           # the scorecard; result tables; what killed the agent; one obstacle traced;
-                                 #   what each part of perception costs; the refactoring check
-  tests/                         # the test suite (tests/legacy: the retired agent's)
+  vit/, vision/                  # train and measure the vision networks
+  dev/                           # measuring the game, the scorecard, result tables
+  tests/                         # the test suite
 ```
 
-## Supported Platforms
+## Supported platforms
 
-RetroAGI supports Linux x86-64 and macOS Apple Silicon with Python 3.12
-through 3.14. It pins PyTorch 2.9.1 with torchvision 0.24.1. CPU-only
-execution is the baseline; CUDA and Apple Metal/MPS acceleration are selected
-automatically when available.
+Linux x86-64 and macOS Apple Silicon, Python 3.12 to 3.14, PyTorch 2.9.1
+with torchvision 0.24.1. It runs on the processor alone; CUDA and Apple
+Metal are used when present. The reference runs used an Intel NUC (12th
+generation, 64 GB) with an NVIDIA Tesla V100 (32 GB) in an external
+enclosure over Thunderbolt.
 
-Reference training runs were performed on an Intel NUC with a 12th-generation
-Intel processor and 64 GB of RAM, connected over Thunderbolt to a Razer Core X
-V2 external GPU enclosure housing an NVIDIA Tesla V100 with 32 GB of memory.
-
-See the [compatibility matrix and installation commands](docs/compatibility.md)
-before creating an environment. Full SMB needs the game imported into
-stable-retro; see [docs/full-smb-content.md](docs/full-smb-content.md).
-
-## Usage
-
-The [reproducibility procedure](docs/reproducibility.md) goes from a clean
-checkout to a trained agent. In short:
-
-1. Train and measure the vision transformers:
-   ```bash
-   python scripts/vit/train_block_vit.py --epochs 40 --samples-per-epoch 40000
-   python scripts/vision/evaluate_block_vision.py
-   python scripts/vit/train_full_vit.py --epochs 40 --samples-per-epoch 40000
-   python scripts/vision/evaluate_full_vision.py
-   ```
-   [scripts/vit/README.md](scripts/vit/README.md) describes both models,
-   their trainers and their measurements.
-2. Train the layers in Block SMB, each starting from the run below it:
-   ```bash
-   retroagi-block-smb train-layer --learner skill --output artifacts/block_smb/skill
-   retroagi-block-smb train-layer --learner tactic --init artifacts/block_smb/skill/passed.pt --output artifacts/block_smb/tactic
-   ```
-   `passed.pt` is the best round that met the layer's bar on every family;
-   `best.pt` is the best round overall (of equally good rounds, the latest).
-   `retroagi-block-smb train-layer --help` lists every setting.
-3. Examine a saved agent on fresh held-out Block SMB layouts, and play Full SMB
-   with it:
-   ```bash
-   retroagi-block-smb exam-layer --checkpoint artifacts/block_smb/tactic/passed.pt
-   python -m retroagi.legacy.full_smb.layered_eval --checkpoint artifacts/block_smb/tactic/passed.pt
-   ```
-4. Run the test suite:
-   ```bash
-   python -m pytest scripts/tests
-   ```
-
-Other tools:
-
-- `python scripts/mario_scenario_env.py` plays Block SMB by keyboard.
-- `python scripts/semantic_segmentation.py` shows Block SMB beside its true
-  pixel types.
-- `python scripts/smb_physics_audit.py --output <file>` checks that Block SMB
-  moves Mario exactly as the emulator does.
-
-## Earlier design notes
-
-These describe ideas from before the layered agent; the code they mention
-has been removed:
-
-- [AI teaching curriculum](docs/ai-teaching-curriculum.md)
-- [Universal retro oracle roadmap](docs/universal-retro-oracle.md)
-- [Hierarchical self-supervised planning plan](docs/hierarchical-self-supervised-planning.md)
-- [Universal embodied framework design](docs/universal-embodied-framework.md)
+See the [compatibility matrix](docs/compatibility.md) before creating an
+environment. The real game needs the ROM imported into stable-retro:
+[docs/full-smb-content.md](docs/full-smb-content.md).

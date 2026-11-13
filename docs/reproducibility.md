@@ -1,7 +1,7 @@
 # Reproducibility Procedure
 
-This procedure goes from a clean checkout to a trained layered agent, and
-records what is needed to repeat the run.
+This procedure goes from a clean checkout to a trained agent scored on the
+real game, and records what is needed to repeat the run.
 
 ## 1. Start From A Clean Checkout
 
@@ -66,82 +66,70 @@ python -c 'import torch; print(torch.__version__, torch.version.cuda, torch.cuda
 python -m pytest scripts/tests
 ```
 
-## 4. Train The Vision Transformers
+## 4. Train The Vision Network
 
-Block SMB frames come from every layout family, played with teacher, perturbed,
-delayed and random routes; their true labels are drawn exactly by the
-simulator. Full SMB frames come from the training levels in the emulator; their
-true labels are read from game memory, and a frame is used only when memory
-explains every visible pixel.
+The real game's vision network learns from its frames, labelled from its
+memory: a frame is used only when memory explains every visible pixel. It
+trains on the levels set aside for building Block SMB and is measured on
+levels it never trains on. (The Block SMB network is only for measuring
+seeing on plain blocks; the agent never uses vision in Block SMB.)
 
 ```bash
-python scripts/vit/train_block_vit.py --epochs 40 --samples-per-epoch 40000
-python scripts/vision/evaluate_block_vision.py
 python scripts/vit/train_full_vit.py --epochs 40 --samples-per-epoch 40000
 python scripts/vision/evaluate_full_vision.py
+python scripts/vit/train_block_vit.py --epochs 40 --samples-per-epoch 40000
+python scripts/vision/evaluate_block_vision.py
 ```
 
-The checkpoints are `data/block_vit/block_vit_scene.pth` and
-`data/full_vit/full_vit_scene.pth`, each with a `.json` summary beside it that
-records the settings, measurements, code revision and runtime. The Full SMB
-measurements use the test levels `Level1-1` and `Level5-1`, which the model
-never trains on.
+The checkpoints are `data/full_vit/full_vit_scene.pth` and
+`data/block_vit/block_vit_scene.pth`, each with a `.json` summary beside it
+that records the settings, measurements, code revision and runtime.
+[scripts/vit/README.md](../scripts/vit/README.md) describes both.
 
-## 5. Train The Layers In Block SMB
+## 5. Learn The Deciding Network In Block SMB
 
-Skill trains first, then tactic, each from the layer below as it is (no
-gate stops what follows; user, 2026-10-18). In Block SMB training the
-teacher carries out the skill's actions; the world model (the policy's
-LSTM) and the collision trackers learn alongside from the same teacher
-episodes, and apart from the saved datasets. Every round's episodes are
-saved one file per family (`episodes/round_NN/`) and read back instead of
-played again; `--generate-only true` makes and saves a dataset without
-learning.
+One command learns the outcome network from nothing, in Block SMB alone,
+round after round. Each round:
+
+1. plays fresh random levels and skill scenes (in round 1 with the
+   hand-written chooser, after that with the network of the round before);
+2. at each decision saves the world, plays every candidate choice from the
+   save with the controller, and records how each ended;
+3. trains the network on all the rounds' outcomes so far;
+4. examines it on Block SMB worlds it never trained on.
 
 ```bash
-python -m retroagi.legacy.block_smb.collision_train --source <policy> --output artifacts/block_smb/collision
-retroagi-block-smb train-layer --learner skill --init <policy> --output artifacts/block_smb/skill
-retroagi-block-smb train-layer --learner tactic --init artifacts/block_smb/skill/best.pt --output artifacts/block_smb/tactic
-python -m retroagi.legacy.block_smb.dataset_train --source artifacts/block_smb/skill/best.pt --tracker artifacts/block_smb/collision/tracker.pt --rounds artifacts/block_smb/skill/episodes artifacts/block_smb/tactic/episodes --collision artifacts/block_smb/collision/dataset --output artifacts/block_smb/predictions
+scripts/learn_in_block_smb.sh NAME
 ```
 
-- **Skill layer:** trains on 41 local maneuver families, each under one
-  supplied tactic, learning actions (a verb aimed at an object) from vision,
-  the executor's motion estimates, memory, tactic and its previous 16
-  actions. All tactic-training families are excluded. The collision
-  trackers first learn from the collision lessons (`collision_train`: every
-  way Mario and an enemy touch in one action, and misses), which train
-  nothing else; `dataset_train` then trains the world model and the
-  trackers from every saved dataset.
-- **Tactic layer:** the skill goes on learning with it (the teacher's
-  actions in its episodes; `--skill-learns`, on by default). Trains on 42
-  families: 14 strategy families, eight composed
-  levels, four scene-driven route/response families, three alternate-route
-  families, three waiting/proceeding families and 10 families whose tactic
-  changes partway through, with layouts drawn at random. The complete grouping is documented
-  in [the layered agent guide](layered-agent.md).
-
-Example larger runs add `--validation-layouts-per-difficulty 6 --workers 15` to
-each, and `--reward-rounds 4 --train-layouts-per-family 32` to the tactic
-layer. `retroagi-block-smb train-layer --help` lists every setting.
-
-Each run folder holds `history.json` (every round's
-scores per family), `last.pt`, `best.pt` and, once the bar is met, `passed.pt`.
-Every checkpoint records its settings, the layers it trained, and the vision
-checkpoint it was trained with (with that file's SHA-256).
-
-## 6. Examine The Agent
+Its settings come from the environment (`ROUNDS`, `LEVELS`, `SCENES`,
+`STEPS`, the network's size, `WORKERS`); the script's opening comment lists
+them. Three rounds take about eight hours on the reference machine. The
+last round's network is `artifacts/block_smb/outcome_NAME_3/outcome.pt`.
+The steps can also be run one at a time:
 
 ```bash
-retroagi-block-smb exam-layer --checkpoint artifacts/block_smb/tactic/passed.pt
-python -m retroagi.legacy.full_smb.layered_eval --checkpoint artifacts/block_smb/tactic/passed.pt
+python -m retroagi.framework.sampling --domain smb --levels 2000 --workers 14 --output data/datasets/block_smb/outcomes_NEW
+python -m retroagi.framework.training --domain smb --data data/datasets/block_smb/outcomes_NEW --fresh data/datasets/block_smb/outcomes_fresh_NEW --output artifacts/block_smb/outcome_NEW
+python -m retroagi.framework.practice --domain smb --levels 100 --first-seed 100000 --model artifacts/block_smb/outcome_NEW/outcome.pt
 ```
 
-The first plays fresh held-out Block SMB layouts with the whole agent; the
-second plays the Full SMB test levels and reports how far Mario got.
+## 6. Score It On The Real Game
+
+Nothing learns here. Each obstacle of a real level is played from a saved
+state just before it, from the screen (`--source vision`) or, as a
+measuring device, with exact positions read from memory (`--source
+memory`); whole levels are played from their start. `scripts/dev/scorecard.py`
+gathers the held-out levels' scores into one table.
+
+```bash
+python -m retroagi.framework.bench --domain smb --bench data/full_smb_obstacles/Level1-1 --source vision --model artifacts/block_smb/outcome_NEW/outcome.pt
+python -m retroagi.framework.play --domain smb --level Level1-1 --source vision --model artifacts/block_smb/outcome_NEW/outcome.pt
+```
 
 ## 7. Preserve The Run
 
 Keep, for each run: the commit hash, the exact commands, the run folders under
-`artifacts/`, and the vision checkpoints with their `.json` summaries. Never
+`artifacts/`, the sampled outcomes under `data/datasets/block_smb/`, and the
+vision checkpoints with their `.json` summaries. Never
 commit or upload the game ROM.

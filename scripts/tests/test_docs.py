@@ -5,17 +5,7 @@ import shlex
 import unittest
 from pathlib import Path
 
-DOCS = [Path("README.md"), Path("scripts/vit/README.md"), *sorted(Path("docs").glob("*.md"))]
-# Documents kept from before the layered agent; they describe removed code
-# and link to removed documents, so they are not checked.
-EARLIER_NOTES = {
-    "ai-teaching-curriculum.md",
-    "hierarchical-self-supervised-planning.md",
-    "issues.md",
-    "universal-embodied-framework.md",
-    "universal-retro-oracle.md",
-}
-CURRENT = [path for path in DOCS if path.name not in EARLIER_NOTES]
+CURRENT = [Path("README.md"), Path("scripts/vit/README.md"), *sorted(Path("docs").glob("*.md"))]
 
 
 def code_lines(text):
@@ -34,27 +24,25 @@ class TestDocumentation(unittest.TestCase):
                     self.assertTrue((doc.parent / target).exists())
 
     def test_commands_name_existing_scripts_modules_and_subcommands(self):
-        from retroagi.legacy.block_smb.cli import build_parser
-
-        subcommands = build_parser()._subparsers._group_actions[0].choices
         for doc in CURRENT:
             for line in code_lines(doc.read_text(encoding="utf-8")):
                 words = shlex.split(line) if line.strip() else []
                 if not words:
                     continue
                 with self.subTest(doc=str(doc), line=line):
-                    if words[0] == "retroagi-block-smb":
-                        self.assertIn(words[1], subcommands)
-                    elif words[:2] == ["python", "-m"] and words[2].startswith("retroagi"):
+                    if words[:2] == ["python", "-m"] and words[2].startswith("retroagi"):
                         module = Path(*words[2].split("."))
                         self.assertTrue(
                             module.with_suffix(".py").exists() or (module / "__init__.py").exists()
                         )
                     elif words[0] == "python" and words[1].endswith(".py"):
                         self.assertTrue(Path(words[1]).exists())
+                    elif words[0].endswith(".sh"):
+                        self.assertTrue(Path(words[0]).exists())
 
     def test_current_docs_name_no_removed_commands(self):
-        removed = ("retroagi train", "retroagi evaluate", "retroagi check-env", "retroagi promote")
+        removed = ("retroagi train", "retroagi evaluate", "retroagi check-env", "retroagi promote",
+                   "retroagi-block-smb")
         for doc in CURRENT:
             text = doc.read_text(encoding="utf-8")
             for command in removed:

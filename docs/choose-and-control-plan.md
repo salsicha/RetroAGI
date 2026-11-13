@@ -1,9 +1,11 @@
 # Choose and control: the plan
 
 Approved by the user on 2026-11-07 ("Yes I agree, make it so"; the design
-below as revised the same day: "Yes, and go ahead and implement"). This
-replaces the layered agent's approach (docs/layered-agent.md), where networks
-predicted where actions end and how long waits last. The background, the
+below as revised the same day: "Yes, and go ahead and implement"). This is the
+plan the design was built from. Where it differs from
+[requirements.md](requirements.md), the requirements stand: in particular,
+Block SMB copies the game's behaviour and pieces, never its levels, and the
+policy is learned from Block SMB alone. The background, the
 evidence from this project and the design are in the report
 [Choose and Control](https://claude.ai/artifact/1CaL7MDpVQsL4VCCS2DA6V).
 

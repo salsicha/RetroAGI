@@ -343,7 +343,7 @@ def carry_out(env, state, action, teacher_label=None, teacher_command=None):
     """The teacher's version of the skill's own chosen ``action`` from here,
     as the executor's destination. Training only: the simulator finds and
     tries it. Used instead of the world model while the layers train
-    (docs/design-decisions.md).
+    (retroagi/legacy/docs/design-decisions.md).
 
     The teacher's own command when the action is the teacher's choice
     (``teacher_label``, ``teacher_command``: a wait as long as the teacher
