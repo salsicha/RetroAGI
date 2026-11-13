@@ -73,8 +73,10 @@ ENEMY_FALL = 3.4
 # its feet (EGG_FEET below its box) meet a top, then walks at its vx, the
 # walk a Spiny starts on landing (Block SMB's: sim/env.EGG_GRAVITY,
 # EGG_FALL); a leaper (a leaping Cheep Cheep) flies through everything
-# falling under LEAPER_GRAVITY (sim/env.CHEEP_GRAVITY).
-ENEMY_KINDS = ("walker", "hopper", "plant", "flier", "thrown", "pacer", "egg", "leaper")
+# falling under LEAPER_GRAVITY (sim/env.CHEEP_GRAVITY); a turner (a fire
+# bar's fireball) goes round its hub (Enemy.hub) at its turn (Enemy.turn),
+# through everything.
+ENEMY_KINDS = ("walker", "hopper", "plant", "flier", "thrown", "pacer", "egg", "leaper", "turner")
 THROWN_GRAVITY, THROWN_FALL = 0.0625, 4.5
 EGG_GRAVITY, EGG_FALL, EGG_FEET = 0.125, 3.25, 4.0
 LEAPER_GRAVITY = 0.0524
@@ -165,7 +167,8 @@ class Enemy:
     (framework/observed_dynamics): ``track``, its places as seen, oldest
     first and ending now ((x, y) of one point of it each frame; None: not
     kept), and ``type``, what the state source calls it (any label: things
-    of one type are taken to move alike)."""
+    of one type are taken to move alike). A turner goes round ``hub`` (x,
+    y) at ``turn`` radians a frame (clockwise on the screen positive)."""
 
     box: tuple
     vx: float
@@ -176,6 +179,8 @@ class Enemy:
     kind: str = "walker"  # one of ENEMY_KINDS
     track: Optional[tuple] = None
     type: object = None
+    hub: Optional[tuple] = None
+    turn: float = 0.0
 
     def at(self, frame: int) -> tuple:
         if self.path is not None and frame < len(self.path):
@@ -197,6 +202,10 @@ def enemy_paths(enemies: Sequence[Enemy], solids: Sequence[Solid], frames: int) 
     into a wall (a solid rising above its feet), as the game turns walkers
     at pipes and steps, and falling once it walks off what it stands on (a
     Goomba off a brick row); hopping; rising from its pipe; flying."""
+    turners = [e for e in enemies if e.kind == "turner"]
+    for e in turners:
+        e.path = _turning(e, frames)
+    enemies = [e for e in enemies if e.kind != "turner"]
     if not enemies:
         return
     boxes = np.array([e.box for e in enemies], np.float64)
@@ -206,6 +215,26 @@ def enemy_paths(enemies: Sequence[Enemy], solids: Sequence[Solid], frames: int) 
     paths = _paths(boxes, velocities, kinds, _solid_array([s for s in solids if s.kind != "edge"]), frames)
     for e, path in zip(enemies, paths):
         e.path = path
+
+
+# A fire bar's fireballs are where the whole step of its turn puts them,
+# TURN_STEP radians a step (sim/env.FIREBAR_STEPS): seen, one is on average
+# half a step behind its turn.
+TURN_STEP = 2 * np.pi / 32
+
+
+def _turning(e: Enemy, frames: int) -> np.ndarray:
+    """A turner's boxes for ``frames`` frames from now: its middle going
+    round its hub at its turn (angles from straight up, clockwise), from
+    half a step on (TURN_STEP)."""
+    x0, y0, x1, y1 = e.box
+    hx, hy = e.hub
+    dx, dy = (x0 + x1) / 2 - hx, (y0 + y1) / 2 - hy
+    radius, start = np.hypot(dx, dy), np.arctan2(dx, -dy) + np.sign(e.turn) * TURN_STEP / 2
+    angle = start + e.turn * np.arange(frames + 1, dtype=np.float64)
+    mx, my = hx + radius * np.sin(angle), hy - radius * np.cos(angle)
+    half_w, half_h = (x1 - x0) / 2, (y1 - y0) / 2
+    return np.stack([mx - half_w, my - half_h, mx + half_w, my + half_h], axis=1)
 
 
 class RuleDynamics:

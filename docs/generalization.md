@@ -406,6 +406,7 @@ each measured in a level not scored on:
 | Leaping Cheep Cheeps | 2-3 | From below near Mario, up at 4.97 under 0.052, across at one of four speeds; over some bridges. A new kind for the planner (a leaper) |
 | Lifts | 1-3, 3-3 (Mario riding) | 48 wide; across (53 pixels, 240 frames), up and down (137, 340), falling while stood on (2.25 a frame); they carry Mario both ways |
 | Springboards | 2-1 (Mario set down on it, and walked into it) | On a half block that stops a walking Mario (one solid with it in Block SMB), its top 20 over the block. Standing on it presses him down 20 and lets him up over 19 frames, then throws him up at 7 pixels a frame, or at 12 if the jump button is held on the 16th to 18th of those frames (the game takes no other press there); gravity in the throw is 40/256. The plain throw is within a pixel of the game's all the way up; the strong one goes 457 up, as the game's. A piece: one at the floor's end before a wall 10 tiles tall (2-1) or a pit (3-1, 5-2, 8-2). The planner throws Mario over the wall from it (standing still to the throw, then steering), and the simulator lands him where it planned |
+| Fire bars | 1-4, 5-4 (the bar's turn from memory, its fireballs as drawn) | Six fireballs (twelve on a long bar) 8 apart out from the middle of a block, turning a 32-step circle once in 205 frames, the fireballs at the whole step reached (within a pixel of where the game draws them); they hurt, cannot be stomped, and shells pass them. A piece: one to three bars on blocks at the heights of the game's 47 (in the floor, on it, or 2, 3, 4, 6 or 8 tiles over it), a quarter turning clockwise. A new kind for the planner (a turner: it goes round its hub at its turn, which the state gives with it). The hand-written chooser passes 58 of 80 fire bar scenes |
 
 The levels' shapes, from the block maps:
 
@@ -432,13 +433,14 @@ bridges from 52 to 67, and the scenes both Block SMBs have are otherwise
 the same as before.
 
 Still missing: lifts that loop up or down (1-2, 4-2) and balance lifts
-(3-3, 4-3, 6-3); the castles'
-fire bars, lava fireballs, Bowser and his flames (measured: lava
-fireballs leap from below at about 6 a frame under 0.109; flames fly left
-at 1.25 at 112, 128 or 144 from the top); water levels (swimming,
-Bloopers, swimming Cheep Cheeps); blocks invisible until hit. In the real
-game, the state from memory and from vision show lifts without their
-speed, and show no springboard. None of the networks has learned from the widened Block SMB yet:
+(3-3, 4-3, 6-3); in the castles, the one fast fire bar (5-4), lava
+fireballs, Bowser and his flames (measured: lava fireballs leap from below
+at about 6 a frame under 0.109; flames fly left at 1.25 at 112, 128 or 144
+from the top), and the game's own test of a fire bar's touch (Block SMB
+takes the fireballs' drawn 8 by 8); water levels (swimming, Bloopers,
+swimming Cheep Cheeps); blocks invisible until hit. In the real game, the
+state from memory and from vision show lifts without their speed, and
+show no springboard and no fire bar going round. None of the networks has learned from the widened Block SMB yet:
 that is the next run from nothing.
 
 ## The measure

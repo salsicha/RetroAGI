@@ -217,6 +217,16 @@ LIFT_FALL = 2.25
 # and that it is pressed down to); how one throws Mario is his motion's
 # (physics.SPRING_SQUASH).
 SPRING_W = 16
+# Fire bars (game memory, 1-4's and 5-4's; their fireballs are only drawn
+# sprites): FIREBAR_BALLS fireballs (FIREBAR_LONG on a long one),
+# FIREBAR_GAP apart out from the middle of the block it turns on, each
+# FIREBAR_BALL square (as drawn: the game's own test of a touch is not
+# measured); it turns FIREBAR_TURN of a FIREBAR_STEPS-step circle a frame
+# (once round in 205 frames), the fireballs at the whole step it has
+# reached (step 0 straight up, a quarter round to the right; "clockwise"
+# counts up).
+FIREBAR_BALLS, FIREBAR_LONG, FIREBAR_GAP, FIREBAR_BALL = 6, 12, 8, 8
+FIREBAR_TURN, FIREBAR_STEPS = 0.15625, 32
 
 # What each strategy is paid for, as multipliers of the reward terms (training
 # only; a layout names its strategy in "strategy", see strategy_families).
@@ -588,6 +598,9 @@ class MarioScenarioEnv:
         # Enemies — accept list or dict; optional 5th element = speed
         self.enemies = []
         for e in scenario.get("enemies", []):
+            if isinstance(e, dict) and e.get("kind") == "firebar":
+                self.enemies.extend(self._firebar(e))  # (each fireball its own enemy)
+                continue
             enemy = self._parse_enemy(e)
             if enemy.get("kind") == "monster":
                 enemy.update(w=MONSTER_W, h=MONSTER_H, foot_offset=0, stompable=False)
@@ -1369,7 +1382,7 @@ class MarioScenarioEnv:
                 yield "enemy", "plant", partial(self._draw_plant, rect=rect)
             elif enemy.get("kind") == "monster":
                 yield "enemy", "other", partial(self._draw_monster, enemy=enemy, rect=rect)
-            elif enemy.get("kind") in ("bullet", "hammer", "hammer_bro", "lakitu", "spiny", "cheep"):
+            elif enemy.get("kind") in ("bullet", "hammer", "hammer_bro", "lakitu", "spiny", "cheep", "firebar"):
                 if not enemy.get("gone") and not (enemy.get("kind") in ("hammer_bro", "lakitu") and enemy["dead"]):
                     yield "enemy", "other", partial(self._draw_monster, enemy=enemy, rect=rect)
             else:
@@ -1666,6 +1679,33 @@ class MarioScenarioEnv:
         lift.update(lift_x=x, lift_y=y, vx=x - lift["lift_x"], vy=y - lift["lift_y"],
                     delta_x=rect.x - old[0], delta_y=rect.y - old[1])
 
+    @staticmethod
+    def _firebar(bar: dict) -> list:
+        """A fire bar's fireballs (FIREBAR_BALLS) on the block at ``x``,
+        ``y``, at step ``angle`` of its turn, turning "clockwise" or not."""
+        hub = (bar["x"] + TILE / 2, bar["y"] + TILE / 2)
+        turn = FIREBAR_TURN if bar.get("clockwise") else -FIREBAR_TURN
+        balls = []
+        for k in range(int(bar.get("balls", FIREBAR_BALLS))):
+            ball = {"kind": "firebar", "hub": hub, "radius": float(k * FIREBAR_GAP),
+                    "angle": float(bar.get("angle", 0.0)) % FIREBAR_STEPS, "turn": turn, "x": 0.0, "y": 0.0,
+                    "w": FIREBAR_BALL, "h": FIREBAR_BALL, "vx": 0.0, "vy": 0.0, "speed": 0.0, "direction": 1,
+                    "patrol_min": -1e9, "patrol_max": 1e9, "edge_aware": False, "on_ground": False,
+                    "foot_offset": 0, "dead": False, "stompable": False}
+            MarioScenarioEnv._place_fireball(ball)
+            balls.append(ball)
+        return balls
+
+    @staticmethod
+    def _place_fireball(ball: dict) -> None:
+        """A fire bar's fireball where the whole step its bar has reached
+        puts it."""
+        step = math.floor(ball["angle"]) % FIREBAR_STEPS
+        theta = 2 * math.pi * step / FIREBAR_STEPS
+        hx, hy = ball["hub"]
+        ball["x"] = hx + ball["radius"] * math.sin(theta) - FIREBAR_BALL / 2
+        ball["y"] = hy - ball["radius"] * math.cos(theta) - FIREBAR_BALL / 2
+
     def _spring_throw(self, spring: dict) -> None:
         """Mario thrown up by the springboard he stands on (SPRING_LAUNCH)."""
         motion = self.motion
@@ -1712,7 +1752,7 @@ class MarioScenarioEnv:
             shell["kick_grace"] = max(0, shell.get("kick_grace", 0) - 1)
             body = pygame.Rect(shell["x"], shell["y"], shell["w"], shell["h"])
             for other in self.enemies:
-                if other is shell or other["dead"] or other.get("kind") in ("piranha_plant", "hammer"):
+                if other is shell or other["dead"] or other.get("kind") in ("piranha_plant", "hammer", "firebar"):
                     continue
                 if body.colliderect(pygame.Rect(other["x"], other["y"], other["w"], other["h"])):
                     other["dead"] = True
@@ -1924,6 +1964,10 @@ class MarioScenarioEnv:
             return
         if enemy.get("kind") == "hammer":
             self._update_hammer(enemy)
+            return
+        if enemy.get("kind") == "firebar":
+            enemy["angle"] = (enemy["angle"] + enemy["turn"]) % FIREBAR_STEPS
+            self._place_fireball(enemy)
             return
         if enemy.get("kind") == "cheep":
             enemy["vy"] += CHEEP_GRAVITY

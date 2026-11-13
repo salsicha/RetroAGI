@@ -17,7 +17,8 @@ import numpy as np
 
 import game_catalogue as catalogue
 
-ENEMY_PAGE, ENEMY_X, ENEMY_Y_PAGE, ENEMY_Y = 0x6E, 0x87, 0xB6, 0xCF  # Enemy_PageLoc, _X_Position, _Y_HighPos, _Y_Position
+ENEMY_PAGE, ENEMY_X, ENEMY_Y_PAGE, ENEMY_Y = (catalogue.ENEMY_PAGE, catalogue.ENEMY_X, catalogue.ENEMY_Y_PAGE,
+                                          catalogue.ENEMY_Y)
 ENEMY_SPEED, ENEMY_Y_SPEED, ENEMY_STATE, ENEMY_DIR = 0x58, 0xA0, 0x1E, 0x46  # Enemy_X_Speed, _Y_Speed, Enemy_State, Enemy_MovingDir
 SPRITES = 0x200  # the sprites drawn: y, tile, attributes, x; four bytes each, 64 of them
 HIDDEN = 0xF0  # a sprite this far down is not drawn

@@ -11,13 +11,14 @@ has been in sight (kept by SimWorld in the thing's own record, so they are
 saved and put back with the world's state).
 """
 
+import math
 from copy import copy
 
 from retroagi.domains.smb.controller import State
 from retroagi.domains.smb.planner import Enemy, Solid, screen_edge
 from retroagi.framework.interfaces import Step
 
-from .env import SPINY_SPEED, MarioScenarioEnv
+from .env import FIREBAR_STEPS, SPINY_SPEED, MarioScenarioEnv
 from .env_state import restore_env_state, snapshot_env_state
 
 # The places of a thing kept as its track (frames).
@@ -108,6 +109,8 @@ def enemy_kind(enemy: dict) -> str:
         return "flier"
     if enemy.get("kind") == "hammer":
         return "thrown"
+    if enemy.get("kind") == "firebar":
+        return "turner"
     if enemy.get("kind") == "lakitu":
         return "flier"
     if enemy.get("kind") == "cheep":
@@ -159,6 +162,14 @@ class SimSource:
                 continue  # (a plant down in its pipe among them)
             box = (e["x"], e["y"], e["x"] + e["w"], e["y"] + e["h"])
             kind = enemy_kind(e)
+            if kind == "turner":  # (going round its hub: its speed along the circle, and the turn)
+                turn = 2 * math.pi * e["turn"] / FIREBAR_STEPS
+                theta = 2 * math.pi * e["angle"] / FIREBAR_STEPS
+                speed = turn * e["radius"]
+                enemies.append(Enemy(box, speed * math.cos(theta), speed * math.sin(theta), ("enemies", k),
+                                     stompable=False, kind=kind, track=e.get("track") or None, type=kind,
+                                     hub=e["hub"], turn=turn))
+                continue
             vx = e["speed"] * e["direction"]
             if kind == "plant":
                 vy = plant_velocity(e)
