@@ -361,9 +361,8 @@ does.
 **One command** learns the deciding network from nothing in Block SMB,
 round after round (`scripts/learn_in_block_smb.sh NAME`): sample, train,
 take the exam, and let the new network's play visit the next round's
-situations. Seeing is trained apart, on real frames. It has been run end
-to end only at a tiny size, to check that it works; a full run from
-nothing has not been made. A sampled play is now given up after 900 frames
+situations. Seeing is trained apart, on real frames. A full run from
+nothing was made on 2026-11-12 (above: "From nothing, in one run"). A sampled play is now given up after 900 frames
 without progress (`framework/sampling.py`): in the widened worlds the
 hand-written chooser, whose play the first round samples, stalls in a
 third of the levels, and a stalled play took over four minutes to sample.
