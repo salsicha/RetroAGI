@@ -140,7 +140,7 @@ Each thing was measured in the game's memory, in levels not scored on:
 - castle fire bars and lava fireballs, Bowser on his bridge and his flames;
 - pipes, staircases, pits, bridges, and the sky levels' ledges.
 
-Still missing: Bowser's hammers (worlds 6 to 8), the fast fire bar,
+Still missing: Bowser's hammers (worlds 6 to 8),
 looping and balance lifts, water levels, and blocks invisible until hit.
 [How general is it?](docs/generalization.md) has every measurement.
 

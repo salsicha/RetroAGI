@@ -3,8 +3,9 @@ bar's turn, and its fireballs as drawn): that a bar turns once round in 205
 frames with its fireballs at whole steps of its turn, 8 apart, where the
 game draws them; that a fireball hurts and cannot be stomped or knocked
 out by a shell; that the state shows it going round its hub and the
-planner predicts where it will be; and that the generator's pieces have
-the game's heights."""
+planner predicts where it will be; that 5-4's fast bar turns at the
+game's faster turn; and that the generator's pieces have the game's
+heights."""
 
 import math
 
@@ -16,11 +17,11 @@ from retroagi.domains.smb.sim.world import SimSource, SimWorld
 HUB_X, HUB_Y = 304, 144  # (the block the bar turns on)
 
 
-def scene(angle=0.0, clockwise=False, balls=6, mario=(40.0, FLOOR - 12)):
+def scene(angle=0.0, clockwise=False, balls=6, mario=(40.0, FLOOR - 12), fast=False):
     return {"world_width": 1000, "scroll_x": 115, "mario": list(mario), "frame_budget": 3000,
             "platforms": [[0, FLOOR, 1000, 32], [HUB_X, HUB_Y, TILE, TILE]], "platform_kinds": ["ground", "ground"],
             "enemies": [{"kind": "firebar", "x": HUB_X, "y": HUB_Y, "angle": angle, "clockwise": clockwise,
-                         "balls": balls}],
+                         "balls": balls, "fast": fast}],
             "task": {"family": "game_level"}}
 
 
@@ -94,10 +95,25 @@ def test_the_state_shows_it_going_round_and_the_planner_follows_it():
     assert worst <= 5.0  # (half a step of its turn, 40 out)
 
 
+def test_the_fast_bar_turns_once_round_in_146_frames():
+    # (5-4's: the game's turn, 56/256 of a step a frame, read from its program)
+    world = SimWorld(scene(angle=0.0, clockwise=True, fast=True))
+    world.reset()
+    tip = balls_of(world)[-1]
+    places = []
+    for _ in range(146):
+        world.step(0)
+        places.append((round(tip["x"], 3), round(tip["y"], 3)))
+    assert len(set(places)) == block.FIREBAR_STEPS
+    assert abs(tip["angle"] - 146 * 56 / 256 % block.FIREBAR_STEPS) < 1e-6
+
+
 def test_fire_bar_pieces_have_the_games_heights():
     scenes = [skill_scene(seed, "firebar") for seed in range(30)]
     bars = [e for s in scenes for e in s["enemies"] if e["kind"] == "firebar"]
     heights = {round((FLOOR - b["y"]) / TILE) for b in bars}
     assert heights <= set(FIREBAR_HEIGHTS) and len(heights) >= 4
     assert any(not b["clockwise"] for b in bars) and any(b["clockwise"] for b in bars)
+    fast = [e for seed in range(400) for e in skill_scene(seed, "firebar")["enemies"] if e.get("fast")]
+    assert fast and all(b["clockwise"] for b in fast)
     assert any(e.get("kind") == "firebar" for seed in range(60) for e in random_level(seed)["enemies"])

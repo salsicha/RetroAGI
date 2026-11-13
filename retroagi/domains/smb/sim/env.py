@@ -222,11 +222,12 @@ SPRING_W = 16
 # FIREBAR_GAP apart out from the middle of the block it turns on, each
 # FIREBAR_BALL square (as drawn: the game's own test of a touch is not
 # measured); it turns FIREBAR_TURN of a FIREBAR_STEPS-step circle a frame
-# (once round in 205 frames), the fireballs at the whole step it has
-# reached (step 0 straight up, a quarter round to the right; "clockwise"
-# counts up).
+# (once round in 205 frames; a "fast" one FIREBAR_FAST, once round in 146:
+# the game's turns, 40/256 and 56/256 of a step, read from its program),
+# the fireballs at the whole step it has reached (step 0 straight up, a
+# quarter round to the right; "clockwise" counts up).
 FIREBAR_BALLS, FIREBAR_LONG, FIREBAR_GAP, FIREBAR_BALL = 6, 12, 8, 8
-FIREBAR_TURN, FIREBAR_STEPS = 0.15625, 32
+FIREBAR_TURN, FIREBAR_FAST, FIREBAR_STEPS = 40 / 256, 56 / 256, 32
 # Lava fireballs (game memory, 2-4's): one jumps up out of its pit from
 # LAVA_FROM (the game's y: under the screen) at a speed from LAVA_UP (by
 # the fraction the game draws at random; the game's two leaps measured
@@ -1735,9 +1736,11 @@ class MarioScenarioEnv:
     @staticmethod
     def _firebar(bar: dict) -> list:
         """A fire bar's fireballs (FIREBAR_BALLS) on the block at ``x``,
-        ``y``, at step ``angle`` of its turn, turning "clockwise" or not."""
+        ``y``, at step ``angle`` of its turn, turning "clockwise" or not,
+        "fast" or not."""
         hub = (bar["x"] + TILE / 2, bar["y"] + TILE / 2)
-        turn = FIREBAR_TURN if bar.get("clockwise") else -FIREBAR_TURN
+        turn = FIREBAR_FAST if bar.get("fast") else FIREBAR_TURN
+        turn = turn if bar.get("clockwise") else -turn
         balls = []
         for k in range(int(bar.get("balls", FIREBAR_BALLS))):
             ball = {"kind": "firebar", "hub": hub, "radius": float(k * FIREBAR_GAP),

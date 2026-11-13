@@ -111,11 +111,12 @@ LAVA_UNDER_BRIDGE = 0.2
 # a block FIREBAR_HEIGHTS tiles over the floor (counts of the game's, over
 # the floor beside them: 0, the block in the floor, Mario walks over it; 1,
 # a block on the floor; 6 and 8, a castle's ceiling), turning clockwise
-# FIREBAR_CLOCKWISE of the time, long FIREBAR_LONG_SHARE.
+# FIREBAR_CLOCKWISE of the time, long FIREBAR_LONG_SHARE, fast (5-4's,
+# clockwise) FIREBAR_FAST_SHARE.
 FIREBAR_GROUPS = (1, 1, 2, 3)
 FIREBAR_APART = (4, 7, 8, 9, 11)
 FIREBAR_HEIGHTS = {0: 15, 1: 6, 2: 4, 3: 7, 4: 3, 6: 3, 8: 2}
-FIREBAR_CLOCKWISE, FIREBAR_LONG_SHARE = 0.26, 0.02
+FIREBAR_CLOCKWISE, FIREBAR_LONG_SHARE, FIREBAR_FAST_SHARE = 0.26, 0.02, 0.02
 # Springboards (game memory: 2-1, 3-1, 5-2 and 8-2; sim/env.py SPRING_W):
 # one at the floor's end (a solid down to the floor: the game's stands on a
 # half block it is pressed down to), before a wall SPRING_WALL_TILES
@@ -523,8 +524,10 @@ def random_level(seed: int, pieces: int = 12, only: Optional[str] = None, start_
                     column(x, 1)
                 elif height > 1:
                     solids.append([x, top, TILE, TILE, "ground"])
-                enemies.append({"kind": "firebar", "x": float(x), "y": float(top),
-                                "clockwise": rng.random() < FIREBAR_CLOCKWISE, "angle": rng.random() * FIREBAR_STEPS,
+                fast = rng.random() < FIREBAR_FAST_SHARE
+                enemies.append({"kind": "firebar", "x": float(x), "y": float(top), "fast": fast,
+                                "clockwise": fast or rng.random() < FIREBAR_CLOCKWISE,
+                                "angle": rng.random() * FIREBAR_STEPS,
                                 "balls": FIREBAR_LONG if rng.random() < FIREBAR_LONG_SHARE else FIREBAR_BALLS})
             x += TILE
         elif kind == "bill_frenzy":
