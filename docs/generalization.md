@@ -431,6 +431,7 @@ each measured in a level not scored on:
 | Springboards | 2-1 (Mario set down on it, and walked into it) | On a half block that stops a walking Mario (one solid with it in Block SMB), its top 20 over the block. Standing on it presses him down 20 and lets him up over 19 frames, then throws him up at 7 pixels a frame, or at 12 if the jump button is held on the 16th to 18th of those frames (the game takes no other press there); gravity in the throw is 40/256. The plain throw is within a pixel of the game's all the way up; the strong one goes 457 up, as the game's. A piece: one at the floor's end before a wall 10 tiles tall (2-1) or a pit (3-1, 5-2, 8-2). The planner throws Mario over the wall from it (standing still to the throw, then steering), and the simulator lands him where it planned |
 | Fire bars | 1-4, 5-4 (the bar's turn from memory, its fireballs as drawn) | Six fireballs (twelve on a long bar) 8 apart out from the middle of a block, turning a 32-step circle once in 205 frames, the fireballs at the whole step reached (within a pixel of where the game draws them); they hurt, cannot be stomped, and shells pass them. A piece: one to three bars on blocks at the heights of the game's 47 (in the floor, on it, or 2, 3, 4, 6 or 8 tiles over it), a quarter turning clockwise. A new kind for the planner (a turner: it goes round its hub at its turn, which the state gives with it). The hand-written chooser passes 58 of 80 fire bar scenes |
 | Lava fireballs | 2-4 | Jumps out of its pit from under the screen at 5.95 to 6.35 pixels a frame (peaking 70 to 92 from the top: the game's two measured leaps peaked at 73 and 90), under 28/256, falling at most 3.25, and jumps again 21 times 6 to 15 frames later; the game's 10 by 6 box; it hurts and cannot be stomped. A piece: one to three lava pits 1 to 3 tiles wide (the castles'), a fireball in each; one under a fifth of the bridges. A new kind for the planner (a fountain). The hand-written chooser passes 74 of 80 lava scenes |
+| Bowser and his flames | 1-4, 6-4 (his place, his flames', the lift over him), and his routine in the game's program | He paces about where he starts at a quarter of a pixel a frame (two at first and while following), turning back 17, 33, 49 or 65 either way (drawn each time he passes his start); he jumps 17, 33, 49 or 65 frames after landing, 2 a frame up under 15/256, 37 pixels high and 70 frames in the air (takeoff to takeoff 86, 102, 118 or 134 frames, the game's); 223 frames after he comes on screen his mouth opens for 32 frames (he stands still) and as it shuts he breathes a flame, then again after 191 or 64 frames in the game's order (16 fewer, and faster flames, in the hard castles of worlds 5 to 8); once Mario is behind him he turns, follows at half a pixel a frame and stops 89 right of his start, neither jumping nor breathing. His two halves are one box here, 32 by 27; he cannot be stomped. A flame flies left at 1.25 (1.375) and a pixel a frame up or down until level with 112, 128 or 144 from the top of a castle (Block SMB: 160, 176, 192), its box the game's 4 by 4. Free flames come from the right before he is on screen (36 to 42 tiles before his bridge, every 223 or 96 frames, level at once) and stop when he comes. A piece: the castles' bridge, 13 tiles level with the floor over lava, Bowser 7 tiles in, a lift 32 wide swinging across 4 tiles over it (the game's, 53 pixels every 240 frames, in all five castles read), a lava fireball under it two times in five, and the axe's step after it. Two new kinds for the planner: a jumper (walking; in the air, falling to a top: when he will jump is not known) and a flame (to its level, which the state gives with it). Every Bowser scene checked can be passed; the hand-written chooser passes 56 of 80 (Bowser coming down on Mario as he runs under is most of the rest). Not here: his hammers (worlds 6 to 8) and the axe |
 
 The levels' shapes, from the block maps:
 
@@ -457,13 +458,13 @@ bridges from 52 to 67, and the scenes both Block SMBs have are otherwise
 the same as before.
 
 Still missing: lifts that loop up or down (1-2, 4-2) and balance lifts
-(3-3, 4-3, 6-3); in the castles, the one fast fire bar (5-4), Bowser and
-his flames (measured: flames fly left at 1.25 at 112, 128 or 144 from the
-top), and the game's own test of a fire bar's touch (Block SMB
+(3-3, 4-3, 6-3); in the castles, the one fast fire bar (5-4), Bowser's
+hammers (6-4 to 8-4), and the game's own test of a fire bar's touch (Block SMB
 takes the fireballs' drawn 8 by 8); water levels (swimming, Bloopers,
 swimming Cheep Cheeps); blocks invisible until hit. In the real game, the
 state from memory and from vision show lifts without their speed, and
-show no springboard, no fire bar going round and no lava fireball. None of the networks has learned from the widened Block SMB yet:
+show no springboard, no fire bar going round, no lava fireball and no
+Bowser. None of the networks has learned from the widened Block SMB yet:
 that is the next run from nothing.
 
 ## The measure

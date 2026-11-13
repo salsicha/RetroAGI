@@ -77,9 +77,17 @@ ENEMY_FALL = 3.4
 # bar's fireball) goes round its hub (Enemy.hub) at its turn (Enemy.turn),
 # through everything; a fountain (a lava fireball) goes straight up and
 # down through everything under FOUNTAIN_GRAVITY, falling at most
-# FOUNTAIN_FALL (sim/env.LAVA_GRAVITY, LAVA_FALL).
-ENEMY_KINDS = ("walker", "hopper", "plant", "flier", "thrown", "pacer", "egg", "leaper", "turner", "fountain")
+# FOUNTAIN_FALL (sim/env.LAVA_GRAVITY, LAVA_FALL); a jumper (Bowser) walks
+# at its vx and, in the air, falls under JUMPER_GRAVITY to at most
+# JUMPER_FALL until its feet (JUMPER_FEET below its box) meet a top (when
+# it will next jump is not known: standing, it stays standing;
+# sim/env.BOWSER_GRAVITY, BOWSER_FALL); a flame (Bowser's) flies through
+# everything at its vx, and at its vy until its box's top is at its level
+# (Enemy.level; not known, it flies level), then level.
+ENEMY_KINDS = ("walker", "hopper", "plant", "flier", "thrown", "pacer", "egg", "leaper", "turner", "fountain",
+               "jumper", "flame")
 FOUNTAIN_GRAVITY, FOUNTAIN_FALL = 28 / 256, 3.25
+JUMPER_GRAVITY, JUMPER_FALL, JUMPER_FEET = 15 / 256, 2.0, 3.0
 THROWN_GRAVITY, THROWN_FALL = 0.0625, 4.5
 EGG_GRAVITY, EGG_FALL, EGG_FEET = 0.125, 3.25, 4.0
 LEAPER_GRAVITY = 0.0524
@@ -171,7 +179,8 @@ class Enemy:
     first and ending now ((x, y) of one point of it each frame; None: not
     kept), and ``type``, what the state source calls it (any label: things
     of one type are taken to move alike). A turner goes round ``hub`` (x,
-    y) at ``turn`` radians a frame (clockwise on the screen positive)."""
+    y) at ``turn`` radians a frame (clockwise on the screen positive); a
+    flame goes up or down until its box's top is at ``level``."""
 
     box: tuple
     vx: float
@@ -184,6 +193,7 @@ class Enemy:
     type: object = None
     hub: Optional[tuple] = None
     turn: float = 0.0
+    level: Optional[float] = None
 
     def at(self, frame: int) -> tuple:
         if self.path is not None and frame < len(self.path):
@@ -210,7 +220,9 @@ def enemy_paths(enemies: Sequence[Enemy], solids: Sequence[Solid], frames: int) 
             e.path = _turning(e, frames)
         elif e.kind == "fountain":
             e.path = _fountain(e, frames)
-    enemies = [e for e in enemies if e.kind not in ("turner", "fountain")]
+        elif e.kind == "flame":
+            e.path = _flame(e, frames)
+    enemies = [e for e in enemies if e.kind not in ("turner", "fountain", "flame")]
     if not enemies:
         return
     boxes = np.array([e.box for e in enemies], np.float64)
@@ -228,6 +240,19 @@ def _fountain(e: Enemy, frames: int) -> np.ndarray:
     vy = e.vy + FOUNTAIN_GRAVITY * np.arange(frames, dtype=np.float64)
     drop = np.concatenate([[0.0], np.cumsum(np.minimum(vy, FOUNTAIN_FALL))])
     return np.asarray(e.box, np.float64)[None, :] + drop[:, None] * np.array([0.0, 1.0, 0.0, 1.0])
+
+
+def _flame(e: Enemy, frames: int) -> np.ndarray:
+    """A flame's boxes for ``frames`` frames from now: at its vx, and at
+    its vy until its top is at its level (none given: level now)."""
+    k = np.arange(frames + 1, dtype=np.float64)
+    dx = e.vx * k
+    if e.level is None or e.vy == 0.0:
+        dy = np.zeros_like(k)
+    else:
+        reach = e.level - e.box[1]
+        dy = np.clip(e.vy * k, min(reach, 0.0), max(reach, 0.0))
+    return np.asarray(e.box, np.float64)[None, :] + np.stack([dx, dy, dx, dy], axis=1)
 
 
 # A fire bar's fireballs are where the whole step of its turn puts them,
@@ -513,6 +538,27 @@ def _paths(boxes, velocities, kinds, solids, frames):
             for k in range(1, frames + 1):
                 vy += LEAPER_GRAVITY
                 x0, x1, y0, y1 = x0 + vx, x1 + vx, y0 + vy, y1 + vy
+                out[e, k] = (x0, y0, x1, y1)
+            continue
+        if kinds[e] == 10:  # jumper: walking; in the air falling to a top, where it stays
+            standing = False
+            if vy >= 0.0:
+                for i in range(solids.shape[0]):
+                    if x0 < solids[i, 2] and solids[i, 0] < x1 and abs(solids[i, 1] - (y1 + JUMPER_FEET)) <= 2.0:
+                        standing = True
+                        break
+            for k in range(1, frames + 1):
+                x0, x1 = x0 + vx, x1 + vx
+                if not standing:
+                    dy = vy
+                    vy = min(vy + JUMPER_GRAVITY, JUMPER_FALL)
+                    if dy > 0:
+                        feet = y1 + JUMPER_FEET
+                        for i in range(solids.shape[0]):
+                            if x0 < solids[i, 2] and solids[i, 0] < x1 and feet <= solids[i, 1] <= feet + dy:
+                                dy, standing, vy = solids[i, 1] - feet, True, 0.0
+                                break
+                    y0, y1 = y0 + dy, y1 + dy
                 out[e, k] = (x0, y0, x1, y1)
             continue
         if kinds[e] == 4:  # thrown

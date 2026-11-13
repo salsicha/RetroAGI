@@ -36,6 +36,10 @@ and each level draws its own from those ranges (random_level):
   in some gaps (swinging across, going up and down, falling when stood on);
 - a Bullet Bill frenzy (5-3's) over a stretch of the pieces after it, and
   leaping Cheep Cheeps (2-3's) over some bridges;
+- springboards, the castles' fire bars and lava fireballs;
+- Bowser on his bridge over lava (the castles'), walking, jumping and
+  breathing flames, a lift swinging over him, his free flames coming over
+  the stretch before;
 - and a staircase before the flag.
 
 Pieces stand 0 to 8 tiles of floor apart. The floor is cut where a pipe or
@@ -56,7 +60,8 @@ import random
 from typing import Optional, Sequence
 
 from ..physics import SPRING_REST
-from .env import FIREBAR_BALLS, FIREBAR_LONG, FIREBAR_STEPS, LAVA_WAIT, LAVA_WAITS, LIFT_H, LIFT_W, SPRING_W
+from .env import (BOWSER_FEET, FIREBAR_BALLS, FIREBAR_LONG, FIREBAR_STEPS, FLAME_WAITS, LAVA_WAIT, LAVA_WAITS,
+                  LIFT_ACROSS, LIFT_H, LIFT_W, SPRING_W)
 from .piranha import EXPOSED_FRAMES, HIDDEN_FRAMES, RISE_FRAMES
 
 PLANT_CYCLE = 2 * RISE_FRAMES + EXPOSED_FRAMES + HIDDEN_FRAMES
@@ -79,7 +84,19 @@ END_FLAT = 10
 # The pieces and how often each comes.
 PIECES = {"pipe": 3, "pit": 2, "goombas": 3, "bricks": 2, "stairs": 2, "questions": 1, "cannon": 1, "step": 1,
           "bridge": 1, "hammer_bros": 1, "lakitu": 1, "ledges": 1, "bill_frenzy": 1, "spring": 1,
-          "firebar": 1, "lava": 1}
+          "firebar": 1, "lava": 1, "bowser": 1}
+# Bowser (game memory: the castles 1-4 to 6-4 end alike; sim/env.py
+# BOWSER_*): a bridge BOWSER_BRIDGE tiles long, level with the floor, over
+# lava; Bowser BOWSER_IN tiles in on it; a lift BOWSER_LIFT_W wide swinging
+# across over it (placed BOWSER_LIFT tiles in, its top BOWSER_LIFT_UP tiles
+# over the bridge; it swings to the left of where it is placed, sim/env.py
+# LIFT_ACROSS); a lava fireball under it BOWSER_LAVA of the time (5-4's and
+# 6-4's); after it the axe's step, one tile up and BOWSER_STEP wide. His
+# free flames come from BOWSER_FLAMES tiles before the bridge (where Mario
+# is when the game's first comes); a hard castle's (worlds 5 to 8)
+# BOWSER_HARD of the time.
+BOWSER_BRIDGE, BOWSER_IN, BOWSER_LIFT, BOWSER_LIFT_UP, BOWSER_LIFT_W = 13, 7, 10, 4, 32
+BOWSER_LAVA, BOWSER_STEP, BOWSER_FLAMES, BOWSER_HARD = 0.4, 2, (36, 37, 42), 0.5
 # Lava fireballs (game memory: 2-4 to 7-4; sim/env.py LAVA_FROM): a piece
 # of LAVA_PITS pits, each LAVA_PIT_TILES wide (the game's, castles' lava
 # under them) and LAVA_APART tiles after the one before, a lava fireball
@@ -476,6 +493,26 @@ def random_level(seed: int, pieces: int = 12, only: Optional[str] = None, start_
                 enemies.append(lava(x + (width // 2) * TILE))
                 x += width * TILE
             ends_in_pit = True
+        elif kind == "bowser":
+            if behind_pit and after < BETWEEN_PITS:  # (two pits never run together)
+                x += (BETWEEN_PITS - after) * TILE
+            hard, count = rng.random() < BOWSER_HARD, rng.randrange(len(FLAME_WAITS))
+            frenzies.append({"kind": "flames", "from": float(max(START_X, x - rng.choice(BOWSER_FLAMES) * TILE)),
+                             "until": float(x + BOWSER_BRIDGE * TILE), "turn": rng.randrange(2**31), "hard": hard,
+                             "count": count})
+            pit(x, BOWSER_BRIDGE)
+            solids.append([x, FLOOR, BOWSER_BRIDGE * TILE, TILE, "ground"])
+            enemies.append({"kind": "bowser", "x": float(x + BOWSER_IN * TILE), "y": float(FLOOR - BOWSER_FEET),
+                            "turn": rng.randrange(2**31), "clock": rng.randrange(256), "hard": hard, "count": count})
+            lift_period = int(LIFT_ACROSS[1])
+            solids.append([x + BOWSER_LIFT * TILE, FLOOR - BOWSER_LIFT_UP * TILE, BOWSER_LIFT_W, LIFT_H, None,
+                           {"lift": "across", "phase": rng.randrange(lift_period)}])
+            if rng.random() < BOWSER_LAVA:
+                enemies.append(lava(x + (BOWSER_BRIDGE // 2) * TILE))
+            x += BOWSER_BRIDGE * TILE
+            for k in range(BOWSER_STEP):
+                column(x, 1)
+                x += TILE
         elif kind == "firebar":
             for k in range(rng.choice(FIREBAR_GROUPS)):
                 if k:
@@ -560,7 +597,10 @@ def random_level(seed: int, pieces: int = 12, only: Optional[str] = None, start_
         "platform_kinds": [p[4] for p in platforms],
         "enemies": enemies,
         "frenzies": frenzies,
-        **({"goal": [goal, 0, TILE, BOTTOM]} if flag else {}),
+        # (the flag's column at any height, above the screen too: a
+        # springboard's strong throw can carry Mario over its top, and past
+        # it the screen's edge keeps him from walking back)
+        **({"goal": [goal, -BOTTOM, TILE, 2 * BOTTOM]} if flag else {}),
         "metadata": {"game_level": {"seed": seed, "pieces": pieces}, **({} if flag else {"scene": {"passed": passed}})},
     }
 

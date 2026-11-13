@@ -137,10 +137,10 @@ Each thing was measured in the game's memory, in levels not scored on:
   Bullet Bill and Cheep Cheep frenzies;
 - question blocks, bricks, mushrooms and big Mario;
 - lifts across, up and down and falling, springboards;
-- castle fire bars and lava fireballs;
+- castle fire bars and lava fireballs, Bowser on his bridge and his flames;
 - pipes, staircases, pits, bridges, and the sky levels' ledges.
 
-Still missing: Bowser and his flames (being measured), the fast fire bar,
+Still missing: Bowser's hammers (worlds 6 to 8), the fast fire bar,
 looping and balance lifts, water levels, and blocks invisible until hit.
 [How general is it?](docs/generalization.md) has every measurement.
 

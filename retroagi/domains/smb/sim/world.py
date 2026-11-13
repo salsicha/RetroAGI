@@ -18,7 +18,7 @@ from retroagi.domains.smb.controller import State
 from retroagi.domains.smb.planner import Enemy, Solid, screen_edge
 from retroagi.framework.interfaces import Step
 
-from .env import FIREBAR_STEPS, SPINY_SPEED, MarioScenarioEnv
+from .env import FIREBAR_STEPS, FLAME_BOX, SPINY_SPEED, MarioScenarioEnv
 from .env_state import restore_env_state, snapshot_env_state
 
 # The places of a thing kept as its track (frames).
@@ -113,6 +113,10 @@ def enemy_kind(enemy: dict) -> str:
         return "turner"
     if enemy.get("kind") == "lava":
         return "fountain"
+    if enemy.get("kind") == "bowser":
+        return "jumper"
+    if enemy.get("kind") == "flame":
+        return "flame"
     if enemy.get("kind") == "lakitu":
         return "flier"
     if enemy.get("kind") == "cheep":
@@ -180,9 +184,11 @@ class SimSource:
                 vy = 0.0 if e["on_ground"] else e["vy"]
             if kind == "egg":  # (its vx: the walk it will start on landing, toward Mario)
                 vx = SPINY_SPEED * (1 if env.mario["x"] + env.mario["w"] / 2 > (box[0] + box[2]) / 2 else -1)
+            # (a flame: the top of its box where it goes level)
+            level = e["level"] + FLAME_BOX[1] if kind == "flame" else None
             enemies.append(Enemy(box, vx, vy, ("enemies", k),
                                  stompable=bool(e.get("stompable", True)), kind=kind, track=e.get("track") or None,
-                                 type=kind))
+                                 type=kind, level=level))
         items = [Enemy((i["x"], i["y"], i["x"] + i["w"], i["y"] + i["h"]), i["vx"], i["vy"], ("items", k),
                        stompable=False, track=i.get("track") or None, type="item")
                  for k, i in enumerate(env.items) if in_sight(env, i)]

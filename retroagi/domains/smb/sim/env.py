@@ -236,6 +236,42 @@ FIREBAR_TURN, FIREBAR_STEPS = 0.15625, 32
 LAVA_FROM, LAVA_UP, LAVA_GRAVITY, LAVA_FALL = 258.0, (-5.95, -6.35), 28 / 256, 3.25
 LAVA_WAIT, LAVA_WAITS = 21, tuple(range(6, 16))
 LAVA_BOX = (3, 14, 10, 6)
+# Bowser (game memory, 1-4's and 6-4's, and his routine in the game's
+# program). He stands on his bridge, his place (the game's x and y of his
+# front half) BOWSER_FEET over his feet; his body is two halves of the
+# game's, side by side, here one box (BOWSER_BOX: in from his place, and
+# size, facing left; facing right it starts BOWSER_BACK to the left of his
+# place, his rear half behind him). Once in BOWSER_EVERY frames he moves
+# his step: BOWSER_CHASE at first, then -1 or 1 (a quarter of a pixel a
+# frame), turning back once he is a range (one of BOWSER_RANGES, drawn each
+# time he passes where he started) either way of where he started. Once in
+# BOWSER_TURN frames he faces left; while Mario is to the right of his place
+# and he stands, he faces right, his step is BOWSER_CHASE, he neither jumps
+# nor opens his mouth, and he stops BOWSER_CHASE_LIMIT right of where he
+# started. He jumps one of BOWSER_RANGES frames after he lands (first after
+# BOWSER_FIRST_JUMP), BOWSER_JUMP a frame up, under BOWSER_GRAVITY, falling
+# at most BOWSER_FALL. His mouth opens BOWSER_FIRST_FLAME frames after he
+# comes on screen, stays open BOWSER_MOUTH frames (he does not walk), and
+# as it shuts he breathes a flame; it opens again after the next of
+# FLAME_WAITS, in turn (FLAME_HARD fewer in the hard castles, worlds 5 to
+# 8). He cannot be stomped. A flame (and a free flame, coming before he is
+# on screen from FLAME_FROM right of the screen's left edge, the next of
+# FLAME_WAITS plus BOWSER_MOUTH frames after the one before) flies left at
+# FLAME_SPEED (hard: the second), from his place plus FLAME_MOUTH, a pixel a
+# frame up or down until its place is level with one of FLAME_LEVELS (the
+# game's 144, 128 and 112 over castle floors 160 down; Block SMB's floor is
+# 208 down), then level; its box is the game's (FLAME_BOX), and it cannot
+# be stomped. Not here: his hammers (worlds 6 to 8), the axe.
+BOWSER_FEET, BOWSER_BOX, BOWSER_BACK = 32, (0, 2, 32, 27), 16
+BOWSER_EVERY, BOWSER_TURN, BOWSER_CHASE, BOWSER_CHASE_LIMIT = 4, 16, 2, 88
+BOWSER_RANGES = (33, 65, 17, 49)
+BOWSER_FIRST_JUMP, BOWSER_JUMP, BOWSER_GRAVITY, BOWSER_FALL = 32, -2.0, 15 / 256, 2.0
+BOWSER_FIRST_FLAME, BOWSER_MOUTH = 223, 32
+FLAME_WAITS = (191, 64, 191, 191, 191, 64, 64, 191)
+FLAME_HARD = 16
+FLAME_FROM, FLAME_SPEED, FLAME_MOUTH = 287, (1.25, 1.375), (-14, 8)
+FLAME_LEVELS = (192, 176, 160, 192)
+FLAME_BOX = (6, 4, 4, 4)
 
 # What each strategy is paid for, as multipliers of the reward terms (training
 # only; a layout names its strategy in "strategy", see strategy_families).
@@ -562,7 +598,8 @@ class MarioScenarioEnv:
             for p, kind in zip(self.platforms, self.platform_kinds) if kind == "cannon"
         ]
         self.frenzies = [{"kind": f["kind"], "from": float(f["from"]), "until": float(f["until"]), "timer": 1,
-                          "count": 0, "turn": int(f.get("turn", 1))} for f in scenario.get("frenzies", [])]
+                          "count": int(f.get("count", 0)), "turn": int(f.get("turn", 1)), "hard": bool(f.get("hard"))}
+                         for f in scenario.get("frenzies", [])]
         if scenario.get("mario_big"):
             self._resize(big=True)  # (standing where small Mario would)
         # What each question block holds ({platform index: "coin" or
@@ -612,6 +649,9 @@ class MarioScenarioEnv:
                 continue
             if isinstance(e, dict) and e.get("kind") == "lava":
                 self.enemies.append(self._lava(e))
+                continue
+            if isinstance(e, dict) and e.get("kind") == "bowser":
+                self.enemies.append(self._bowser(e))
                 continue
             enemy = self._parse_enemy(e)
             if enemy.get("kind") == "monster":
@@ -1394,7 +1434,8 @@ class MarioScenarioEnv:
                 yield "enemy", "plant", partial(self._draw_plant, rect=rect)
             elif enemy.get("kind") == "monster":
                 yield "enemy", "other", partial(self._draw_monster, enemy=enemy, rect=rect)
-            elif enemy.get("kind") in ("bullet", "hammer", "hammer_bro", "lakitu", "spiny", "cheep", "firebar", "lava"):
+            elif enemy.get("kind") in ("bullet", "hammer", "hammer_bro", "lakitu", "spiny", "cheep", "firebar", "lava",
+                                       "bowser", "flame"):
                 if not enemy.get("gone") and not (enemy.get("kind") in ("hammer_bro", "lakitu") and enemy["dead"]):
                     yield "enemy", "other", partial(self._draw_monster, enemy=enemy, rect=rect)
             else:
@@ -1734,6 +1775,107 @@ class MarioScenarioEnv:
         lava["vy"] = min(lava["vy"] + LAVA_GRAVITY, LAVA_FALL)
 
     @staticmethod
+    def _bowser(spec: dict) -> dict:
+        """Bowser, his place at ``x``, ``y`` (BOWSER_* notes): he wakes as
+        he comes on screen; ``turn`` sets his random draws, ``clock`` the
+        game's frame count, ``count`` where his flames start in FLAME_WAITS,
+        ``hard`` a hard castle's flames, ``breathes`` whether he breathes
+        them."""
+        bowser = {"kind": "bowser", "px": float(spec["x"]), "py": float(spec["y"]), "origin": float(spec["x"]),
+                  "ground": float(spec["y"]), "step": BOWSER_CHASE, "range": 0, "facing": -1, "vx": 0.0, "vy": 0.0,
+                  "w": BOWSER_BOX[2], "h": BOWSER_BOX[3], "speed": 0.0, "direction": -1, "patrol_min": -1e9,
+                  "patrol_max": 1e9, "edge_aware": False, "on_ground": True,
+                  "foot_offset": BOWSER_FEET - BOWSER_BOX[1] - BOWSER_BOX[3], "dead": False, "stompable": False,
+                  "game_rules": True, "awake": False, "jump_timer": BOWSER_FIRST_JUMP,
+                  "flame_timer": BOWSER_FIRST_FLAME, "mouth": False, "breathes": bool(spec.get("breathes", True)),
+                  "flames": int(spec.get("count", 0)),
+                  "clock": int(spec.get("clock", 0)) % 256, "turn": int(spec.get("turn", 1)),
+                  "hard": bool(spec.get("hard"))}
+        MarioScenarioEnv._place_bowser(bowser)
+        return bowser
+
+    @staticmethod
+    def _place_bowser(bowser: dict) -> None:
+        """Bowser's box from his place and the way he faces (BOWSER_BOX)."""
+        bx, by, _, _ = BOWSER_BOX
+        bowser["x"] = bowser["px"] + bx - (BOWSER_BACK if bowser["facing"] > 0 else 0)
+        bowser["y"] = bowser["py"] + by
+
+    @staticmethod
+    def _bowser_draw(bowser: dict) -> int:
+        """One of BOWSER_RANGES, by Bowser's turn (the game's draw)."""
+        bowser["turn"] = (bowser["turn"] * 1103515245 + 12345) % 2**31
+        return BOWSER_RANGES[(bowser["turn"] >> 16) % len(BOWSER_RANGES)]
+
+    def _update_bowser(self, bowser: dict) -> None:
+        """Bowser's frame, as the game's routine runs it (BOWSER_* notes):
+        his timers count down; he walks (not while his mouth is open),
+        jumps and breathes flames."""
+        bowser["clock"] = (bowser["clock"] + 1) % 256
+        bowser["jump_timer"] = max(0, bowser["jump_timer"] - 1)
+        bowser["flame_timer"] = max(0, bowser["flame_timer"] - 1)
+        if not bowser["mouth"]:
+            if bowser["clock"] % BOWSER_TURN == 0:
+                bowser["facing"] = -1
+            walk = True
+            if bowser["jump_timer"] and self.mario["x"] > bowser["px"]:  # Mario behind him: he turns and follows
+                bowser.update(facing=1, step=BOWSER_CHASE, jump_timer=BOWSER_FIRST_JUMP, flame_timer=BOWSER_MOUTH)
+                walk = bowser["px"] - bowser["origin"] < BOWSER_CHASE_LIMIT
+            if walk and bowser["clock"] % BOWSER_EVERY == 0:
+                if bowser["px"] == bowser["origin"]:
+                    bowser["range"] = self._bowser_draw(bowser)
+                bowser["px"] += bowser["step"]
+                away = bowser["px"] - bowser["origin"]
+                if bowser["facing"] < 0 and abs(away) >= bowser["range"]:
+                    bowser["step"] = -1 if away >= 0 else 1
+        if bowser["jump_timer"] == 0:  # in the air
+            bowser["py"] += bowser["vy"]
+            bowser["vy"] = min(bowser["vy"] + BOWSER_GRAVITY, BOWSER_FALL)
+            if bowser["py"] >= bowser["ground"]:
+                bowser.update(py=bowser["ground"], vy=0.0, jump_timer=self._bowser_draw(bowser))
+        elif bowser["jump_timer"] == 1:
+            bowser["py"] -= 1
+            bowser["vy"] = BOWSER_JUMP
+        if bowser["breathes"] and bowser["flame_timer"] == 0:
+            bowser["flame_timer"] = BOWSER_MOUTH
+            bowser["mouth"] = not bowser["mouth"]
+            if not bowser["mouth"]:  # (shutting: a flame)
+                bowser["flames"] += 1
+                bowser["flame_timer"] = FLAME_WAITS[(bowser["flames"] - 1) % len(FLAME_WAITS)] - (
+                    FLAME_HARD if bowser["hard"] else 0)
+                bowser["turn"] = (bowser["turn"] * 1103515245 + 12345) % 2**31
+                level = FLAME_LEVELS[(bowser["turn"] >> 16) % len(FLAME_LEVELS)]
+                mx, my = FLAME_MOUTH
+                # (from his place in whole pixels, as the game's y is kept)
+                self.enemies.append(self._flame(bowser["px"] + mx, math.floor(bowser["py"]) + my, level, bowser["hard"]))
+        # (his speed as the state reads it: his step's share of each frame)
+        bowser["speed"] = 0.0 if bowser["mouth"] else abs(bowser["step"]) / BOWSER_EVERY
+        bowser["direction"] = 1 if bowser["step"] > 0 else -1
+        bowser["on_ground"] = bowser["jump_timer"] > 0
+        self._place_bowser(bowser)
+
+    @staticmethod
+    def _flame(x: float, y: float, level: float, hard: bool) -> dict:
+        """A flame, its place at ``x``, ``y``, going to ``level`` (FLAME_*)."""
+        bx, by, bw, bh = FLAME_BOX
+        return {"kind": "flame", "fx": float(x), "fy": float(y), "level": float(level), "x": float(x) + bx,
+                "y": float(y) + by, "w": bw, "h": bh, "vx": 0.0, "vy": float((level > y) - (level < y)),
+                "speed": FLAME_SPEED[1 if hard else 0], "direction": -1, "patrol_min": -1e9, "patrol_max": 1e9,
+                "edge_aware": False, "on_ground": False, "foot_offset": 0, "dead": False, "stompable": False}
+
+    def _update_flame(self, flame: dict) -> None:
+        """A flame's frame: left at its speed, up or down a pixel until level
+        with where it goes (FLAME_* notes); gone once off the screen."""
+        flame["fx"] -= flame["speed"]
+        if flame["fy"] != flame["level"]:
+            flame["fy"] += flame["vy"]
+        else:
+            flame["vy"] = 0.0
+        flame["x"], flame["y"] = flame["fx"] + FLAME_BOX[0], flame["fy"] + FLAME_BOX[1]
+        if flame["x"] < self.camera_x - 64:
+            flame.update(dead=True, gone=True)  # (kept, so the others keep their places)
+
+    @staticmethod
     def _place_fireball(ball: dict) -> None:
         """A fire bar's fireball where the whole step its bar has reached
         puts it."""
@@ -1753,11 +1895,14 @@ class MarioScenarioEnv:
         self.mario.update(on_ground=False, _platform=None, vy=float(motion.y_speed))
 
     def _frenzies(self) -> None:
-        """Bullet Bills and leaping Cheep Cheeps of the frenzies Mario is in
-        (BILL_GAP, CHEEP_GAPS)."""
+        """Bullet Bills, leaping Cheep Cheeps and Bowser's free flames of the
+        frenzies Mario is in (BILL_GAP, CHEEP_GAPS, FLAME_WAITS)."""
         for frenzy in self.frenzies:
             if not frenzy["from"] <= self.mario["x"] < frenzy["until"]:
                 continue
+            if frenzy["kind"] == "flames" and any(e.get("kind") == "bowser" and e.get("awake") and not e["dead"]
+                                                  for e in self.enemies):
+                continue  # (none while Bowser is on: he breathes his own)
             frenzy["timer"] -= 1
             if frenzy["timer"] > 0:
                 continue
@@ -1767,6 +1912,12 @@ class MarioScenarioEnv:
             turn = frenzy["turn"] >> 8
             base = {"vx": 0.0, "patrol_min": -1e9, "patrol_max": 1e9, "edge_aware": False, "on_ground": False,
                     "dead": False, "stompable": True}
+            if frenzy["kind"] == "flames":
+                frenzy["timer"] = FLAME_WAITS[(frenzy["count"] - 1) % len(FLAME_WAITS)] + BOWSER_MOUTH - (
+                    FLAME_HARD if frenzy["hard"] else 0)
+                level = FLAME_LEVELS[turn % len(FLAME_LEVELS)]
+                self.enemies.append(self._flame(self.camera_x + FLAME_FROM, level, level, frenzy["hard"]))
+                continue
             if frenzy["kind"] == "bills":
                 frenzy["timer"] = BILL_GAP
                 self.enemies.append({**base, "kind": "bullet", "x": self.camera_x + BILL_FROM, "vy": 0.0,
@@ -1789,7 +1940,8 @@ class MarioScenarioEnv:
             shell["kick_grace"] = max(0, shell.get("kick_grace", 0) - 1)
             body = pygame.Rect(shell["x"], shell["y"], shell["w"], shell["h"])
             for other in self.enemies:
-                if other is shell or other["dead"] or other.get("kind") in ("piranha_plant", "hammer", "firebar", "lava"):
+                if other is shell or other["dead"] or other.get("kind") in ("piranha_plant", "hammer", "firebar", "lava", "bowser",
+                                                                                       "flame"):
                     continue
                 if body.colliderect(pygame.Rect(other["x"], other["y"], other["w"], other["h"])):
                     other["dead"] = True
@@ -2009,6 +2161,9 @@ class MarioScenarioEnv:
         if enemy.get("kind") == "lava":
             self._leap(enemy)
             return
+        if enemy.get("kind") == "flame":
+            self._update_flame(enemy)
+            return
         if enemy.get("kind") == "cheep":
             enemy["vy"] += CHEEP_GRAVITY
             enemy["x"] += enemy["speed"] * enemy["direction"]
@@ -2025,6 +2180,9 @@ class MarioScenarioEnv:
             enemy["awake"] = True
         if enemy.get("kind") == "hammer_bro":
             self._update_hammer_bro(enemy, platform_rects)
+            return
+        if enemy.get("kind") == "bowser":
+            self._update_bowser(enemy)
             return
         if enemy.get("kind") == "lakitu":
             self._update_lakitu(enemy)
