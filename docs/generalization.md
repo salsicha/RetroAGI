@@ -313,6 +313,29 @@ positions; from the screen it loses more (36% against 29%), and it passes
 1-1 from the screen in half its plays. Not yet a system that passes 1-1
 reliably.
 
+**From nothing with the care variants** (`outcome_care_20261112`,
+2026-11-13): the same run with each choice in its three variants (bold,
+usual, careful: the controller's berth around enemies, how long a landing
+must stay clear, how soon a coming enemy ends a run), the outcome network
+picking among them. In Block SMB: 152 of 200 level plays finished (round
+2 had 162; the last round's network is not always the best), 2,152 of
+2,200 skill scenes, 175 of 200 Hammer Bros scenes. On the real game:
+
+| Scored on the real game | From nothing | With the care variants |
+|---|---|---|
+| Tries at an obstacle failing, held-out levels, from the screen | 36% | 38% |
+| The same with exact positions | 25% | 26% |
+| Whole held-out levels finished from the screen | 2 of 32 | 1 of 32 |
+| 1-1 whole plays finished, from the screen / exact positions | 4 / 8 of 8 | 7 / 8 of 8 |
+| 4-1 whole plays finished with exact positions | 2 of 8 | 0 of 8 |
+
+Obstacle by obstacle with exact positions it does better on 1-1, 2-1, 3-1
+and 6-1 and worse on 4-1, 5-1 and 8-1. Taken together the care variants
+change nothing measurable yet: the difference between the two runs is
+within what one training to the next gives. The three sets are still
+written by hand; learning the settings themselves is the next step for
+the controller.
+
 **A larger network learns more of the same data.** Trained on rounds 1 and
 2's outcomes, a network twice as wide (192 numbers a token), one layer
 deeper (4) and trained twice as long (40,000 steps) against round 2's
