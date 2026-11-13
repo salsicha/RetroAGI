@@ -30,12 +30,16 @@ from typing import Optional, Sequence
 import numpy as np
 from numba import njit
 
-from .physics import NES_JUMP_FRAMES, NESPlayerMotion
+from .physics import (NES_JUMP_FRAMES, SPRING_FORCE, SPRING_LAUNCH, SPRING_SQUASH, SPRING_STRONG, SPRING_THROW,
+                      NESPlayerMotion)
 
 # Frames of running before takeoff the planner tries.
 PRE_RUNS = (0, 2, 4, 6, 8, 12, 16, 20, 24, 32)
-# Frames a rollout lasts at most.
+# Frames a rollout lasts at most; from a springboard (whose throw takes
+# Mario up 150 pixels and down again: about 120 frames to the floor's
+# height), SPRING_HORIZON.
 HORIZON = 96
+SPRING_HORIZON = 160
 # Below this the screen ends: Mario has fallen (pixels).
 SCREEN_BOTTOM = 240
 # A side touching a solid this far below its top is a wall, not a ledge.
@@ -137,7 +141,10 @@ class Solid:
     """Something Mario cannot pass through, in world pixels; ``ref`` names
     it as the policy's pointers do ((list, slot) into packed_lists); a lift
     moves ``vx``, ``vy`` pixels a frame (the planner keeps it at that speed:
-    _solid_paths), carrying Mario standing on it."""
+    _solid_paths), carrying Mario standing on it; a springboard (``spring``
+    not None) is at that frame of its squash (physics.SPRING_SQUASH; -1 at
+    rest), its top where it is pressed down to now: Mario standing on it is
+    thrown up."""
 
     x0: float
     top: float
@@ -147,6 +154,7 @@ class Solid:
     ref: tuple
     vx: float = 0.0
     vy: float = 0.0
+    spring: Optional[int] = None
 
 
 @dataclass
@@ -320,12 +328,21 @@ def _solid_array(solids: Sequence[Solid]) -> np.ndarray:
     return np.array([(s.x0, s.top, s.x1, s.bottom) for s in solids], np.float64).reshape(-1, 4)
 
 
+# A solid that is not a springboard, in _solid_paths' springboard column.
+NO_SPRING = -2
+
+
 def _solid_paths(solids: Sequence[Solid], frames: int) -> np.ndarray:
-    """Each solid's box every frame for ``frames`` frames from now [frames +
-    1, solids, 4]: a lift at its velocity, the rest where they are."""
+    """Each solid's box every frame for ``frames`` frames from now, and the
+    frame of its squash a springboard is at now (Solid.spring; NO_SPRING:
+    none) [frames + 1, solids, 5]: a lift at its velocity, the rest where
+    they are (a springboard moves only pressed down by Mario: _rollout)."""
     now = _solid_array(solids)
-    speed = np.array([(s.vx, s.vy, s.vx, s.vy) for s in solids], np.float64).reshape(-1, 4)
-    return now[None] + np.arange(frames + 1, dtype=np.float64)[:, None, None] * speed[None]
+    speed = np.array([(0, 0, 0, 0) if s.spring is not None else (s.vx, s.vy, s.vx, s.vy) for s in solids],
+                     np.float64).reshape(-1, 4)
+    boxes = now[None] + np.arange(frames + 1, dtype=np.float64)[:, None, None] * speed[None]
+    springs = np.array([NO_SPRING if s.spring is None else s.spring for s in solids], np.float64)
+    return np.concatenate([boxes, np.broadcast_to(springs[None, :, None], (frames + 1, len(solids), 1))], axis=2)
 
 
 @njit(cache=True)
@@ -621,7 +638,11 @@ def _rollout(m0, x, y, x1, y1, pre_run, hold, direction, solid_paths, paths, sto
     too: the ones stomped are a bit mask, ``down``); ``got`` the first of
     ``items`` (paths, as enemies') Mario touched; ``bumped`` the first solid
     hit from below (his rise stops there, as the game's: he falls on and
-    the landing counts, a bump next to a woken Goomba included)."""
+    the landing counts, a bump next to a woken Goomba included). Standing
+    on a springboard at the start, he is pressed down with it and thrown
+    up (physics.SPRING_SQUASH), held where he is until then, the jump
+    button doing nothing else; a landing on one ends the rollout as any
+    landing does."""
     m = m0.copy()
     width, height = x1 - x, y1 - y
     stomped = -1
@@ -630,15 +651,39 @@ def _rollout(m0, x, y, x1, y1, pre_run, hold, direction, solid_paths, paths, sto
     down = 0
     last = paths.shape[1] - 1
     final = solid_paths.shape[0] - 1
+    # The springboard he stands on (-1: none), the frame of its squash, its
+    # top at rest, whether he is still on it and whether the throw will be
+    # the strong one.
+    spring, squash, rest, on_spring, strong = -1, -1, 0.0, False, False
+    if not airborne:
+        start = solid_paths[0]
+        for i in range(start.shape[0]):
+            if (start[i, 4] > NO_SPRING and x < start[i, 2] and start[i, 0] < x + width
+                    and abs(start[i, 1] - (y + height)) <= STAND):
+                spring, squash, on_spring = i, int(start[i, 4]), True
+                rest = start[i, 1] - (SPRING_SQUASH[squash] if squash >= 0 else 0)
+                break
+    squashes = len(SPRING_SQUASH)
     for frame in range(horizon):
         solids = solid_paths[min(frame, final)]
         after = solid_paths[min(frame + 1, final)]
         jump = pre_run <= frame < pre_run + hold
+        if spring >= 0:
+            solids = solids.copy()
+            after = after.copy()
+            solids[spring, 1] = rest + (SPRING_SQUASH[squash] if 0 <= squash < squashes else 0)
+            squash += 1
+            after[spring, 1] = rest + (SPRING_SQUASH[squash] if squash < squashes else 0)
+            if on_spring and jump and SPRING_STRONG[0] <= squash <= SPRING_STRONG[1]:
+                strong = True
+        pressed = jump and not on_spring  # (on a springboard the button does nothing else)
         moving = (m[0] > 0) - (m[0] < 0)
-        if jump and frame == pre_run and not airborne and not _footing(x, width, y + height, solids, moving):
+        if pressed and frame == pre_run and not airborne and not _footing(x, width, y + height, solids, moving):
             return _FELL, frame, x, y, x + width, y + height, -1, -1, stomped, got, bumped  # off the end before it takes
         d = steer_direction if frame < steer else direction
-        dx, dy, jumped = _advance(m, d, jump, not airborne, y, True)
+        dx, dy, jumped = _advance(m, d, pressed, not airborne and not on_spring, y, True)
+        if on_spring:
+            dx = 0  # (held where he is while it presses him down: his speed as in the air)
         airborne = airborne or jumped
         nx = x + dx
         feet = y + height
@@ -651,9 +696,14 @@ def _rollout(m0, x, y, x1, y1, pre_run, hold, direction, solid_paths, paths, sto
         if not airborne:
             ny = y
             supported = False
-            for i in range(solids.shape[0]):
+            on_spring = False
+            for k in range(-1, solids.shape[0]):
+                i = spring if k < 0 else k  # (the springboard first: pressed down, it is level with its block)
+                if i < 0:
+                    continue
                 if nx < solids[i, 2] and solids[i, 0] < nx + width and abs(solids[i, 1] - feet) <= STAND:
                     supported = True
+                    on_spring = i == spring
                     nx += after[i, 0] - solids[i, 0]  # (carried by what he stands on)
                     ny = y + after[i, 1] - solids[i, 1]
                     break
@@ -711,6 +761,16 @@ def _rollout(m0, x, y, x1, y1, pre_run, hold, direction, solid_paths, paths, sto
         if ny > SCREEN_BOTTOM:
             return _FELL, frame, nx, ny, nx + width, ny + height, -1, -1, stomped, got, bumped
         x, y = nx, ny
+        if on_spring and not airborne and squash == SPRING_THROW:  # thrown up
+            m[3] = SPRING_LAUNCH[1] if strong else SPRING_LAUNCH[0]
+            m[4] = 0
+            m[5] = 0
+            m[6] = SPRING_FORCE
+            m[7] = SPRING_FORCE
+            m[8] = SPRING_FORCE
+            m[9] = int(y)
+            airborne = True
+            on_spring = False
     return _TIMEOUT, horizon, x, y, x + width, y + height, -1, -1, stomped, got, bumped
 
 
@@ -835,18 +895,31 @@ def plan_jump(goal: Optional[Goal], motion: NESPlayerMotion, body: tuple, solids
     of how the enemies and items move; ``berth`` and ``safe_after`` as in
     rollout (how carefully: the choice's care, controller.CARE)."""
     best = None
-    frames = HORIZON + safe_after + 1
+    spring = standing_spring(body, solids)
+    horizon = HORIZON if spring is None else SPRING_HORIZON
+    frames = horizon + safe_after + 1
     dynamics.paths(enemies, solids, frames)
     paths, stompable = _packed(enemies, frames)
     item_paths = _item_paths(items, solids, frames, dynamics)
-    m, packed_solids = _motion_array(motion), _solid_paths(solids, HORIZON)
+    m, packed_solids = _motion_array(motion), _solid_paths(solids, horizon)
     x, y, x1, y1 = (float(v) for v in body)
-    tries = [(pre_run, hold) for pre_run in PRE_RUNS if pre_run <= latest_takeoff for hold in NES_JUMP_FRAMES]
-    if latest_takeoff >= HORIZON:
-        tries.insert(0, (HORIZON, 0))
-    for pre_run, hold in tries:
-        raw = _rollout(m, x, y, x1, y1, pre_run, hold, direction, packed_solids, paths, stompable, HORIZON,
-                       False, 0, 0, safe_after, item_paths, float(berth))
+    if spring is not None:
+        tries = _spring_tries(spring.spring, direction)
+    else:
+        tries = [(pre_run, hold, 0, 0) for pre_run in PRE_RUNS if pre_run <= latest_takeoff
+                 for hold in NES_JUMP_FRAMES]
+        if latest_takeoff >= HORIZON:
+            tries.insert(0, (HORIZON, 0, 0, 0))
+    # (when none of those does: toward the goal a while, then released, as a
+    # drop from a height with speed wants: RELEASES)
+    releases = [(pre_run, hold, steer, direction) for pre_run, hold in RELEASE_TAKEOFFS
+                if pre_run <= latest_takeoff for steer in RELEASES]
+    for k, (pre_run, hold, steer, steer_direction) in enumerate(tries + releases):
+        if k == len(tries) and best is not None:
+            break
+        after = 0 if k >= len(tries) else direction
+        raw = _rollout(m, x, y, x1, y1, pre_run, hold, after, packed_solids, paths, stompable, horizon,
+                       False, steer, steer_direction, safe_after, item_paths, float(berth))
         if raw[0] != _LANDED:  # every goal ends standing
             continue
         outcome = _outcome(raw, solids, enemies, items)
@@ -856,18 +929,45 @@ def plan_jump(goal: Optional[Goal], motion: NESPlayerMotion, body: tuple, solids
         # Robust: it still meets the goal from ROBUST_SHIFT pixels further
         # back (the error of a seen position).
         back = ROBUST_SHIFT * direction
-        again = _rollout(m, x - back, y, x1 - back, y1, pre_run, hold, direction, packed_solids, paths,
-                         stompable, HORIZON, False, 0, 0, safe_after, item_paths, float(berth))
+        again = _rollout(m, x - back, y, x1 - back, y1, pre_run, hold, after, packed_solids, paths,
+                         stompable, horizon, False, steer, steer_direction, safe_after, item_paths, float(berth))
         robust = again[0] == _LANDED and (
             goal is None or _meets(goal, _outcome(again, solids, enemies, items), enemies) is not None)
         key = (robust, margin, -outcome.frame)
         if best is None or key > best[0]:
-            best = (key, Plan(pre_run, hold, direction, outcome, margin))
-    if best is None:
-        return None
-    plan = best[1]
-    plan.buttons = buttons_of(plan.pre_run, plan.hold, plan.direction, plan.outcome.frame + 1)
-    return plan
+            best = (key, Plan(pre_run, hold, direction, outcome, margin,
+                              buttons_of(pre_run, hold, after, outcome.frame + 1, steer, steer_direction)))
+    return None if best is None else best[1]
+
+
+def standing_spring(body: tuple, solids: Sequence[Solid]) -> Optional[Solid]:
+    """The springboard Mario (``body``) stands on, if any."""
+    x0, _, x1, feet = body
+    return next((s for s in solids if s.spring is not None and x0 < s.x1 and s.x0 < x1
+                 and abs(s.top - feet) <= STAND), None)
+
+
+# A jump no plan above meets is tried pressed toward the goal RELEASES
+# frames, then released, from these takeoffs (frames of running, frames of
+# the jump button; HORIZON: walking off without jumping).
+RELEASES = (4, 8, 12, 16, 24, 32)
+RELEASE_TAKEOFFS = ((HORIZON, 0), (0, 1), (0, 8), (0, 16), (0, 32))
+# Frames Mario may stay on a springboard after it throws him before he
+# steers toward the goal (STEERS' spacing).
+SPRING_STEERS = (0, 2, 4, 8, 12, 16, 24, 32)
+
+
+def _spring_tries(squash: int, direction: int) -> list:
+    """The plans tried from a springboard at that frame of its squash
+    (physics.SPRING_SQUASH; -1 at rest): (pre_run, hold, steer, steer
+    direction). It holds Mario until it throws him; he presses toward the
+    goal from the start, or nothing (or back) until a little after the
+    throw and toward the goal then, the jump button held through the throw
+    for the strong one while it can still be had."""
+    throw_in = SPRING_THROW - squash  # (frames of the rollout until the throw, the throw's included)
+    holds = (0, throw_in) if squash + 1 <= SPRING_STRONG[1] else (0,)
+    return [(0, hold, 0, 0) for hold in holds] + [
+        (0, hold, throw_in + extra, still) for hold in holds for extra in SPRING_STEERS for still in (0, -direction)]
 
 
 def plan_flight(goal: Optional[Goal], motion: NESPlayerMotion, body: tuple, solids: Sequence[Solid],

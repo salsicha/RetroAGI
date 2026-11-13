@@ -405,6 +405,7 @@ each measured in a level not scored on:
 | Bullet Bill frenzy | 5-3 | A Bill from the right every 240 frames at three heights in turn |
 | Leaping Cheep Cheeps | 2-3 | From below near Mario, up at 4.97 under 0.052, across at one of four speeds; over some bridges. A new kind for the planner (a leaper) |
 | Lifts | 1-3, 3-3 (Mario riding) | 48 wide; across (53 pixels, 240 frames), up and down (137, 340), falling while stood on (2.25 a frame); they carry Mario both ways |
+| Springboards | 2-1 (Mario set down on it, and walked into it) | On a half block that stops a walking Mario (one solid with it in Block SMB), its top 20 over the block. Standing on it presses him down 20 and lets him up over 19 frames, then throws him up at 7 pixels a frame, or at 12 if the jump button is held on the 16th to 18th of those frames (the game takes no other press there); gravity in the throw is 40/256. The plain throw is within a pixel of the game's all the way up; the strong one goes 457 up, as the game's. A piece: one at the floor's end before a wall 10 tiles tall (2-1) or a pit (3-1, 5-2, 8-2). The planner throws Mario over the wall from it (standing still to the throw, then steering), and the simulator lands him where it planned |
 
 The levels' shapes, from the block maps:
 
@@ -417,20 +418,27 @@ The levels' shapes, from the block maps:
 
 The planner now takes each solid's box frame by frame: a lift moves at
 its speed and carries Mario standing on it; still solids plan exactly as
-before. Every new skill scene checked can be passed (the passability
-search counts where the lifts are as part of a situation). The
-hand-written chooser, never trained on them, passes 28 of 40 Lakitu
-scenes and 27 of 40 ledge scenes; on the skill scenes both Block SMBs
-have it scores the same as before.
+before. From a springboard it plays the squash and the throw (looking 160
+frames ahead, not 96: a throw comes down to the floor's height in about
+120). A jump none of its plans meets is tried once more pressed toward
+the goal for a while and then released (dropping from the top of 2-1's
+wall with speed, every jump pressed on overshot the floor in sight). Every
+new skill scene checked can be passed (the passability search counts
+where the lifts are, and a springboard's point of its squash, as part of a
+situation). The hand-written chooser, never trained on them, passes in 80
+plays of each kind (40 scenes, both ways of playing): 62 Lakitu scenes,
+44 ledge scenes, 78 springboard scenes; the released jumps raised the
+bridges from 52 to 67, and the scenes both Block SMBs have are otherwise
+the same as before.
 
 Still missing: lifts that loop up or down (1-2, 4-2) and balance lifts
-(3-3, 4-3, 6-3); springboards (2-1, 3-1, 5-2, 6-3, 8-2); the castles'
+(3-3, 4-3, 6-3); the castles'
 fire bars, lava fireballs, Bowser and his flames (measured: lava
 fireballs leap from below at about 6 a frame under 0.109; flames fly left
 at 1.25 at 112, 128 or 144 from the top); water levels (swimming,
 Bloopers, swimming Cheep Cheeps); blocks invisible until hit. In the real
 game, the state from memory and from vision show lifts without their
-speed. None of the networks has learned from the widened Block SMB yet:
+speed, and show no springboard. None of the networks has learned from the widened Block SMB yet:
 that is the next run from nothing.
 
 ## The measure

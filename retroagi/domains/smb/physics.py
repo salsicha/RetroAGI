@@ -13,6 +13,24 @@ from dataclasses import dataclass
 # the teacher's routes and proposals pick from a few holds only.
 NES_JUMP_FRAMES = tuple(range(1, 33))
 
+# Springboards (game memory, Mario set down on 2-1's): its top stands
+# SPRING_REST over the half block it is on. Mario standing on it is pressed
+# down and let up again (SPRING_SQUASH: how far under its rest his feet
+# are, a frame each from the frame after he lands on it), and at the end of
+# frame SPRING_THROW of that he is thrown up at SPRING_LAUNCH[0] pixels a
+# frame, or at SPRING_LAUNCH[1] if the jump button is held on a frame from
+# SPRING_STRONG[0] to SPRING_STRONG[1]; on it the button does nothing else.
+# While it presses him down it holds him where he is: his speed changes as
+# it would in the air (running right onto one, he is thrown at 1.5 pixels a
+# frame, the most the air allows), his place not at all. Thrown, gravity is
+# SPRING_FORCE (1/256 pixel a frame, each frame) rising and falling.
+SPRING_REST = 20
+SPRING_SQUASH = (0, 0, 1, 2, 3, 6, 8, 10, 12, 14, 16, 18, 20, 18, 16, 14, 12, 10, 10, 10)
+SPRING_THROW = 18
+SPRING_STRONG = (15, 17)
+SPRING_LAUNCH = (-7, -12)
+SPRING_FORCE = 0x28
+
 
 @dataclass
 class NESPlayerMotion:

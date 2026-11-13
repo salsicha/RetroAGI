@@ -55,7 +55,8 @@ a score for each.
 import random
 from typing import Optional, Sequence
 
-from .env import LIFT_H, LIFT_W
+from ..physics import SPRING_REST
+from .env import LIFT_H, LIFT_W, SPRING_W
 from .piranha import EXPOSED_FRAMES, HIDDEN_FRAMES, RISE_FRAMES
 
 PLANT_CYCLE = 2 * RISE_FRAMES + EXPOSED_FRAMES + HIDDEN_FRAMES
@@ -77,7 +78,13 @@ FLAT = (0, 8)
 END_FLAT = 10
 # The pieces and how often each comes.
 PIECES = {"pipe": 3, "pit": 2, "goombas": 3, "bricks": 2, "stairs": 2, "questions": 1, "cannon": 1, "step": 1,
-          "bridge": 1, "hammer_bros": 1, "lakitu": 1, "ledges": 1, "bill_frenzy": 1}
+          "bridge": 1, "hammer_bros": 1, "lakitu": 1, "ledges": 1, "bill_frenzy": 1, "spring": 1}
+# Springboards (game memory: 2-1, 3-1, 5-2 and 8-2; sim/env.py SPRING_W):
+# one at the floor's end (a solid down to the floor: the game's stands on a
+# half block it is pressed down to), before a wall SPRING_WALL_TILES
+# tall and two wide, too tall to jump (2-1), SPRING_WALL of the time, else
+# before a pit of PIT_TILES (3-1, 5-2, 8-2).
+SPRING_WALL, SPRING_WALL_TILES = 0.4, 10
 # Frenzies (game memory: 5-3's Bullet Bills, 2-3's leaping Cheep Cheeps,
 # sim/env.py): a Bullet Bill frenzy's piece is LAKITU_FLOOR tiles of floor
 # and it lasts while Mario goes on LAKITU_SPANS tiles from it, over the
@@ -421,6 +428,18 @@ def random_level(seed: int, pieces: int = 12, only: Optional[str] = None, start_
             x += gap * TILE  # (down to the floor beyond)
             pit(start, (x - start) // TILE)
             ends_in_pit = True
+        elif kind == "spring":
+            solids.append([x, FLOOR - TILE - SPRING_REST, SPRING_W, SPRING_REST + TILE, "spring", {"lift": "spring"}])
+            x += TILE
+            if rng.random() < SPRING_WALL:
+                x += TILE
+                for _ in range(2):
+                    column(x, SPRING_WALL_TILES)
+                    x += TILE
+            else:
+                pit(x, rng.choice(PIT_TILES))
+                x = pits[-1][1]
+                ends_in_pit = True
         elif kind == "bill_frenzy":
             frenzies.append({"kind": "bills", "from": float(x), "until": float(x + rng.choice(LAKITU_SPANS) * TILE)})
             x += LAKITU_FLOOR * TILE

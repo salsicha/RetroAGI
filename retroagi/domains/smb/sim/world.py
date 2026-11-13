@@ -97,7 +97,7 @@ class SimWorld:
 
 
 _KINDS = {"ground": "ground", "pipe": "pipe", "brick": "block", "question_block": "block", "moving_platform": "moving",
-          "cannon": "ground"}  # (the game's labels call a cannon ground)
+          "cannon": "ground", "spring": "spring"}  # (the game's labels call a cannon ground)
 
 
 def enemy_kind(enemy: dict) -> str:
@@ -151,7 +151,8 @@ class SimSource:
                 continue
             seen = QUESTION if p.get("contents") and not p.get("used") else _KINDS.get(kind, "block")
             solids.append(Solid(max(r.left, left), r.top, min(r.right, right), r.bottom, seen, ("platforms", k),
-                                vx=p.get("vx", 0.0), vy=p.get("vy", 0.0)))
+                                vx=p.get("vx", 0.0), vy=p.get("vy", 0.0),
+                                spring=(-1 if p["squash"] is None else p["squash"]) if kind == "spring" else None))
         enemies = []
         for k, e in enumerate(env.enemies):
             if not in_sight(env, e):

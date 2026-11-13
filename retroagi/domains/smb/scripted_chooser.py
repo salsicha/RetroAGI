@@ -13,7 +13,8 @@ from Mario:
   on Mario's side of it when passing is infeasible too, running from it
   (RETREAT) when none is feasible and it meets him soon, else waiting a
   moment;
-- a raised thing ahead within RAISED_AHEAD (a pipe, a step): land on it;
+- a raised thing ahead within RAISED_AHEAD (a pipe, a step, a springboard,
+  from which the next landing is planned with its throw): land on it;
 - the floor ending within PIT_AHEAD at a pit: land beyond it, across at
   the same height within ACROSS before down into what lies between (a
   floor followed at once by something lower is a step down, run off);
@@ -186,7 +187,7 @@ class ScriptedChooser:
             return Choice("jump", Goal("pass", enemy.ref, side=1 if _middle(enemy.box) >= mx else -1))
         raised = sorted(
             (s for s in state.solids
-             if s.kind in ("pipe", "ground") and s.top < feet - RAISE and -4 < s.x0 - mx < RAISED_AHEAD),
+             if s.kind in ("pipe", "ground", "spring") and s.top < feet - RAISE and -4 < s.x0 - mx < RAISED_AHEAD),
             key=lambda s: s.x0,
         )
         if raised:
@@ -207,7 +208,8 @@ class ScriptedChooser:
                     # speed its first, 16 pixels wide, was out of reach).
                     return Choice("jump", Goal("land", s.ref, s.x0, end, prefer="near"))
                 return Choice("jump", Goal("land", s.ref, s.x0, s.x1, prefer=prefer, top=s.top))
-        targets = [s.x0 for s in state.solids if s.x0 > mx + 8 and s.kind in ("pipe", "ground") and s.top < feet - RAISE]
+        targets = [s.x0 for s in state.solids
+                   if s.x0 > mx + 8 and s.kind in ("pipe", "ground", "spring") and s.top < feet - RAISE]
         if under is not None:
             targets.append(under.x1)
         target = min([t for t in targets if t > mx + 8] + [mx + RUN_STRETCH])

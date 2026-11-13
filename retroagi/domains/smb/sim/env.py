@@ -16,7 +16,8 @@ import numpy as np
 import pygame
 
 from retroagi.domains.smb.perception.pixel_types import TYPE_ID
-from retroagi.domains.smb.physics import NESPlayerMotion
+from retroagi.domains.smb.physics import (SPRING_FORCE, SPRING_LAUNCH, SPRING_SQUASH, SPRING_STRONG, SPRING_THROW,
+                                         NESPlayerMotion)
 
 from . import tactic_schedule
 from .piranha import plant_sprite
@@ -70,7 +71,7 @@ ENEMY_GRAVITY, ENEMY_FALL = 0.2, 3.4
 # shapes with each shape's pixel type in place of its colour, and
 # render_instances() with the number of the object that drew it, so both are
 # exact.
-PLATFORM_KINDS = ("ground", "brick", "question_block", "pipe", "cannon")
+PLATFORM_KINDS = ("ground", "brick", "question_block", "pipe", "cannon", "spring")
 TILE = 16
 SKY = (107, 140, 255)
 GROUND, GROUND_EDGE = (139, 69, 19), (84, 38, 8)
@@ -78,6 +79,7 @@ BRICK, BRICK_MORTAR = (200, 76, 12), (64, 24, 0)
 QUESTION, QUESTION_EDGE, QUESTION_MARK = (252, 160, 68), (136, 72, 0), (96, 40, 0)
 PIPE, PIPE_LIGHT, PIPE_DARK = (0, 168, 0), (128, 208, 16), (0, 80, 0)
 LIFT, LIFT_EDGE = (216, 216, 216), (120, 120, 120)
+SPRING = (200, 60, 60)
 COIN, COIN_DARK = (255, 215, 0), (204, 140, 0)
 GOOMBA, GOOMBA_FEET, GOOMBA_SQUISHED = (160, 32, 240), (72, 0, 112), (100, 0, 160)
 PLANT_HEAD, PLANT_SPOT, PLANT_STEM = (216, 40, 96), (255, 200, 220), (0, 112, 72)
@@ -210,6 +212,11 @@ LIFT_W, LIFT_H = 48, 8
 LIFT_ACROSS = (53.0, 240.0)
 LIFT_UPDOWN = (137.0, 340.0)
 LIFT_FALL = 2.25
+# Springboards: SPRING_W wide (game memory: 2-1's), a solid down to the
+# floor (the game's stands on a half block that stops Mario walking into it
+# and that it is pressed down to); how one throws Mario is his motion's
+# (physics.SPRING_SQUASH).
+SPRING_W = 16
 
 # What each strategy is paid for, as multipliers of the reward terms (training
 # only; a layout names its strategy in "strategy", see strategy_families).
@@ -788,10 +795,12 @@ class MarioScenarioEnv:
             reward_terms["energy"] += self._energy_jump
             self._episode_energy += self._energy_jump
 
+        on_spring = bool(self.mario["on_ground"] and support_before is not None
+                         and support_before.get("lift") == "spring")
         dx, dy, jumped = self.motion.advance(
             direction=move_x,
-            jump=jump_pressed,
-            grounded=self.mario["on_ground"],
+            jump=jump_pressed and not on_spring,
+            grounded=self.mario["on_ground"] and not on_spring,  # (held there: his speed as in the air)
             y=self.mario["y"],
             run=move_x > 0,
         )
@@ -803,6 +812,8 @@ class MarioScenarioEnv:
         if jumped:
             self.mario["on_ground"] = False
             self._airborne_started_with_jump = True
+        if on_spring:
+            dx = 0  # (held where he is while it presses him down)
         # Inclusive foot contact preserves support at zero displacement;
         # a fractional position probe would alter the next ledge departure.
         if self.mario["on_ground"]:
@@ -834,6 +845,8 @@ class MarioScenarioEnv:
 
         for plat in self.platforms:
             r = plat["rect"]
+            if plat is support_before and grounded_before:
+                continue  # (what he stands on, risen into his feet: carried up below, not a wall)
             if mario_rect.colliderect(r):
                 if self.mario["vx"] > 0:
                     mario_rect.right = r.left
@@ -882,7 +895,9 @@ class MarioScenarioEnv:
                 if self.mario["vy"] >= 0:  # falling / level
                     mario_rect.bottom = r.top
                     self.mario["on_ground"] = True
-                    self.mario["_platform"] = plat
+                    standing = self.mario["_platform"]
+                    if standing is None or standing.get("lift") != "spring":  # (pressed down, level with its block)
+                        self.mario["_platform"] = plat
                 elif self.mario["vy"] < 0:  # hitting ceiling
                     mario_rect.top = r.bottom
                     self._bump(plat, reward_terms)
@@ -910,6 +925,10 @@ class MarioScenarioEnv:
             carry_dx = self.mario["_platform"]["delta_x"]
             self.mario["x"] += carry_dx
             mario_rect.x = self.mario["x"]
+
+        spring = self.mario["_platform"] if self.mario["on_ground"] else None
+        if spring is not None and spring.get("lift") == "spring" and spring["squash"] == SPRING_THROW:
+            self._spring_throw(spring)
 
         if self.mario["on_ground"]:
             self._airborne_started_with_jump = False
@@ -1318,6 +1337,8 @@ class MarioScenarioEnv:
                 continue
             if kind == "moving_platform":
                 yield "moving_platform", None, partial(self._draw_lift, rect=screen_rect)
+            elif kind == "spring":
+                yield "moving_platform", None, partial(self._draw_spring, rect=screen_rect)
             elif kind == "pipe":
                 yield None, None, partial(self._draw_pipe, rect=screen_rect)
             elif kind == "cannon":
@@ -1433,6 +1454,10 @@ class MarioScenarioEnv:
         if body.h:
             canvas.rect(PIPE_DARK, "pipe", pygame.Rect(body.left, body.top, 1, body.h))
             canvas.rect(PIPE_DARK, "pipe", pygame.Rect(body.right - 1, body.top, 1, body.h))
+
+    def _draw_spring(self, canvas, rect):
+        canvas.rect(SPRING, "moving_platform", rect)
+        canvas.rect(LIFT_EDGE, "moving_platform", rect, 1)
 
     def _draw_lift(self, canvas, rect):
         canvas.rect(LIFT, "moving_platform", rect)
@@ -1621,6 +1646,18 @@ class MarioScenarioEnv:
         elif lift["lift"] == "updown":
             reach, period = LIFT_UPDOWN
             y = home_y + reach / 2 * (1 - math.cos(2 * math.pi * lift["tick"] / period))
+        elif lift["lift"] == "spring":
+            squash = lift["squash"]
+            if squash is not None:
+                squash = squash + 1 if squash + 1 < len(SPRING_SQUASH) else None
+            elif stood_on:
+                squash = 0
+            if squash is None:
+                lift["strong"] = False
+            elif stood_on and SPRING_STRONG[0] <= squash <= SPRING_STRONG[1] and self.mario["jump_held"]:
+                lift["strong"] = True
+            lift["squash"] = squash
+            y = home_y + (SPRING_SQUASH[squash] if squash is not None else 0)
         elif stood_on and y < self.height + 32:
             y += LIFT_FALL
         rect = lift["rect"]
@@ -1628,6 +1665,15 @@ class MarioScenarioEnv:
         rect.x, rect.y = int(round(x)), int(round(y))
         lift.update(lift_x=x, lift_y=y, vx=x - lift["lift_x"], vy=y - lift["lift_y"],
                     delta_x=rect.x - old[0], delta_y=rect.y - old[1])
+
+    def _spring_throw(self, spring: dict) -> None:
+        """Mario thrown up by the springboard he stands on (SPRING_LAUNCH)."""
+        motion = self.motion
+        motion.y_speed = SPRING_LAUNCH[1 if spring["strong"] else 0]
+        motion.y_force = motion.y_fraction = 0
+        motion.force = motion.force_up = motion.force_down = SPRING_FORCE
+        motion.origin_y = int(self.mario["y"])
+        self.mario.update(on_ground=False, _platform=None, vy=float(motion.y_speed))
 
     def _frenzies(self) -> None:
         """Bullet Bills and leaping Cheep Cheeps of the frenzies Mario is in
@@ -1986,7 +2032,9 @@ class MarioScenarioEnv:
         for plat, kind in zip(self.platforms, kinds):
             if kind is not None and kind not in PLATFORM_KINDS:
                 raise ValueError(f"platform kind must be one of {PLATFORM_KINDS} or None")
-            if plat["moving"]:
+            if plat.get("lift") == "spring":
+                resolved.append("spring")
+            elif plat["moving"]:
                 resolved.append("moving_platform")
             elif kind is not None:
                 resolved.append(kind)
@@ -2030,6 +2078,8 @@ class MarioScenarioEnv:
             # (a lift: "across", "updown" or "falls", from where it is placed, at a point of its swing)
             plat.update(moving=True, lift=p["lift"], home=(float(x), float(y)), lift_x=float(x), lift_y=float(y),
                         tick=int(p.get("phase", 0)), vx=0.0, vy=0.0, delta_y=0)
+            if p["lift"] == "spring":  # (pressed down this frame of SPRING_SQUASH; None: at rest)
+                plat.update(squash=None, strong=False)
         return plat
 
     @staticmethod

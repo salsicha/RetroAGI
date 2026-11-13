@@ -51,8 +51,11 @@ def passable(scenario: dict, expansions: int = EXPANSIONS) -> dict:
                 continue
             mario, motion = env.mario, env.motion
             # (where the lifts are is part of the situation: the same place at
-            # another point of a lift's swing is another situation)
-            lifts = tuple((int(p["lift_x"]) // 4, int(p["lift_y"]) // 4) for p in env.platforms if p.get("lift"))
+            # another point of a lift's swing is another situation; so is a
+            # springboard's point of its squash, and whether it will throw
+            # strongly)
+            lifts = tuple((int(p["lift_x"]) // 4, int(p["lift_y"]) // 4, p.get("squash"), p.get("strong"))
+                          for p in env.platforms if p.get("lift"))
             key = (int(mario["x"]) // 3, int(mario["y"]) // 3, motion.x_speed // 4, motion.y_speed, motion.force,
                    bool(mario["on_ground"]), bool(mario["big"]), bool(motion.previous_jump), lifts)
             if key in seen:

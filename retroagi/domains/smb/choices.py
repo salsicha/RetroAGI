@@ -49,7 +49,7 @@ MAX_SURFACES, MAX_ENEMIES, MAX_BUMPS = 8, 4, 4
 BUMP_REACH = 96
 # Token sizes: at most this many surfaces, enemies and items per state.
 SURFACE_SLOTS, ENEMY_SLOTS, ITEM_SLOTS = 24, 8, 2
-SURFACE_KINDS = ("ground", "pipe", "block", "question", "moving", "edge")
+SURFACE_KINDS = ("ground", "pipe", "block", "question", "moving", "edge", "spring")
 MARIO_WIDTH, SURFACE_WIDTH, ENEMY_WIDTH, ITEM_WIDTH = 7, 4 + len(SURFACE_KINDS), 7 + len(ENEMY_KINDS), 6
 # The network's inputs are scaled to about one: x by the screen's width, y
 # by its height, speeds by 4 pixels a frame.
@@ -121,7 +121,7 @@ def candidates(state: State) -> list:
     body = state.body
     mx = (body[0] + body[2]) / 2
     out = []
-    reach = [s for s in state.solids if s.kind in ("ground", "pipe", "block", "question", "moving")
+    reach = [s for s in state.solids if s.kind in ("ground", "pipe", "block", "question", "moving", "spring")
              and s.x1 > mx - BEHIND and s.x0 < mx + AHEAD]
     reach.sort(key=lambda s: max(s.x0 - mx, mx - s.x1, 0.0))
 

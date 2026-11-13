@@ -19,6 +19,8 @@ import game_catalogue as catalogue
 
 ENEMY_PAGE, ENEMY_X, ENEMY_Y_PAGE, ENEMY_Y = 0x6E, 0x87, 0xB6, 0xCF  # Enemy_PageLoc, _X_Position, _Y_HighPos, _Y_Position
 ENEMY_SPEED, ENEMY_Y_SPEED, ENEMY_STATE, ENEMY_DIR = 0x58, 0xA0, 0x1E, 0x46  # Enemy_X_Speed, _Y_Speed, Enemy_State, Enemy_MovingDir
+SPRITES = 0x200  # the sprites drawn: y, tile, attributes, x; four bytes each, 64 of them
+HIDDEN = 0xF0  # a sprite this far down is not drawn
 BOXES = 0x4B0  # EnemyBoundingBoxCoord: x0, y0, x1, y1 on the screen, four bytes a slot
 CAMERA_PAGE, CAMERA_X = 0x71A, 0x71C  # ScreenLeft_PageLoc, ScreenLeft_X_Pos
 X_SPEED, X_FORCE = 0x57, 0x705  # Player_X_Speed (sixteenths of a pixel a frame), Player_X_MoveForce
@@ -26,6 +28,7 @@ X_SPEED, X_FORCE = 0x57, 0x705  # Player_X_Speed (sixteenths of a pixel a frame)
 # flashing as after a hit (InjuryTimer): nothing hurts him and he hurts
 # nothing.
 INJURY = 0x79E
+VERTICAL_FORCE = 0x709  # VerticalForce, then VerticalForceDown
 # Set down to ride a lift, Mario's top this far over the lift's (a small
 # Mario's is 32 over what he stands on: he drops the rest).
 RIDE_ABOVE = 36
@@ -39,13 +42,18 @@ def signed(byte: int) -> int:
 
 
 def measure(level: str, code: int, frames: int = 600, before: int = 20000, hold_x: int = 0,
-            speed: float = 0.0, height: int = catalogue.FLY_HEIGHT, ride: bool = False) -> dict:
+            speed: float = 0.0, height: int = catalogue.FLY_HEIGHT, ride: bool = False,
+            press: tuple = (), press_frames: tuple = (0, 10**9), ride_at: tuple = (8, -RIDE_ABOVE)) -> dict:
     """Every slot's enemy each frame, from the first frame an enemy of
     ``code`` is on the screen (``hold_x``: or once Mario is that far into
     the level); Mario then held ``height`` from the screen's top, moving
     ``speed`` pixels a frame (in the air the game keeps his speed: it is
     written each frame); ``ride``: instead set down on that enemy (a lift)
-    and left to the game, unhurtable."""
+    and left to the game, unhurtable, holding the buttons ``press`` from
+    the first to the last of ``press_frames`` after (a springboard wants a
+    press while it is squashed); ``ride_at``: where Mario is set down,
+    from the enemy's place (default just over it; level with it and to
+    its left, he can be walked into it)."""
     import retro
 
     if level in catalogue.SCORED:
@@ -83,7 +91,11 @@ def measure(level: str, code: int, frames: int = 600, before: int = 20000, hold_
                     write(X_SPEED, round(speed * 16) % 256)
                     write(X_FORCE, 0)
                     write(INJURY, 8)
-            env.step(idle if holding or not started else run)
+            pressed = idle.copy()
+            if press_frames[0] <= len(rows) <= press_frames[1]:
+                for button in press:
+                    pressed[env.buttons.index(button)] = 1
+            env.step((pressed if ride else idle) if holding else run if started else idle)
             if not started:
                 continue
             ram = env.get_ram()
@@ -100,8 +112,9 @@ def measure(level: str, code: int, frames: int = 600, before: int = 20000, hold_
                 if ride:  # set down just over it, still
                     slot = next(s for s in slots if ram[catalogue.ENEMY_ID + s] == code)
                     lift_x = int(ram[ENEMY_PAGE + slot]) * 256 + int(ram[ENEMY_X + slot])
-                    for address, value in ((catalogue.PAGE, (lift_x + 8) // 256), (catalogue.X, (lift_x + 8) % 256),
-                                           (catalogue.Y, int(ram[ENEMY_Y + slot]) - RIDE_ABOVE), (catalogue.Y_PAGE, 1),
+                    for address, value in ((catalogue.PAGE, (lift_x + ride_at[0]) // 256),
+                                           (catalogue.X, (lift_x + ride_at[0]) % 256),
+                                           (catalogue.Y, int(ram[ENEMY_Y + slot]) + ride_at[1]), (catalogue.Y_PAGE, 1),
                                            (catalogue.Y_SPEED, 0), (X_SPEED, 0), (catalogue.STAR, 0)):
                         write(address, value)
             elif ride:
@@ -112,7 +125,14 @@ def measure(level: str, code: int, frames: int = 600, before: int = 20000, hold_
                 write(catalogue.X, (mario_x + 16) % 256)
             rows.append({"frame": len(rows), "mario_x": mario_x,
                          "mario_y": (int(ram[catalogue.Y_PAGE]) - 1) * 256 + int(ram[catalogue.Y]),
+                         # (his vertical speed, its fraction, and the gravity the game applies rising and falling)
+                         "mario_motion": [signed(int(ram[catalogue.Y_SPEED])), int(ram[catalogue.Y_FORCE]),
+                                          int(ram[VERTICAL_FORCE]), int(ram[VERTICAL_FORCE + 1])],
                          "camera": int(ram[CAMERA_PAGE]) * 256 + int(ram[CAMERA_X]),
+                         # (every sprite drawn: x, y on the screen, its tile; a fire bar's fireballs are only these)
+                         "sprites": [[int(ram[SPRITES + 4 * k + 3]), int(ram[SPRITES + 4 * k]),
+                                      int(ram[SPRITES + 4 * k + 1])] for k in range(64)
+                                     if ram[SPRITES + 4 * k] < HIDDEN],
                          "enemies": [{"slot": s, "code": int(ram[catalogue.ENEMY_ID + s]),
                                       "x": int(ram[ENEMY_PAGE + s]) * 256 + int(ram[ENEMY_X + s]),
                                       "y": (int(ram[ENEMY_Y_PAGE + s]) - 1) * 256 + int(ram[ENEMY_Y + s]),
@@ -135,10 +155,15 @@ def main(argv=None) -> int:
     parser.add_argument("--speed", type=float, default=0.0, help="Mario's speed while held (pixels a frame)")
     parser.add_argument("--height", type=int, default=catalogue.FLY_HEIGHT, help="Mario's top while held")
     parser.add_argument("--ride", action="store_true", help="set Mario down on the enemy (a lift) instead")
+    parser.add_argument("--press", nargs="*", default=(), help="buttons held while riding (A, B, LEFT, RIGHT)")
+    parser.add_argument("--press-frames", nargs=2, type=int, default=(0, 10**9), help="from, to (frames of the ride)")
+    parser.add_argument("--ride-at", nargs=2, type=int, default=(8, -RIDE_ABOVE),
+                        help="where Mario is set down, from the enemy's place (x, y)")
     parser.add_argument("--output", type=Path)
     args = parser.parse_args(argv)
     result = measure(args.level, args.code, args.frames, hold_x=args.hold_x, speed=args.speed,
-                     height=args.height, ride=args.ride)
+                     height=args.height, ride=args.ride, press=tuple(args.press),
+                     press_frames=tuple(args.press_frames), ride_at=tuple(args.ride_at))
     tracks = {}
     for row in result["rows"]:
         for e in row["enemies"]:
