@@ -3,9 +3,12 @@ and read from his routine in the game's program): he paces about where he
 starts at a quarter of a pixel a frame, jumps as high and as often as the
 game's, breathes flames at the game's intervals that fly left and settle
 at the game's heights, follows Mario who gets behind him, hurts and cannot
-be stomped; free flames come before him; the planner follows his fall and
-his flames; the generator builds the castles' bridge."""
+be stomped; in worlds 6 to 8 he throws hammers in the air, as many as the
+game's; free flames come before him; the planner follows his fall and his
+flames; the generator builds the castles' bridge, each of the game's eight
+castles as often."""
 
+import math
 from collections import Counter
 
 from retroagi.domains.smb.planner import enemy_paths
@@ -17,13 +20,13 @@ BRIDGE = 640
 ORIGIN = BRIDGE + 7 * TILE
 
 
-def scene(mario_x=BRIDGE - 8, turn=1, frenzy=False, breathes=True):
+def scene(mario_x=BRIDGE - 8, turn=1, frenzy=False, breathes=True, hammers=False):
     return {"world_width": 1400, "scroll_x": 115, "mario": [mario_x, FLOOR - 12], "frame_budget": 9000,
             "platforms": [[0, FLOOR, BRIDGE, 32], [BRIDGE, FLOOR, 13 * TILE, TILE],
                           [BRIDGE + 13 * TILE, FLOOR, 600, 32]],
             "platform_kinds": ["ground", "ground", "ground"],
             "enemies": [{"kind": "bowser", "x": ORIGIN, "y": FLOOR - block.BOWSER_FEET, "turn": turn,
-                         "breathes": breathes}],
+                         "breathes": breathes, "hammers": hammers}],
             "frenzies": [{"kind": "flames", "from": 0, "until": 2000}] if frenzy else [],
             "task": {"family": "game_level"}}
 
@@ -122,6 +125,48 @@ def test_he_hurts_and_cannot_be_stomped():
     assert step.over and step.died and not world.env.stomped
 
 
+def test_in_worlds_6_to_8_he_throws_hammers_in_the_air():
+    per_jump, flying = [], 0
+    for turn in range(1, 7):
+        world = SimWorld(scene(turn=turn, breathes=False, hammers=True))
+        world.reset()
+        bowser, came, jump = bowser_of(world), {}, None
+        for frame in range(1500):
+            known = len(world.env.enemies)
+            world.step(0)
+            for k in range(known, len(world.env.enemies)):
+                hammer = world.env.enemies[k]
+                # (only in the air, or as he lands)
+                assert hammer["kind"] == "hammer" and (bowser["jump_timer"] == 0 or bowser["py"] == bowser["ground"])
+                # (its place, the corner of its hurt box: 2 right of his and 10 up, as the game's)
+                assert (hammer["x"], hammer["y"]) == (bowser["px"] + 2, math.floor(bowser["py"]) - 10)
+                came[k] = [frame, hammer["x"]]
+                if jump is not None:
+                    assert (frame - jump[0]) % block.BOWSER_EVERY == 0  # (a try once in 4 frames)
+                    jump[1] += 1
+                else:
+                    jump = [frame, 1]
+            for k, (start, x) in came.items():
+                hammer = world.env.enemies[k]
+                if frame - start == 14:  # (held through the 15th frame, as the game's, then thrown his way: left)
+                    assert hammer["x"] == bowser["px"] + 2 and hammer["held"] == 0
+                if frame - start == 15:
+                    assert hammer["x"] == bowser["px"] + 2 - 1 and hammer["direction"] == bowser["facing"] == -1
+            flying = max(flying, sum(not world.env.enemies[k].get("gone") for k in came))
+            if bowser["jump_timer"] and jump is not None:
+                per_jump.append(jump[1])
+                jump = None
+    # (the game's draw of nine places: 6-4's, Mario mostly behind him so
+    # that he jumped less often, 6 to 9 a jump; here, jumping as often as
+    # in front of Mario, about 6)
+    assert flying <= block.HAMMER_PLACES and max(per_jump) <= 9 and 5.5 <= sum(per_jump) / len(per_jump) <= 7
+    world = SimWorld(scene(breathes=False))
+    world.reset()
+    for _ in range(600):
+        world.step(0)
+    assert not any(e.get("kind") == "hammer" for e in world.env.enemies)  # (worlds 1 to 5: none)
+
+
 def test_free_flames_come_before_him_and_stop_when_he_comes():
     world = SimWorld(scene(mario_x=120, frenzy=True))
     world.reset()
@@ -187,3 +232,12 @@ def test_the_generator_builds_the_castles_bridge():
         frenzy = next(f for f in s["frenzies"] if f["kind"] == "flames")
         assert frenzy["from"] < bridge[0] <= frenzy["until"]
     assert any(e.get("kind") == "bowser" for seed in range(60) for e in random_level(seed)["enemies"])
+    # (the castle one of the game's eight: hard from world 5, hammers from 6, no flames in 6 and 7)
+    castles = Counter()
+    for seed in range(200):
+        s = skill_scene(seed, "bowser")
+        bowser = next(e for e in s["enemies"] if e["kind"] == "bowser")
+        castles[(bowser["hard"], bowser["hammers"], bowser["breathes"])] += 1
+        assert bowser["hard"] or not bowser["hammers"]
+    assert set(castles) == {(False, False, True), (True, False, True), (True, True, False), (True, True, True)}
+    assert 80 <= castles[(False, False, True)] <= 120  # (four in eight)

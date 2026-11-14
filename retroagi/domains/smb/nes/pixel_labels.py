@@ -201,7 +201,8 @@ ENEMY_KIND_CLASSES = {
 # Which of the game's own object types each enemy is, as the vision is told it
 # (smb_scene_labels.OBJECT_TYPE_SLOTS numbers; the networks learn what each
 # means): one number per enemy code, the two fire bars (one turning each way,
-# alike in any one picture) sharing one, and Hammer Bro's hammers their own.
+# alike in any one picture) sharing one, a frenzy's Bullet Bill sharing a
+# cannon's, and Hammer Bro's hammers their own.
 ENEMY_TYPE_NUMBERS = {
     0x00: 0,  # green Koopa Troopa
     0x02: 1,  # Buzzy Beetle
@@ -214,6 +215,11 @@ ENEMY_TYPE_NUMBERS = {
     0x1B: 8,  # fire bar
     0x1D: 8,  # fire bar
     0x33: 9,  # Bullet Bill
+    0x08: 9,  # Bullet Bill of a frenzy
+    0x03: 11,  # red Koopa Troopa
+    0x0F: 12,  # red Koopa Paratroopa, flying
+    0x10: 13,  # green Koopa Paratroopa, flying
+    0x14: 14,  # leaping Cheep Cheep
 }
 HAMMER_TYPE_NUMBER = 10
 # Sprite drawings that are never an object's body: the floating score numbers

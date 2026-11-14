@@ -262,7 +262,14 @@ LAVA_BOX = (3, 14, 10, 6)
 # frame up or down until its place is level with one of FLAME_LEVELS (the
 # game's 144, 128 and 112 over castle floors 160 down; Block SMB's floor is
 # 208 down), then level; its box is the game's (FLAME_BOX), and it cannot
-# be stomped. Not here: his hammers (worlds 6 to 8), the axe.
+# be stomped. In worlds 6 to 8 ("hammers") he throws hammers: in the air,
+# once in BOWSER_EVERY frames, one of the game's HAMMER_PLACES loose-item
+# places is drawn (the first and last half as often as each other one), and
+# if no hammer of his is in it and its place is on screen a hammer appears
+# there, its place (its hurt box's corner: the game's box for a hammer is
+# HAMMER_W by HAMMER_H from it) BOWSER_HAMMER_AT from his; it is held
+# there HAMMER_HOLD frames, then thrown the way he faces (6-4's memory: 6
+# to 9 a jump). Not here: the axe.
 BOWSER_FEET, BOWSER_BOX, BOWSER_BACK = 32, (0, 2, 32, 27), 16
 BOWSER_EVERY, BOWSER_TURN, BOWSER_CHASE, BOWSER_CHASE_LIMIT = 4, 16, 2, 88
 BOWSER_RANGES = (33, 65, 17, 49)
@@ -273,6 +280,7 @@ FLAME_HARD = 16
 FLAME_FROM, FLAME_SPEED, FLAME_MOUTH = 287, (1.25, 1.375), (-14, 8)
 FLAME_LEVELS = (192, 176, 160, 192)
 FLAME_BOX = (6, 4, 4, 4)
+HAMMER_PLACES, BOWSER_HAMMER_AT = 9, (2, -10)
 
 # What each strategy is paid for, as multipliers of the reward terms (training
 # only; a layout names its strategy in "strategy", see strategy_families).
@@ -1783,7 +1791,7 @@ class MarioScenarioEnv:
         he comes on screen; ``turn`` sets his random draws, ``clock`` the
         game's frame count, ``count`` where his flames start in FLAME_WAITS,
         ``hard`` a hard castle's flames, ``breathes`` whether he breathes
-        them."""
+        them, ``hammers`` whether he throws hammers."""
         bowser = {"kind": "bowser", "px": float(spec["x"]), "py": float(spec["y"]), "origin": float(spec["x"]),
                   "ground": float(spec["y"]), "step": BOWSER_CHASE, "range": 0, "facing": -1, "vx": 0.0, "vy": 0.0,
                   "w": BOWSER_BOX[2], "h": BOWSER_BOX[3], "speed": 0.0, "direction": -1, "patrol_min": -1e9,
@@ -1793,7 +1801,9 @@ class MarioScenarioEnv:
                   "flame_timer": BOWSER_FIRST_FLAME, "mouth": False, "breathes": bool(spec.get("breathes", True)),
                   "flames": int(spec.get("count", 0)),
                   "clock": int(spec.get("clock", 0)) % 256, "turn": int(spec.get("turn", 1)),
-                  "hard": bool(spec.get("hard"))}
+                  "hard": bool(spec.get("hard")), "hammers": bool(spec.get("hammers")),
+                  # (the enemy each loose-item place holds, -1: none; a tuple, as states are copied shallow)
+                  "places": (-1,) * HAMMER_PLACES}
         MarioScenarioEnv._place_bowser(bowser)
         return bowser
 
@@ -1834,6 +1844,8 @@ class MarioScenarioEnv:
         if bowser["jump_timer"] == 0:  # in the air
             bowser["py"] += bowser["vy"]
             bowser["vy"] = min(bowser["vy"] + BOWSER_GRAVITY, BOWSER_FALL)
+            if bowser["hammers"] and bowser["clock"] % BOWSER_EVERY == 0:
+                self._bowser_hammer(bowser)
             if bowser["py"] >= bowser["ground"]:
                 bowser.update(py=bowser["ground"], vy=0.0, jump_timer=self._bowser_draw(bowser))
         elif bowser["jump_timer"] == 1:
@@ -1856,6 +1868,22 @@ class MarioScenarioEnv:
         bowser["direction"] = 1 if bowser["step"] > 0 else -1
         bowser["on_ground"] = bowser["jump_timer"] > 0
         self._place_bowser(bowser)
+
+    def _bowser_hammer(self, bowser: dict) -> None:
+        """Bowser's try at a hammer (BOWSER_* notes): a loose-item place is
+        drawn; free, and the hammer's place on screen, a hammer appears in it."""
+        bowser["turn"] = (bowser["turn"] * 1103515245 + 12345) % 2**31
+        bits = bowser["turn"] >> 16
+        place = bits % 8 or (bits >> 3) % 2 * 8  # (the game's: three bits, or if none is set the fourth)
+        held = bowser["places"][place]
+        if held >= 0 and not self.enemies[held].get("gone"):
+            return
+        x = bowser["px"] + BOWSER_HAMMER_AT[0]
+        if not self.camera_x <= x < self.camera_x + self.width:
+            return
+        bowser["places"] = bowser["places"][:place] + (len(self.enemies),) + bowser["places"][place + 1:]
+        # (moved the frame it appears, as the game's is; it is held through the frame it is thrown)
+        self._throw_hammer(bowser, held=HAMMER_HOLD + 1)
 
     @staticmethod
     def _flame(x: float, y: float, level: float, hard: bool) -> dict:
@@ -2032,16 +2060,28 @@ class MarioScenarioEnv:
         if bro["y"] > self.height:
             bro.update(dead=True, gone=True)
 
-    def _throw_hammer(self, bro: dict) -> None:
-        """A hammer appears over ``bro``'s head, held (HAMMER_* notes)."""
+    @staticmethod
+    def _hammer_held(hammer: dict, bro: dict) -> None:
+        """A held hammer's place: over a Hammer Bro's head (HAMMER_* notes),
+        or BOWSER_HAMMER_AT from Bowser's place; it moves as he does."""
+        if bro.get("kind") == "bowser":
+            hammer.update(x=bro["px"] + BOWSER_HAMMER_AT[0], y=math.floor(bro["py"]) + BOWSER_HAMMER_AT[1])
+        else:
+            hammer.update(x=bro["x"] + (bro["w"] - HAMMER_W) / 2, y=bro["y"] - HAMMER_OVER - HAMMER_H / 2)
+        hammer.update(speed=bro["speed"], direction=bro["direction"])
+
+    def _throw_hammer(self, bro: dict, held: int = HAMMER_HOLD) -> None:
+        """A hammer appears over ``bro``'s head, held ``held`` frames
+        (HAMMER_* notes)."""
         index = next(k for k, e in enumerate(self.enemies) if e is bro)
-        self.enemies.append({
-            "kind": "hammer", "bro": index, "held": HAMMER_HOLD,
-            "x": bro["x"] + (bro["w"] - HAMMER_W) / 2, "y": bro["y"] - HAMMER_OVER - HAMMER_H / 2,
-            "vx": 0.0, "vy": 0.0, "w": HAMMER_W, "h": HAMMER_H, "speed": bro["speed"], "direction": bro["direction"],
+        hammer = {
+            "kind": "hammer", "bro": index, "held": held,
+            "vx": 0.0, "vy": 0.0, "w": HAMMER_W, "h": HAMMER_H,
             "patrol_min": -1e9, "patrol_max": 1e9, "edge_aware": False, "on_ground": False,
             "dead": False, "stompable": False,
-        })
+        }
+        self._hammer_held(hammer, bro)
+        self.enemies.append(hammer)
 
     def _update_hammer(self, hammer: dict) -> None:
         """A hammer's frame: held over its Hammer Bro, it moves with it until
@@ -2050,13 +2090,13 @@ class MarioScenarioEnv:
         if hammer["held"] > 0:
             bro = self.enemies[hammer["bro"]]
             hammer["held"] -= 1
-            hammer.update(x=bro["x"] + (bro["w"] - HAMMER_W) / 2, y=bro["y"] - HAMMER_OVER - HAMMER_H / 2,
-                          speed=bro["speed"], direction=bro["direction"])
+            self._hammer_held(hammer, bro)
             if hammer["held"] == 0 or bro["dead"]:
                 hammer["held"] = 0
                 middle = self.mario["x"] + self.mario["w"] / 2
-                hammer.update(speed=HAMMER_SPEED, direction=1 if middle > hammer["x"] + HAMMER_W / 2 else -1,
-                              vy=HAMMER_THROW)
+                # (a Hammer Bro faces Mario; Bowser throws the way he faces)
+                way = bro["facing"] if bro.get("kind") == "bowser" else 1 if middle > hammer["x"] + HAMMER_W / 2 else -1
+                hammer.update(speed=HAMMER_SPEED, direction=way, vy=HAMMER_THROW)
             return
         hammer["vy"] = min(hammer["vy"] + HAMMER_GRAVITY, HAMMER_FALL)
         hammer["x"] += hammer["speed"] * hammer["direction"]

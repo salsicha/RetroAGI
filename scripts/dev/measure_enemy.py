@@ -2,7 +2,8 @@
 is flown into a level (game_catalogue.fly's way of reaching it) until an
 enemy of the kind is on the screen, then held in the air (still, or at a
 speed given; nothing hurts him and he hurts nothing), and the
-enemy's place, speed and collision box are read every frame. For making
+enemy's place, speed and collision box are read every frame, with the
+loose items' (hammers: their state, place and speed). For making
 Block SMB move as the game does (docs/requirements.md, section 3). The
 levels scored on are refused.
 
@@ -23,6 +24,10 @@ ENEMY_SPEED, ENEMY_Y_SPEED, ENEMY_STATE, ENEMY_DIR = 0x58, 0xA0, 0x1E, 0x46  # E
 SPRITES = 0x200  # the sprites drawn: y, tile, attributes, x; four bytes each, 64 of them
 HIDDEN = 0xF0  # a sprite this far down is not drawn
 BOXES = 0x4B0  # EnemyBoundingBoxCoord: x0, y0, x1, y1 on the screen, four bytes a slot
+# The nine loose items (a Hammer Bro's or Bowser's hammers, coins out of
+# blocks): Misc_State, _PageLoc, _X_Position, _Y_Position, _X_Speed, _Y_Speed
+MISC_STATE, MISC_PAGE, MISC_X, MISC_Y, MISC_SPEED, MISC_Y_SPEED = 0x2A, 0x7A, 0x93, 0xDB, 0x64, 0xAC
+ENEMY_FLAGS = 0x0F  # Enemy_Flag
 CAMERA_PAGE, CAMERA_X = 0x71A, 0x71C  # ScreenLeft_PageLoc, ScreenLeft_X_Pos
 X_SPEED, X_FORCE = 0x57, 0x705  # Player_X_Speed (sixteenths of a pixel a frame), Player_X_MoveForce
 # While held Mario is not invincible (it would kill what touches him) but
@@ -77,7 +82,7 @@ def measure(level: str, code: int, frames: int = 600, before: int = 20000, hold_
                            (catalogue.LIVES, 5), (catalogue.TIMER, 0), (catalogue.TIMER + 1, 0), (catalogue.TIMER + 2, 1)):
         write(address, value)
     here = (world - 1, number - 1)
-    started, holding, rows = False, False, []
+    started, holding, rows, furthest, still = False, False, [], 0, 0
     try:
         for frame in range(before + frames):
             ram = env.get_ram()
@@ -103,6 +108,12 @@ def measure(level: str, code: int, frames: int = 600, before: int = 20000, hold_
             mario_x = int(ram[catalogue.PAGE]) * 256 + int(ram[catalogue.X])
             slots = [s for s in range(catalogue.SLOTS) if ram[catalogue.ENEMY_ON + s]]
             if not holding:
+                # (flown into the level as game_catalogue.fly does: against a wall, on through it)
+                still = still + 1 if mario_x <= furthest else 0
+                furthest = max(furthest, mario_x)
+                if still and still % 6 == 0:
+                    write(catalogue.PAGE, (mario_x + 16 * (still // 6)) // 256)
+                    write(catalogue.X, (mario_x + 16 * (still // 6)) % 256)
                 camera = int(ram[CAMERA_PAGE]) * 256 + int(ram[CAMERA_X])
                 holding = (hold_x and mario_x >= hold_x) or (not hold_x and any(
                     ram[catalogue.ENEMY_ID + s] == code
@@ -139,7 +150,14 @@ def measure(level: str, code: int, frames: int = 600, before: int = 20000, hold_
                                       "y": (int(ram[ENEMY_Y_PAGE + s]) - 1) * 256 + int(ram[ENEMY_Y + s]),
                                       "speed": signed(int(ram[ENEMY_SPEED + s])), "y_speed": signed(int(ram[ENEMY_Y_SPEED + s])),
                                       "state": int(ram[ENEMY_STATE + s]), "direction": int(ram[ENEMY_DIR + s]),
-                                      "box": [int(b) for b in ram[BOXES + 4 * s:BOXES + 4 * s + 4]]} for s in slots]})
+                                      "box": [int(b) for b in ram[BOXES + 4 * s:BOXES + 4 * s + 4]]} for s in slots],
+                         # (every enemy slot's flag, the power-up's and the seventh's: a hammer is
+                         # thrown only while the slot its loose-item slot names is empty)
+                         "flags": [int(ram[ENEMY_FLAGS + k]) for k in range(7)],
+                         "misc": [{"slot": m, "state": int(ram[MISC_STATE + m]),
+                                   "x": int(ram[MISC_PAGE + m]) * 256 + int(ram[MISC_X + m]), "y": int(ram[MISC_Y + m]),
+                                   "speed": signed(int(ram[MISC_SPEED + m])), "y_speed": signed(int(ram[MISC_Y_SPEED + m]))}
+                                  for m in range(9) if ram[MISC_STATE + m]]})
             if len(rows) >= frames:
                 break
     finally:

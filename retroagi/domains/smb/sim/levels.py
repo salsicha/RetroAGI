@@ -93,10 +93,13 @@ PIECES = {"pipe": 3, "pit": 2, "goombas": 3, "bricks": 2, "stairs": 2, "question
 # LIFT_ACROSS); a lava fireball under it BOWSER_LAVA of the time (5-4's and
 # 6-4's); after it the axe's step, one tile up and BOWSER_STEP wide. His
 # free flames come from BOWSER_FLAMES tiles before the bridge (where Mario
-# is when the game's first comes); a hard castle's (worlds 5 to 8)
-# BOWSER_HARD of the time.
+# is when the game's first comes). The castle is one of the game's eight,
+# each as often: from world BOWSER_HARD on a hard castle's flames, from
+# BOWSER_HAMMERS on Bowser throws hammers, and in BOWSER_NO_FLAMES he
+# breathes none (his routine in the game's program).
 BOWSER_BRIDGE, BOWSER_IN, BOWSER_LIFT, BOWSER_LIFT_UP, BOWSER_LIFT_W = 13, 7, 10, 4, 32
-BOWSER_LAVA, BOWSER_STEP, BOWSER_FLAMES, BOWSER_HARD = 0.4, 2, (36, 37, 42), 0.5
+BOWSER_LAVA, BOWSER_STEP, BOWSER_FLAMES = 0.4, 2, (36, 37, 42)
+BOWSER_HARD, BOWSER_HAMMERS, BOWSER_NO_FLAMES = 5, 6, (6, 7)
 # Lava fireballs (game memory: 2-4 to 7-4; sim/env.py LAVA_FROM): a piece
 # of LAVA_PITS pits, each LAVA_PIT_TILES wide (the game's, castles' lava
 # under them) and LAVA_APART tiles after the one before, a lava fireball
@@ -497,14 +500,16 @@ def random_level(seed: int, pieces: int = 12, only: Optional[str] = None, start_
         elif kind == "bowser":
             if behind_pit and after < BETWEEN_PITS:  # (two pits never run together)
                 x += (BETWEEN_PITS - after) * TILE
-            hard, count = rng.random() < BOWSER_HARD, rng.randrange(len(FLAME_WAITS))
+            castle = rng.randint(1, 8)
+            hard, count = castle >= BOWSER_HARD, rng.randrange(len(FLAME_WAITS))
             frenzies.append({"kind": "flames", "from": float(max(START_X, x - rng.choice(BOWSER_FLAMES) * TILE)),
                              "until": float(x + BOWSER_BRIDGE * TILE), "turn": rng.randrange(2**31), "hard": hard,
                              "count": count})
             pit(x, BOWSER_BRIDGE)
             solids.append([x, FLOOR, BOWSER_BRIDGE * TILE, TILE, "ground"])
             enemies.append({"kind": "bowser", "x": float(x + BOWSER_IN * TILE), "y": float(FLOOR - BOWSER_FEET),
-                            "turn": rng.randrange(2**31), "clock": rng.randrange(256), "hard": hard, "count": count})
+                            "turn": rng.randrange(2**31), "clock": rng.randrange(256), "hard": hard, "count": count,
+                            "hammers": castle >= BOWSER_HAMMERS, "breathes": castle not in BOWSER_NO_FLAMES})
             lift_period = int(LIFT_ACROSS[1])
             solids.append([x + BOWSER_LIFT * TILE, FLOOR - BOWSER_LIFT_UP * TILE, BOWSER_LIFT_W, LIFT_H, None,
                            {"lift": "across", "phase": rng.randrange(lift_period)}])
