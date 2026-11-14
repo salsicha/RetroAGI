@@ -22,6 +22,8 @@ from .world import SimWorld
 # Frames a button combination is held, and the situations tried before giving up.
 HOLD = 4
 EXPANSIONS = 40000
+# Lifts this far from Mario (pixels, either way) are part of a situation.
+NEAR = 128
 # The simulator's actions, tried in this order: right and jump, right, jump, nothing, left and jump, left.
 ACTIONS = (2, 1, 5, 0, 4, 3)
 
@@ -50,12 +52,14 @@ def passable(scenario: dict, expansions: int = EXPANSIONS) -> dict:
             if step.over:
                 continue
             mario, motion = env.mario, env.motion
-            # (where the lifts are is part of the situation: the same place at
-            # another point of a lift's swing is another situation; so is a
-            # springboard's point of its squash, and whether it will throw
-            # strongly)
+            # (where the lifts within NEAR of him are is part of the situation:
+            # the same place at another point of a lift's swing is another
+            # situation; so is a springboard's point of its squash, and
+            # whether it will throw strongly. Lifts far off are not: a lift
+            # that goes round without end would make every later situation
+            # new)
             lifts = tuple((int(p["lift_x"]) // 4, int(p["lift_y"]) // 4, p.get("squash"), p.get("strong"))
-                          for p in env.platforms if p.get("lift"))
+                          for p in env.platforms if p.get("lift") and abs(p["lift_x"] - mario["x"]) < NEAR)
             key = (int(mario["x"]) // 3, int(mario["y"]) // 3, motion.x_speed // 4, motion.y_speed, motion.force,
                    bool(mario["on_ground"]), bool(mario["big"]), bool(motion.previous_jump), lifts)
             if key in seen:
@@ -66,7 +70,9 @@ def passable(scenario: dict, expansions: int = EXPANSIONS) -> dict:
     return {"passable": False, "x": furthest, "tried": expansions}
 
 
-def _one(job):
+def search_one(job):
+    """``passable`` on the skill scene of ``job``'s kind and seed (kind
+    "level": the random level of the seed): (kind, seed, its answer)."""
     kind, seed = job
     scenario = random_level(seed) if kind == "level" else skill_scene(seed, kind)
     return kind, seed, passable(scenario)
@@ -81,7 +87,7 @@ def main(argv=None) -> int:
     args = parser.parse_args(argv)
     jobs = [(kind, seed) for kind in args.kinds for seed in range(args.first_seed, args.first_seed + args.seeds)]
     with ProcessPoolExecutor(args.workers) as pool:
-        found = list(pool.map(_one, jobs, chunksize=4))
+        found = list(pool.map(search_one, jobs, chunksize=4))
     for kind in args.kinds:
         rows = [(seed, result) for k, seed, result in found if k == kind]
         stuck = [(seed, round(result["x"] / TILE, 1)) for seed, result in rows if not result["passable"]]

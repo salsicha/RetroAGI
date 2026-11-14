@@ -136,11 +136,11 @@ Each thing was measured in the game's memory, in levels not scored on:
 - Hammer Bros, Lakitu and his Spinies, Bullet Bills and their cannons,
   Bullet Bill and Cheep Cheep frenzies;
 - question blocks, bricks, mushrooms and big Mario;
-- lifts across, up and down and falling, springboards;
+- lifts across, up and down, falling, looping and on a rope, springboards;
 - castle fire bars and lava fireballs, Bowser on his bridge, his flames and his hammers;
 - pipes, staircases, pits, bridges, and the sky levels' ledges.
 
-Still missing: looping and balance lifts, water levels, and blocks invisible until hit.
+Still missing: water levels and blocks invisible until hit.
 [How general is it?](docs/generalization.md) has every measurement.
 
 ## Where it stands (2026-11-13)

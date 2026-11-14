@@ -127,7 +127,7 @@ benches from game memory and from vision.
   it is learned or set from Block SMB alone.
 - **Block SMB does not yet behave as all of the game does**: of what the
   levels not scored on hold (read from the game's memory, 2026-11-13) it
-  lacks looping and balance lifts, water levels and
+  lacks water levels and
   blocks invisible until hit.
   (It is not meant to have the game's graphics or its levels:
   [requirements.md](requirements.md).) The agent finishes about three

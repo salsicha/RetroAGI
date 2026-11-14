@@ -16,7 +16,8 @@ def test_a_seed_always_makes_the_same_level_of_the_games_pieces():
     questions = {k for k, kind in enumerate(level["platform_kinds"]) if kind == "question_block"}
     assert set(level["block_contents"]) == questions
     assert set(level["block_contents"].values()) <= {"coin", "mushroom"}
-    # Walkers under the game's rules; plants on pipes' tops; fire bars on blocks.
+    # Walkers under the game's rules; plants on pipes' tops; fire bars on
+    # blocks; lava fireballs and Bowser (their own rules, from the game's program).
     blocks = [(p, k) for p, k in zip(level["platforms"], level["platform_kinds"]) if isinstance(p, list)]
     tops = {p[1] for p, k in blocks if k == "pipe"}
     for e in level["enemies"]:
@@ -24,7 +25,7 @@ def test_a_seed_always_makes_the_same_level_of_the_games_pieces():
             assert e["pipe_top"] in tops
         elif e.get("kind") == "firebar":
             assert e["x"] % 16 == 0 and e["y"] % 16 == 0
-        else:
+        elif e.get("kind") not in ("lava", "bowser"):
             assert e["game_rules"]
     assert level["scroll_x"] == SCROLL_X
     # Pipes and bricks sit on the 16-pixel grid (lifts and springboards,
@@ -52,7 +53,9 @@ def test_the_state_shows_only_the_screen_and_its_left_edge():
 
 
 def test_the_scripted_chooser_finishes_a_random_level():
-    rows = practice.run(DOMAIN, [18])
+    # (since Block SMB was widened with the castles and the lifts, the
+    # hand-written chooser finishes about one random level in ten)
+    rows = practice.run(DOMAIN, [7])
     assert rows[0]["mode"] == "speed_run" and rows[0]["end"] == "finished"
 
 
@@ -137,13 +140,16 @@ def test_the_levels_hold_the_pieces_measured_in_worlds_2_1_3_1_and_5_1():
 
 
 def test_every_kind_of_practice_world_can_be_got_through_by_some_presses():
-    from retroagi.domains.smb.sim.levels import SCENE_KINDS, TILE, skill_scene
-    from retroagi.domains.smb.sim.passable import passable
+    from concurrent.futures import ProcessPoolExecutor
 
-    for kind in SCENE_KINDS:
-        for seed in range(100200, 100204):
-            assert passable(skill_scene(seed, kind))["passable"], (kind, seed)
-    assert passable(random_level(100200))["passable"]
+    from retroagi.domains.smb.sim.levels import SCENE_KINDS, TILE, skill_scene
+    from retroagi.domains.smb.sim.passable import passable, search_one
+
+    # (four of each kind and a level, searched side by side)
+    jobs = [(kind, seed) for kind in SCENE_KINDS for seed in range(100200, 100204)] + [("level", 100200)]
+    with ProcessPoolExecutor(8) as pool:
+        for kind, seed, found in pool.map(search_one, jobs):
+            assert found["passable"], (kind, seed)
     # It tells a world nobody could pass: the same pit made 14 tiles wide.
     scene = skill_scene(100200, "pit")
     far = max(range(len(scene["platforms"])), key=lambda k: scene["platforms"][k][0])

@@ -61,7 +61,7 @@ from typing import Optional, Sequence
 
 from ..physics import SPRING_REST
 from .env import (BOWSER_FEET, FIREBAR_BALLS, FIREBAR_LONG, FIREBAR_STEPS, FLAME_WAITS, LAVA_WAIT, LAVA_WAITS,
-                  LIFT_ACROSS, LIFT_H, LIFT_W, SPRING_W)
+                  LIFT_ACROSS, LIFT_H, LIFT_LOOP, LIFT_SHORT, LIFT_W, SPRING_W)
 from .piranha import EXPOSED_FRAMES, HIDDEN_FRAMES, RISE_FRAMES
 
 PLANT_CYCLE = 2 * RISE_FRAMES + EXPOSED_FRAMES + HIDDEN_FRAMES
@@ -84,7 +84,7 @@ END_FLAT = 10
 # The pieces and how often each comes.
 PIECES = {"pipe": 3, "pit": 2, "goombas": 3, "bricks": 2, "stairs": 2, "questions": 1, "cannon": 1, "step": 1,
           "bridge": 1, "hammer_bros": 1, "lakitu": 1, "ledges": 1, "bill_frenzy": 1, "spring": 1,
-          "firebar": 1, "lava": 1, "bowser": 1}
+          "firebar": 1, "lava": 1, "bowser": 1, "loop_lifts": 1, "balance_lifts": 1}
 # Bowser (game memory: the castles 1-4 to 6-4 end alike; sim/env.py
 # BOWSER_*): a bridge BOWSER_BRIDGE tiles long, level with the floor, over
 # lava; Bowser BOWSER_IN tiles in on it; a lift BOWSER_LIFT_W wide swinging
@@ -152,6 +152,25 @@ LEDGE_KOOPA = 0.3
 # of the gap (the gap made as wide as its swing), one going up and down in
 # its middle, or one that falls when stood on (sim/env.py LIFT_*).
 LIFT_IN_GAP = 0.4
+# Looping lifts (game memory: 1-2's and 4-2's large ones, 2-4's and 5-4's
+# short ones; sim/env.py LIFT_LOOP): a pit LOOP_PIT tiles wide, bottomless,
+# with a column of lifts all going up or all down LOOP_IN pixels in from
+# its near edge, two of them LOOP_APART apart LOOP_TWO of the time, else
+# one; or (LOOP_SHORT_SHARE of the time, the castles' way) a pit
+# LOOP_SHORT_PIT wide with a short lift going up LOOP_SHORT_IN[0] in and
+# one going down LOOP_SHORT_IN[1] in. Where each is in its round is drawn.
+LOOP_PIT, LOOP_IN, LOOP_APART, LOOP_TWO = (6, 7), (12, 24, 28), (96, 112, 128), 2 / 3
+LOOP_SHORT_PIT, LOOP_SHORT_IN, LOOP_SHORT_SHARE = 8, (28, 76), 1 / 3
+# Balance lifts (game memory: 3-3's, 4-3's and 6-3's, nine pairs; sim/env.py
+# BALANCE_*): a bottomless pit; over it the higher lift, its top one of
+# BALANCE_HIGH from the top of the screen, and the lower one BALANCE_APART
+# right of it (from left edge to left edge), its top one of BALANCE_LOW;
+# the pit goes on BALANCE_OUT past it. Mario comes to the higher lift as he
+# does in the game, from about its height: from a ledge two tiles wide, its
+# top BALANCE_BELOW under the lift's, BALANCE_IN before it (with a way up
+# before it when it is taller than a jump from the floor).
+BALANCE_HIGH, BALANCE_LOW, BALANCE_APART = (78, 94), (126, 142), (48, 64, 80, 96, 112, 128)
+BALANCE_IN, BALANCE_OUT, BALANCE_BELOW = (16, 32, 48), (16, 32, 48), (48, 64)
 LIFT_GAP = 3
 LIFT_KINDS = ("across", "updown", "falls")
 # Lakitu (8-2's: game memory): he comes on as the screen reaches where he
@@ -496,6 +515,40 @@ def random_level(seed: int, pieces: int = 12, only: Optional[str] = None, start_
                 pit(x, width)
                 enemies.append(lava(x + (width // 2) * TILE))
                 x += width * TILE
+            ends_in_pit = True
+        elif kind == "loop_lifts":
+            if behind_pit and after < BETWEEN_PITS:  # (two pits never run together)
+                x += (BETWEEN_PITS - after) * TILE
+            if rng.random() < LOOP_SHORT_SHARE:
+                width = LOOP_SHORT_PIT
+                for way, inside in zip(("up", "down"), LOOP_SHORT_IN):
+                    solids.append([x + inside, rng.randrange(LIFT_LOOP), LIFT_SHORT, LIFT_H, None, {"lift": way}])
+            else:
+                width, way = rng.choice(LOOP_PIT), rng.choice(("up", "down"))
+                inside, top = rng.choice(LOOP_IN), rng.randrange(LIFT_LOOP)
+                tops = (top, (top + rng.choice(LOOP_APART)) % LIFT_LOOP) if rng.random() < LOOP_TWO else (top,)
+                for top in tops:
+                    solids.append([x + inside, top, LIFT_W, LIFT_H, None, {"lift": way}])
+            pit(x, width)
+            x += width * TILE
+            ends_in_pit = True
+        elif kind == "balance_lifts":
+            if behind_pit and after < BETWEEN_PITS:  # (two pits never run together)
+                x += (BETWEEN_PITS - after) * TILE
+            top = rng.choice(BALANCE_HIGH)
+            tall = (FLOOR - top - rng.choice(BALANCE_BELOW)) // TILE
+            if tall > REACH:
+                x = way_up(x, tall)
+            for k in range(2):
+                column(x + k * TILE, tall)
+            x += 2 * TILE
+            high = x + rng.choice(BALANCE_IN)
+            low = high + rng.choice(BALANCE_APART)
+            width = -(-(low + LIFT_W + rng.choice(BALANCE_OUT) - x) // TILE)
+            solids.append([high, top, LIFT_W, LIFT_H, None, {"lift": "balance", "partner": 1}])
+            solids.append([low, rng.choice(BALANCE_LOW), LIFT_W, LIFT_H, None, {"lift": "balance", "partner": -1}])
+            pit(x, width)
+            x += width * TILE
             ends_in_pit = True
         elif kind == "bowser":
             if behind_pit and after < BETWEEN_PITS:  # (two pits never run together)

@@ -208,10 +208,26 @@ CHEEP_SPEEDS = (5 / 16, 6 / 16, 12 / 16, 14 / 16)
 # back each LIFT_UPDOWN[1] (each a sine, as the flying Paratroopas'), and
 # one that "falls" drops LIFT_FALL pixels a frame while Mario stands on it.
 # A lift carries Mario standing on it, up and down as well as across.
+# Looping lifts (game memory: 1-2's, 2-4's): one going "up" or "down" moves
+# LIFT_LOOP_SPEED pixels a frame without end, and once its top leaves the
+# game's LIFT_LOOP rows (the screen and 16 below it) it comes round from the
+# other end; it carries Mario, but not round. The castles' short ones are
+# LIFT_SHORT wide (the game's box; the large ones' is LIFT_W).
 LIFT_W, LIFT_H = 48, 8
 LIFT_ACROSS = (53.0, 240.0)
 LIFT_UPDOWN = (137.0, 340.0)
 LIFT_FALL = 2.25
+LIFT_LOOP, LIFT_LOOP_SPEED, LIFT_SHORT = 256, 15 / 16, 24
+# Balance lifts (game memory: 3-3's, Mario riding one; and their routine in
+# the game's program): two lifts on one rope ("balance", each naming the
+# other by "partner", its place in the list from its own). The one Mario
+# stands on sinks and the other rises as much, their speed growing
+# BALANCE_PULL a frame to at most BALANCE_FASTEST; with no one on them they
+# slow by BALANCE_PULL to a stop. A lift that rises to BALANCE_TOP from the
+# top of the screen stops (put back 2 below it), unless Mario is on the
+# other: then the rope breaks and both fall, BALANCE_DROP faster each frame
+# to at most BALANCE_FASTEST.
+BALANCE_PULL, BALANCE_FASTEST, BALANCE_TOP, BALANCE_DROP = 5 / 256, 3.0, 45, 32 / 256
 # Springboards: SPRING_W wide (game memory: 2-1's), a solid down to the
 # floor (the game's stands on a half block that stops Mario walking into it
 # and that it is pressed down to); how one throws Mario is his motion's
@@ -894,10 +910,14 @@ class MarioScenarioEnv:
             dy = 0.0
 
         # ── 5. Update moving platforms ────────────────────────────────────────
-        for plat in self.platforms:
+        for index, plat in enumerate(self.platforms):
             if not plat["moving"]:
                 continue
             old_px = plat["rect"].x
+            if plat.get("lift") == "balance":  # (the pair moved together, by the first of it)
+                if plat["partner"] > 0:
+                    self._move_balance(plat, self.platforms[index + plat["partner"]], support_before)
+                continue
             # Track a float position so fractional speeds accumulate instead of
             # truncating to zero motion every frame.
             if plat.get("lift"):
@@ -1721,6 +1741,9 @@ class MarioScenarioEnv:
         elif lift["lift"] == "updown":
             reach, period = LIFT_UPDOWN
             y = home_y + reach / 2 * (1 - math.cos(2 * math.pi * lift["tick"] / period))
+        elif lift["lift"] in ("up", "down"):
+            way = 1 if lift["lift"] == "down" else -1
+            y = (home_y + way * LIFT_LOOP_SPEED * lift["tick"]) % LIFT_LOOP
         elif lift["lift"] == "spring":
             squash = lift["squash"]
             if squash is not None:
@@ -1733,6 +1756,8 @@ class MarioScenarioEnv:
                 lift["strong"] = True
             lift["squash"] = squash
             y = home_y + (SPRING_SQUASH[squash] if squash is not None else 0)
+        elif lift["lift"] == "balance":  # (moved with its partner: _move_balance)
+            pass
         elif stood_on and y < self.height + 32:
             y += LIFT_FALL
         rect = lift["rect"]
@@ -1740,6 +1765,42 @@ class MarioScenarioEnv:
         rect.x, rect.y = int(round(x)), int(round(y))
         lift.update(lift_x=x, lift_y=y, vx=x - lift["lift_x"], vy=y - lift["lift_y"],
                     delta_x=rect.x - old[0], delta_y=rect.y - old[1])
+        if abs(lift["vy"]) > LIFT_LOOP / 2:  # (come round: its speed is its own, and it carries no one round)
+            lift.update(vy=LIFT_LOOP_SPEED if lift["lift"] == "down" else -LIFT_LOOP_SPEED, delta_y=0)
+
+    def _move_balance(self, first: dict, other: dict, support: dict | None) -> None:
+        """A pair of balance lifts' move this frame (BALANCE_* notes), as the
+        game's routine runs it on the first of them."""
+        lifts = (first, other)
+        old = [(p["rect"].y, p["lift_y"]) for p in lifts]
+        if first["falling"]:
+            for p in lifts:
+                if p["lift_y"] < self.height + 64:
+                    p["fall"] = min(p["fall"] + BALANCE_DROP, BALANCE_FASTEST)
+                    p["lift_y"] += p["fall"]
+        else:
+            on = 0 if support is first else 1 if support is other else None
+            top = next((k for k, p in enumerate(lifts) if math.floor(p["lift_y"]) <= BALANCE_TOP), None)
+            if top is not None:
+                if on == 1 - top:  # (pulled over the top by Mario on the other: the rope breaks)
+                    first["falling"] = True
+                else:
+                    lifts[top]["lift_y"] = float(BALANCE_TOP + 2)
+                first["balance"] = 0.0
+            else:
+                speed = first["balance"]
+                if on == 0:
+                    speed = min(speed + BALANCE_PULL, BALANCE_FASTEST)
+                elif on == 1:
+                    speed = max(speed - BALANCE_PULL, -BALANCE_FASTEST)
+                else:
+                    speed = max(speed - BALANCE_PULL, 0.0) if speed > 0 else min(speed + BALANCE_PULL, 0.0)
+                first["balance"] = speed
+                first["lift_y"] += speed
+                other["lift_y"] -= speed
+        for p, (rect_y, y) in zip(lifts, old):
+            p["rect"].y = int(round(p["lift_y"]))
+            p.update(vx=0.0, vy=p["lift_y"] - y, delta_x=0, delta_y=p["rect"].y - rect_y)
 
     @staticmethod
     def _firebar(bar: dict) -> list:
@@ -2363,6 +2424,8 @@ class MarioScenarioEnv:
             # (a lift: "across", "updown" or "falls", from where it is placed, at a point of its swing)
             plat.update(moving=True, lift=p["lift"], home=(float(x), float(y)), lift_x=float(x), lift_y=float(y),
                         tick=int(p.get("phase", 0)), vx=0.0, vy=0.0, delta_y=0)
+            if p["lift"] == "balance":  # (BALANCE_*: the pair's speed is kept by the first of it)
+                plat.update(partner=int(p["partner"]), balance=0.0, falling=False, fall=0.0)
             if p["lift"] == "spring":  # (pressed down this frame of SPRING_SQUASH; None: at rest)
                 plat.update(squash=None, strong=False)
         return plat
