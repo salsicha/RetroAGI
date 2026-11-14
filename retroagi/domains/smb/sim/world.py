@@ -18,7 +18,7 @@ from retroagi.domains.smb.controller import State
 from retroagi.domains.smb.planner import Enemy, Solid, screen_edge
 from retroagi.framework.interfaces import Step
 
-from .env import FIREBAR_STEPS, FLAME_BOX, SPINY_SPEED, MarioScenarioEnv
+from .env import FIREBAR_STEPS, FLAME_BOX, SPINY_SPEED, MarioScenarioEnv, unseen
 from .env_state import restore_env_state, snapshot_env_state
 
 # The places of a thing kept as its track (frames).
@@ -98,7 +98,7 @@ class SimWorld:
 
 
 _KINDS = {"ground": "ground", "pipe": "pipe", "brick": "block", "question_block": "block", "moving_platform": "moving",
-          "cannon": "ground", "spring": "spring"}  # (the game's labels call a cannon ground)
+          "cannon": "ground", "spring": "spring", "hidden": "block"}  # (the game's labels call a cannon ground)
 
 
 def enemy_kind(enemy: dict) -> str:
@@ -156,7 +156,7 @@ class SimSource:
         solids = []
         for k, (p, kind) in enumerate(zip(env.platforms, env.platform_kinds)):
             r = p["rect"]
-            if r.width == 0 or r.right <= left or r.left >= right:
+            if r.width == 0 or r.right <= left or r.left >= right or unseen(p):
                 continue
             seen = QUESTION if p.get("contents") and not p.get("used") else _KINDS.get(kind, "block")
             solids.append(Solid(max(r.left, left), r.top, min(r.right, right), r.bottom, seen, ("platforms", k),

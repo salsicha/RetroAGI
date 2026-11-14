@@ -84,7 +84,7 @@ END_FLAT = 10
 # The pieces and how often each comes.
 PIECES = {"pipe": 3, "pit": 2, "goombas": 3, "bricks": 2, "stairs": 2, "questions": 1, "cannon": 1, "step": 1,
           "bridge": 1, "hammer_bros": 1, "lakitu": 1, "ledges": 1, "bill_frenzy": 1, "spring": 1,
-          "firebar": 1, "lava": 1, "bowser": 1, "loop_lifts": 1, "balance_lifts": 1}
+          "firebar": 1, "lava": 1, "bowser": 1, "loop_lifts": 1, "balance_lifts": 1, "hidden": 1}
 # Bowser (game memory: the castles 1-4 to 6-4 end alike; sim/env.py
 # BOWSER_*): a bridge BOWSER_BRIDGE tiles long, level with the floor, over
 # lava; Bowser BOWSER_IN tiles in on it; a lift BOWSER_LIFT_W wide swinging
@@ -171,6 +171,17 @@ LOOP_SHORT_PIT, LOOP_SHORT_IN, LOOP_SHORT_SHARE = 8, (28, 76), 1 / 3
 # before it when it is taller than a jump from the floor).
 BALANCE_HIGH, BALANCE_LOW, BALANCE_APART = (78, 94), (126, 142), (48, 64, 80, 96, 112, 128)
 BALANCE_IN, BALANCE_OUT, BALANCE_BELOW = (16, 32, 48), (16, 32, 48), (48, 64)
+# Blocks invisible until hit (game memory: the levels not scored on hold
+# them in four ways; sim/env.py HIDDEN notes), on open floor, each way as
+# often as the game has it (HIDDEN_WAYS): one alone, HIDDEN_LOW tiles up
+# (2-1, 5-1, 5-2, 6-2 twice; a 1-up one time in HIDDEN_ONE_UP, else a coin);
+# a 1-up HIDDEN_HIGH tiles up over a brick or a hidden coin HIDDEN_LOW up
+# (2-1, 3-1); four side by side HIDDEN_CLUSTER tiles up (4-2); or six,
+# HIDDEN_ZIGZAG: (tiles in, tiles up) from where they start (1-4's last room).
+HIDDEN_WAYS = {"alone": 5, "over": 2, "cluster": 1, "zigzag": 1}
+HIDDEN_LOW, HIDDEN_HIGH, HIDDEN_ONE_UP = 4, 7, 5
+HIDDEN_CLUSTER = (5, 6, 5, 4)
+HIDDEN_ZIGZAG = ((0, 4), (1, 8), (3, 4), (4, 8), (6, 4), (7, 8))
 LIFT_GAP = 3
 LIFT_KINDS = ("across", "updown", "falls")
 # Lakitu (8-2's: game memory): he comes on as the screen reaches where he
@@ -311,6 +322,11 @@ def random_level(seed: int, pieces: int = 12, only: Optional[str] = None, start_
         if question:
             contents[len(solids)] = "mushroom" if rng.random() < MUSHROOM_SHARE else "coin"
         solids.append([x0, top, TILE, TILE, "question_block" if question else "brick"])
+
+    def hidden(x0, tiles, content):
+        """A block invisible until hit, ``tiles`` up, holding ``content``."""
+        contents[len(solids)] = content
+        solids.append([x0, FLOOR - tiles * TILE, TILE, TILE, "hidden"])
 
     def row(x0, top, tiles):
         for k in range(tiles):
@@ -550,6 +566,27 @@ def random_level(seed: int, pieces: int = 12, only: Optional[str] = None, start_
             pit(x, width)
             x += width * TILE
             ends_in_pit = True
+        elif kind == "hidden":
+            way = rng.choices(list(HIDDEN_WAYS), weights=list(HIDDEN_WAYS.values()))[0]
+            x += rng.randint(1, 3) * TILE
+            if way == "alone":
+                hidden(x, HIDDEN_LOW, "1up" if rng.randrange(HIDDEN_ONE_UP) == 0 else "coin")
+                spots = [(0, HIDDEN_LOW)]
+            elif way == "over":
+                if rng.random() < 0.5:
+                    hidden(x, HIDDEN_LOW, "coin")
+                else:
+                    block(x, FLOOR - HIDDEN_LOW * TILE, False)
+                hidden(x, HIDDEN_HIGH, "1up")
+                spots = [(0, HIDDEN_HIGH)]
+            elif way == "cluster":
+                spots = list(enumerate(HIDDEN_CLUSTER))
+            else:
+                spots = list(HIDDEN_ZIGZAG)
+            if way in ("cluster", "zigzag"):
+                for inside, up in spots:
+                    hidden(x + inside * TILE, up, "coin")
+            x += (max(inside for inside, _ in spots) + 1 + rng.randint(2, 4)) * TILE
         elif kind == "bowser":
             if behind_pit and after < BETWEEN_PITS:  # (two pits never run together)
                 x += (BETWEEN_PITS - after) * TILE

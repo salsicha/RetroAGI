@@ -11,11 +11,13 @@ def test_a_seed_always_makes_the_same_level_of_the_games_pieces():
     level = random_level(7)
     assert level == random_level(7) and level != random_level(8)
     kinds = set(level["platform_kinds"])
-    assert kinds <= {"ground", "pipe", "brick", "question_block", "cannon", "spring", None}  # (None: a lift)
-    # Every question block holds a coin or a mushroom.
-    questions = {k for k, kind in enumerate(level["platform_kinds"]) if kind == "question_block"}
-    assert set(level["block_contents"]) == questions
-    assert set(level["block_contents"].values()) <= {"coin", "mushroom"}
+    assert kinds <= {"ground", "pipe", "brick", "question_block", "cannon", "spring", "hidden", None}  # (None: a lift)
+    # Every question block holds a coin or a mushroom, every block invisible
+    # until hit a coin or a 1-up.
+    contents = level["block_contents"]
+    assert set(contents) == {k for k, kind in enumerate(level["platform_kinds"]) if kind in ("question_block", "hidden")}
+    assert all(contents[k] in (("coin", "1up") if level["platform_kinds"][k] == "hidden" else ("coin", "mushroom"))
+               for k in contents)
     # Walkers under the game's rules; plants on pipes' tops; fire bars on
     # blocks; lava fireballs and Bowser (their own rules, from the game's program).
     blocks = [(p, k) for p, k in zip(level["platforms"], level["platform_kinds"]) if isinstance(p, list)]
@@ -54,9 +56,10 @@ def test_the_state_shows_only_the_screen_and_its_left_edge():
 
 def test_the_scripted_chooser_finishes_a_random_level():
     # (since Block SMB was widened with the castles and the lifts, the
-    # hand-written chooser finishes about one random level in ten)
-    rows = practice.run(DOMAIN, [7])
-    assert rows[0]["mode"] == "speed_run" and rows[0]["end"] == "finished"
+    # hand-written chooser finishes one to two random levels in ten: some
+    # of the first twelve)
+    rows = practice.run(DOMAIN, list(range(12)))
+    assert any(row["mode"] == "speed_run" and row["end"] == "finished" for row in rows)
 
 
 def test_the_levels_hold_5_1s_plants_paratroopas_and_cannons():

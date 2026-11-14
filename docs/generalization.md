@@ -201,7 +201,7 @@ and added as pieces drawn at random:
 | Koopas, Goombas and Paratroopas in twos and threes | Files of one to three |
 | Pieces touching, or one or two tiles apart | 0 to 8 tiles of floor between pieces in whole levels (it was 3 to 8) |
 
-Still missing: lifts, blocks invisible until hit.
+Lifts and blocks invisible until hit came later (below).
 
 **Hammer Bros** (2026-11-12, from World 3-1's memory: 116 throws, three
 jumps, the walk). Block SMB's Hammer Bro has the game's 8 by 24 box (4 in
@@ -435,9 +435,10 @@ each measured in a level not scored on:
 | Bowser's hammers | 6-4 (the game's nine loose-item places read every frame) and his routine in the game's program | In worlds 6 to 8, while he is in the air, once in 4 frames he tries to throw: one of nine places is drawn (two of them half as often as the others), and if no hammer of his is in it and its place is on screen, a hammer appears 2 right of his place and 10 up. It is held there 15 frames, moving with him, then thrown the way he faces, 1 pixel a frame sideways and 2 up, falling as a Hammer Bro's does. Its hurt box is the game's for a hammer, 8 by 8 from its place. In 6-4 he threw 6 to 9 a jump (Mario was mostly behind him, so he jumped less often); the same draw with as many jumps gives 7.5, and in front of Mario about 6. The castle a Bowser piece stands for is now one of the game's eight, each as often: from world 5 the hard castles' flames, from world 6 hammers, in worlds 6 and 7 no flames of his own. Every hammer castle checked can be passed; the hand-written chooser passes 17 of 30 (31 of 50 castles without hammers) |
 | Looping lifts | 1-2 and 2-4 (each lift's place every frame) | Lifts going up or down 15/16 of a pixel a frame without end (still one frame in sixteen), coming round from the other end of the game's 256 rows every 273 frames; they carry Mario, but not round. The large ones are 48 wide (1-2, 4-2), the castles' short ones 24 (2-4, 5-4): the game's boxes. A piece: a bottomless pit 6 or 7 tiles wide with a column of one or two lifts (96 to 128 pixels apart) all going up or all down, 12 to 28 pixels in from its near edge; or, a third of the time, a castle's 8-tile pit with a short lift going up and one going down. Every scene checked can be passed; the hand-written chooser passes 28 of 40 |
 | Balance lifts | 3-3 (Mario riding one), their routine in the game's program, and the nine pairs of 3-3, 4-3 and 6-3 | Two lifts on one rope: the one Mario stands on sinks and the other rises as much, 5/256 of a pixel a frame faster each frame to at most 3 (the game's: 82 pixels in the first 91 frames); left alone they slow by as much to a stop. A lift that rises to 45 from the screen's top stops there, unless Mario is on the other: then the rope breaks and both fall, an eighth of a pixel a frame faster each frame to 3 (92 frames after Mario stepped on here, about 91 in the game). A piece: a bottomless pit with the higher lift (its top 78 or 94 from the screen's top) and the lower one (126 or 142) 48 to 128 to its right; Mario comes to the higher lift as in the game, from about its height: a ledge 48 or 64 below it, 16 to 48 before it (with a way up when it is taller than a jump). Every scene checked can be passed; the hand-written chooser passes 39 of 40. The game's 1000 points for breaking the rope are not counted |
+| Blocks invisible until hit | 2-1, 3-1, 4-2, 5-1, 5-2, 6-2 and 1-4's last room (the block maps), and the game's program | Until Mario's head hits one from below it is not seen and nothing else meets it: he falls and walks through it, enemies and mushrooms too (the game's code leaves them out of every other test). Hit, it shows as a used block, solid all round, and gives its coin or lets out a 1-up (worth nothing here: Block SMB has one life). A piece, each way as often as the game has it: one alone 4 tiles up (a 1-up one time in five), a 1-up 7 tiles up over a brick or a hidden coin, four side by side 4 to 6 up (4-2), or 1-4's six in a zigzag. The state does not show it until it is hit, as vision cannot. Every scene checked can be passed; the hand-written chooser passes 40 of 40 |
 
 With the castles and the lifts, a random level is much harder than it was:
-the hand-written chooser finishes 3 of 30 as speed runs (seeds 0 to 29).
+the hand-written chooser finishes 7 of 30 as speed runs (seeds 0 to 29).
 The search that tells whether a world can be passed counts a lift as part
 of a situation only within 128 pixels of Mario: a lift going round without
 end would otherwise make every later situation new, and long levels ran
@@ -469,7 +470,7 @@ the same as before.
 
 Still missing: in the castles, the game's own test of a fire bar's touch (Block SMB
 takes the fireballs' drawn 8 by 8); water levels (swimming, Bloopers,
-swimming Cheep Cheeps); blocks invisible until hit. In the real game, the
+swimming Cheep Cheeps). In the real game, the
 state from memory and from vision show lifts without their speed, and
 show no springboard, no fire bar going round, no lava fireball and no
 Bowser. None of the networks has learned from the widened Block SMB yet:

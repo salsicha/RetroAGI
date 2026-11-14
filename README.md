@@ -138,9 +138,9 @@ Each thing was measured in the game's memory, in levels not scored on:
 - question blocks, bricks, mushrooms and big Mario;
 - lifts across, up and down, falling, looping and on a rope, springboards;
 - castle fire bars and lava fireballs, Bowser on his bridge, his flames and his hammers;
-- pipes, staircases, pits, bridges, and the sky levels' ledges.
+- pipes, staircases, pits, bridges, the sky levels' ledges, and blocks invisible until hit.
 
-Still missing: water levels and blocks invisible until hit.
+Still missing: water levels.
 [How general is it?](docs/generalization.md) has every measurement.
 
 ## Where it stands (2026-11-13)

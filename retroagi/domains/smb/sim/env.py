@@ -71,7 +71,7 @@ ENEMY_GRAVITY, ENEMY_FALL = 0.2, 3.4
 # shapes with each shape's pixel type in place of its colour, and
 # render_instances() with the number of the object that drew it, so both are
 # exact.
-PLATFORM_KINDS = ("ground", "brick", "question_block", "pipe", "cannon", "spring")
+PLATFORM_KINDS = ("ground", "brick", "question_block", "pipe", "cannon", "spring", "hidden")
 TILE = 16
 SKY = (107, 140, 255)
 GROUND, GROUND_EDGE = (139, 69, 19), (84, 38, 8)
@@ -100,6 +100,12 @@ COIN_POINTS, MUSHROOM_POINTS = 10, 50
 MUSHROOM_SPEED = 1.0
 SMALL_W, SMALL_H, BIG_W, BIG_H = 10, 12, 12, 24
 HURT_FRAMES = 120
+# Blocks invisible until hit (platform kind "hidden"; game memory: 2-1,
+# 3-1, 4-2, 5-1, 5-2, 6-2 and 1-4's, and the game's program): until Mario's
+# head hits one from below it is not seen, and nothing else meets it: he
+# falls and walks through it, enemies and mushrooms too. Hit, it shows as a
+# used block, solid all round, and gives its coin or lets out a 1-up
+# ("1up"), which moves as a mushroom does and is worth no points here.
 # Koopa Troopas: a 12 by 12 body 3 pixels above its feet (1-1's, game
 # memory); a stomp leaves a still shell, touched it is kicked away at
 # SHELL_SPEED pixels a frame (Mario unhurt by it for KICK_GRACE frames), a
@@ -308,6 +314,11 @@ STRATEGY_REWARDS = {
     "speed_run": {"frame_penalty": 5.0, "coin": 0.0, "enemy_stomp": 0.0},
     "max_points": {"coin": 2.5, "enemy_stomp": 5.0},
 }
+
+
+def unseen(plat: dict) -> bool:
+    """Whether a platform is a block invisible until hit, not hit yet."""
+    return bool(plat.get("hidden")) and not plat.get("used")
 
 
 def question_cell(world_x):
@@ -613,6 +624,8 @@ class MarioScenarioEnv:
         for p in scenario.get("platforms", []):
             self.platforms.append(self._parse_platform(p))
         self.platform_kinds = self._platform_kinds(scenario.get("platform_kinds"))
+        for plat, kind in zip(self.platforms, self.platform_kinds):
+            plat["hidden"] = kind == "hidden"  # (unseen until hit from below: unseen())
         for plat in self.platforms:
             if plat.get("lift"):  # (at its point of the swing from the start: no move counted)
                 plat["tick"] -= 1
@@ -644,6 +657,8 @@ class MarioScenarioEnv:
             int(self.mario["x"]), int(self.mario["y"]), self.mario["w"], self.mario["h"]
         )
         for platform in self.platforms:
+            if unseen(platform):
+                continue
             rect = platform["rect"]
             horizontally_over = mario_rect.right > rect.left and mario_rect.left < rect.right
             drop = rect.top - mario_rect.bottom
@@ -941,6 +956,8 @@ class MarioScenarioEnv:
             r = plat["rect"]
             if plat is support_before and grounded_before:
                 continue  # (what he stands on, risen into his feet: carried up below, not a wall)
+            if unseen(plat):
+                continue  # (walked through)
             if mario_rect.colliderect(r):
                 if self.mario["vx"] > 0:
                     mario_rect.right = r.left
@@ -985,6 +1002,8 @@ class MarioScenarioEnv:
                 and horizontal_overlap
                 and previous_y >= r.bottom > self.mario["y"]
             )
+            if unseen(plat) and not hit_ceiling:
+                continue  # (fallen through; met only by his head from below)
             if mario_rect.colliderect(r) or landed_on_top or hit_ceiling:
                 if self.mario["vy"] >= 0:  # falling / level
                     mario_rect.bottom = r.top
@@ -1079,7 +1098,7 @@ class MarioScenarioEnv:
             reward_terms["fall_death"] += self.reward_config.fall_death
 
         # ── 14. Update enemies ────────────────────────────────────────────────
-        rects = [p["rect"] for p in self.platforms]
+        rects = [p["rect"] for p in self.platforms if not unseen(p)]
         for enemy in self.enemies:
             if enemy["dead"]:
                 continue
@@ -1136,6 +1155,8 @@ class MarioScenarioEnv:
                 self.items.remove(item)
             elif mario_rect.colliderect(pygame.Rect(item["x"], item["y"], item["w"], item["h"])):
                 self.items.remove(item)
+                if item["kind"] == "1up":  # (a life in the game; Block SMB has one)
+                    continue
                 self.score += MUSHROOM_POINTS
                 reward_terms["power_up"] += self.reward_config.power_up
                 if not self.mario["big"]:
@@ -1427,7 +1448,7 @@ class MarioScenarioEnv:
         for plat, kind in zip(self.platforms, self.platform_kinds):
             r = plat["rect"]
             screen_rect = pygame.Rect(r.x - cam, r.y, r.w, r.h)
-            if screen_rect.right <= 0 or screen_rect.left >= self.width:
+            if screen_rect.right <= 0 or screen_rect.left >= self.width or unseen(plat):
                 continue
             if kind == "moving_platform":
                 yield "moving_platform", None, partial(self._draw_lift, rect=screen_rect)
@@ -1437,7 +1458,7 @@ class MarioScenarioEnv:
                 yield None, None, partial(self._draw_pipe, rect=screen_rect)
             elif kind == "cannon":
                 yield None, None, partial(self._draw_ground, rect=screen_rect)
-            elif kind == "question_block":
+            elif kind in ("question_block", "hidden"):
                 yield None, None, partial(self._draw_question_row, rect=screen_rect)
             elif kind in ("brick", "brick_row"):
                 yield (
@@ -2042,7 +2063,10 @@ class MarioScenarioEnv:
 
     def _bump(self, plat: dict, reward_terms: dict) -> None:
         """Mario's head hit ``plat`` from below: a question block gives its
-        coin or lets out its mushroom (once); big Mario breaks a brick."""
+        coin or lets out its mushroom (once), a block invisible until hit
+        shows; big Mario breaks a brick."""
+        if plat.get("hidden"):
+            plat.setdefault("used", not plat.get("contents"))
         if plat.get("contents") and not plat.get("used"):
             plat["used"] = True
             if plat["contents"] == "coin":
