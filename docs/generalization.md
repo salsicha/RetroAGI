@@ -336,6 +336,26 @@ within what one training to the next gives. The three sets are still
 written by hand; learning the settings themselves is the next step for
 the controller.
 
+**From nothing in the widened Block SMB** (`outcome_widened_20261113`,
+2026-11-14): the same command, care variants included, after Block SMB
+gained everything the levels not scored on hold except water (red Koopas,
+Lakitu, flying Paratroopas, frenzies, lifts of every kind, springboards,
+fire bars, lava, Bowser with his flames and hammers, blocks invisible until
+hit). About 18.7 hours: the widened levels are longer, so round 1's
+sampling alone took 5.7 hours (9.1 million choices tried). Examined on the
+same 100 random levels and 4,200 skill scenes, none trained on:
+
+| Round | Speed runs finished | Points runs finished | Skill scenes passed | Hammer Bros scenes |
+|---|---|---|---|---|
+| 1 | 60 of 100 | 54 of 100 | 4,076 of 4,200 | 166 of 200 |
+| 2 | 66 of 100 | 67 of 100 | 4,092 of 4,200 | 166 of 200 |
+| 3 | 66 of 100 | 68 of 100 | 4,106 of 4,200 | 171 of 200 |
+
+The hand-written chooser finishes 7 of 30 speed runs on such levels. The
+scenes still failed most are Hammer Bros (171 of 200), two obstacles
+together (186), ledges (187), looping lifts (187) and bridges (192); almost
+every level not finished ends in a death. Not yet scored on the real game.
+
 **A larger network learns more of the same data.** Trained on rounds 1 and
 2's outcomes, a network twice as wide (192 numbers a token), one layer
 deeper (4) and trained twice as long (40,000 steps) against round 2's
