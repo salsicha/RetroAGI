@@ -354,7 +354,26 @@ same 100 random levels and 4,200 skill scenes, none trained on:
 The hand-written chooser finishes 7 of 30 speed runs on such levels. The
 scenes still failed most are Hammer Bros (171 of 200), two obstacles
 together (186), ledges (187), looping lifts (187) and bridges (192); almost
-every level not finished ends in a death. Not yet scored on the real game.
+every level not finished ends in a death. Scored on the real game
+(score only), against the care run:
+
+| Scored on the real game | With the care variants | Widened Block SMB |
+|---|---|---|
+| Tries at an obstacle failing, held-out levels, from the screen | 38% | 46% |
+| The same with exact positions | 26% | 25% |
+| Whole plays finished with exact positions, held-out levels | 2 of 32 | 15 of 32 |
+| Whole plays finished with exact positions, all eight levels | 11 of 64 | 33 of 64 |
+| Whole plays finished from the screen, all eight levels | 9 of 64 | 5 of 64 |
+| 1-1 whole plays finished, from the screen / exact positions | 7 / 8 of 8 | 5 / 6 of 8 |
+
+With exact positions the agent now finishes whole levels it never
+finished before: 4-1 and 6-1 in 7 of 8 plays, 5-1 in 5, 2-1 in 4, 3-1
+in 3 (8-1 in none). Choosing and controlling learned in the widened
+Block SMB carry over to the real game's levels far better. From the
+screen it does worse than before (46% of tries failing against 38%):
+what the vision network reports is not what the network learned from,
+and that gap is now the larger loss. By the rule, that is seeing's
+problem, worked on with seeing's own data.
 
 **A larger network learns more of the same data.** Trained on rounds 1 and
 2's outcomes, a network twice as wide (192 numbers a token), one layer
