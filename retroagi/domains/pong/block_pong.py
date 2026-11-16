@@ -31,6 +31,7 @@ Each frame, in the game's order:
 """
 
 from dataclasses import dataclass, field, replace
+from typing import ClassVar
 
 from .game import DOWN, STAY, UP
 from .knob import Knob, follow
@@ -83,7 +84,13 @@ class PongState:
     (negative) or down; ours: our paddle's top, drawn: where it is drawn
     this frame; theirs: their paddle's top; frame: the game's frame count
     (0 to 255); wait: frames until the serve (0: in play); scored: the ball
-    has just passed a side and stops a frame; points: (ours, theirs)."""
+    has just passed a side and stops a frame; points: (ours, theirs);
+    returns: the times our paddle has turned the ball.
+
+    The agent reads this state as it is (a lookup), and may decide at any
+    frame."""
+
+    decidable: ClassVar[bool] = True
 
     ball_x: int = 0
     ball_y: int = 0
@@ -97,6 +104,7 @@ class PongState:
     scored: int = 0
     points: tuple = (0, 0)
     knob: Knob = field(default_factory=Knob)
+    returns: int = 0
 
     def copy(self) -> "PongState":
         return replace(self, knob=replace(self.knob))
@@ -130,6 +138,7 @@ def step(state: PongState, action: int) -> Frame:
     else:
         x, y = s.ball_x, s.ball_y
         if OUR_TURN_X[0] <= x <= OUR_TURN_X[1] and _reaches(y, s.speed, s.drawn):
+            s.returns += s.across == 1
             s.across, s.speed = -1, band(y - s.drawn)
         elif THEIR_TURN_X[0] <= x <= THEIR_TURN_X[1] and THEIR_REACH[0] <= y - s.theirs <= THEIR_REACH[1]:
             s.across, s.speed = 1, band(y - s.theirs)

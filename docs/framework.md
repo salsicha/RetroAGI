@@ -2,7 +2,8 @@
 
 RetroAGI is a game-neutral framework (`retroagi/framework`) plus one package
 per game or robot (`retroagi/domains/<name>`). Super Mario Bros is the first
-domain; Pong is being measured to be the second ([pong.md](pong.md)). The framework knows nothing of Mario: it is given a domain by name
+domain; Pong is the second ([pong.md](pong.md)). The framework knows
+nothing of either game: it is given a domain by name
 and uses it only through the interfaces below. What all of it must be, in
 the project owner's words, is in [requirements.md](requirements.md).
 

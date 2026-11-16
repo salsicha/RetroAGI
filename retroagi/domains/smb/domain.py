@@ -45,6 +45,7 @@ class SuperMarioBros:
     # sampler's own (the order is the datasets').
     ends = ("landed", "stomped", "arrived", "waited", "threat", "blocked", "infeasible", "timeout", "died",
             "finished", "edge")
+    longest = 240
     space = SPACE
     sources = ("memory", "vision")
     # The parts with alternatives (--use PART=NAME). The controller's model

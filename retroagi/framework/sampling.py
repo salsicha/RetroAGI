@@ -41,7 +41,8 @@ from .agent import Agent
 # pit arrives with Mario still falling into it).
 WINDOW = 16
 FALLING = 64
-# A choice lasts at most this many frames.
+# A choice lasts at most this many frames, unless its domain says otherwise
+# (Domain.longest).
 LONGEST = 240
 # The share of decisions the player makes at random.
 EXPLORE = 0.3
@@ -70,8 +71,9 @@ def outcome(world, source, domain, choice, probe: bool = True, controller=None) 
     controller.observe(state)
     controller.start(choice, state)
     frames, died, finished, end = 0, False, False, controller.event
+    longest = getattr(domain, "longest", LONGEST)
     while end is None:
-        if frames >= LONGEST:
+        if frames >= longest:
             end = "timeout"
             break
         action = controller.press(state)

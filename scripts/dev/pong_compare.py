@@ -27,15 +27,9 @@ from pong_measure import arrival  # noqa: E402
 from retroagi.domains.pong.block_pong import PongState, step  # noqa: E402
 from retroagi.domains.pong.game import DOWN, STAY, UP, RealPong  # noqa: E402
 from retroagi.domains.pong.knob import Knob  # noqa: E402
+from retroagi.domains.pong.real import state_from_memory  # noqa: E402
 
 PARTS = ("ball_x", "ball_y", "across", "speed", "ours", "drawn", "theirs", "wait", "points")
-
-
-def from_memory(m, knob: Knob) -> PongState:
-    """Block Pong's state for the game's memory ``m`` (and the hidden knob)."""
-    scored = int(m.serve_wait == 63 and m.ball_y != 0)
-    return PongState(m.ball_x, m.ball_y, m.across, m.speed, m.our_paddle, m.our_drawn, m.their_paddle, m.frame,
-                     m.serve_wait, scored, (m.our_score, m.their_score), knob)
 
 
 def parts(state: PongState, m=None) -> dict:
@@ -74,7 +68,7 @@ def compare(frames: int, seed: int = 0) -> dict:
     for frame in range(frames):
         m = game.memory()
         action = act(m, frame)
-        block = from_memory(m, Knob(knob.charge, knob.step, knob.held))
+        block = state_from_memory(m, Knob(knob.charge, knob.step, knob.held))
         step(block, action)
         _, _, over = game.step(action)
         knob.press(action)

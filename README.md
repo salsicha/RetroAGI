@@ -6,7 +6,8 @@ plays the real game from the screen's picture alone. The game stands in for
 a robot's real situation, where nothing can be trained by trial and error.
 
 The project is a game-neutral framework (`retroagi/framework`) with Super
-Mario Bros as its first domain (`retroagi/domains/smb`). It is built from
+Mario Bros as its first domain (`retroagi/domains/smb`) and Pong as its
+second (`retroagi/domains/pong`, [docs/pong.md](docs/pong.md)). It is built from
 an adaptive controller and interchangeable models, composed through
 declared interfaces ([the framework](docs/framework.md)).
 
@@ -209,6 +210,12 @@ retroagi/
     perception/                  # the vision network, tracking, vision to state
     sim/                         # Block SMB: the simulator, random levels and skill scenes
     nes/                         # the real game: emulator, game memory, obstacle benches
+  domains/pong/                  # Pong (the Atari 2600 cartridge)
+    domain.py                    # the game as the framework sees it
+    block_pong.py, knob.py       # Block Pong: the game's rules in plain arithmetic
+    world.py                     # its practice worlds: points from random situations
+    controller.py, choices.py    # returns with a part of the paddle, rests; the state as numbers
+    game.py, real.py             # the real game in the emulator, read from its memory
   legacy/                        # retired code, kept running; nothing above imports it
 scripts/
   vit/, vision/                  # train and measure the vision networks

@@ -87,14 +87,61 @@ it at a wall), where what the game decides depends on how the hardware
 draws the frame: about one paddle meeting in 40 at the rim. A test keeps
 the agreement (`scripts/tests/test_pong_game.py`).
 
+## The domain
+
+`retroagi/domains/pong/domain.py` gives the framework what it asks of a
+domain ([framework.md](framework.md)); nothing in the framework changed
+for it but one thing a domain may now say: how long a choice may last
+(`longest`).
+
+**The choices.** While the ball comes toward us: return it with one of
+five parts of our paddle (its top edge, upper part, middle, lower part,
+bottom edge), which send it back steeply up, up, level, down or steeply
+down. A return lasts until the ball comes back (or the point ends), so
+what it leads to includes whether the opponent reaches it. Otherwise:
+rest at one of three heights until the ball comes toward us.
+
+**The controller** (`controller.py`), in plain arithmetic: it moves our
+paddle by choosing the charge to turn the knob to. For a return it tries a
+few plans in Block Pong's own rules from the present state (the ball's
+flight, the knob, the paddle; the opponent plays no part in the ball's way
+to us) and keeps the first that meets the ball with the chosen part: a
+charge to turn to, or a charge and then its neighbour from a timed frame,
+since a paddle at rest sits only every 5 or 6 pixels and a part is 4 tall.
+Starting a return takes under half a millisecond as a rule (3 at the 90th
+percentile), pressing on a few microseconds. Of 1,000 returns asked for in
+random situations, 993 met the ball with the part chosen and 7 were
+refused, 5 of them a part the paddle cannot bring to the ball's height.
+
+**The practice worlds** (`world.py`): one point of Block Pong from a
+situation drawn at random from the game's own ranges (a serve to come, or
+a ball in flight anywhere, either way, at any of its speeds; the paddles
+anywhere; our knob at rest or, as after the real game is reset, fresh),
+and the "return" skill scene, passed once our paddle has turned the ball.
+Losing the point is a death, winning it finishes the task; each return is
+progress.
+
+**The state** is Block Pong's own (a lookup); in the real game it is read
+from the game's memory (`real.py`), the hidden knob followed from the
+agent's own presses. Seeing for Pong is not built yet.
+
+**What the hand-written chooser does** (`scripted_chooser.py`: every
+return with the middle of the paddle). In 200 practice points it lost
+none, won 24 and kept the other 176 rallies going until the 4,000-frame
+limit: a level return comes straight back. In the real game, from its
+memory, it returned the ball 250 times in 60,000 frames without a miss and
+without a point either way. Sampling every candidate's outcome in 20
+practice points (955 returns and rests, 3.5 seconds on one core) shows
+what there is to learn: a return off the paddle's top or bottom edge won
+the point 43% and 35% of the time, one off its other parts never. A rule
+written by hand from that (always the bottom edge, the top edge where the
+bottom cannot be done) wins the real game 21 to 0; the outcome network is
+to find it in Block Pong alone.
+
 ## Next
 
-1. The practice worlds: Block Pong games from random situations (the
-   ball's place, direction and speed, the paddles, the opponent's
-   steadiness), so that no learned part leans on one way a rally starts.
-2. The domain's parts behind the framework's interfaces: the choices
-   (where to meet the ball, with which part of the paddle), the
-   controller that moves the paddle there by the knob's rule, the outcome
-   network's tokens.
-3. Seeing: a vision network trained on the real game's frames, labelled
-   from its memory.
+1. The outcome network learned in Block Pong (the framework's sampling
+   and training, `--domain pong`), on the project owner's go, then scored
+   on the real game.
+2. Seeing: a vision network trained on the real game's frames, labelled
+   from its memory, so the real game is played from the screen.

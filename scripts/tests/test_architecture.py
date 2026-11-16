@@ -1,8 +1,8 @@
 """The layers stay apart (docs/framework.md): the framework imports no
 domain and no retired code, a domain imports no retired code, and Super
-Mario Bros meets the framework's interfaces. And what the project must be
-(docs/requirements.md): no network inside the controller, and nothing of
-the real game inside Block SMB."""
+Mario Bros and Pong meet the framework's interfaces. And what the project
+must be (docs/requirements.md): no network inside the controller, and
+nothing of the real game inside Block SMB or Block Pong."""
 
 import ast
 from pathlib import Path
@@ -48,6 +48,21 @@ def test_no_network_runs_inside_the_controller():
     assert not [m for m in modules if m.startswith(("retroagi.framework.outcome_network", "retroagi.domains.smb.perception"))]
 
 
+def test_no_network_runs_inside_pongs_controller():
+    modules = imported("retroagi/domains/pong/controller.py", "retroagi/domains/pong/block_pong.py",
+                       "retroagi/domains/pong/knob.py")
+    assert not [m for m in modules if m.split(".")[0] in DEEP_LEARNING]
+    assert not [m for m in modules if m.startswith("retroagi.framework.outcome_network")]
+
+
+def test_block_pong_has_nothing_of_the_real_game_in_it():
+    # No emulator, no network, no picture: its rules and its practice worlds only.
+    modules = imported("retroagi/domains/pong/block_pong.py", "retroagi/domains/pong/knob.py",
+                       "retroagi/domains/pong/world.py")
+    assert not [m for m in modules if m.split(".")[0] in (*DEEP_LEARNING, "retro", "pygame")]
+    assert not [m for m in modules if m.startswith("retroagi.domains.pong.real")]
+
+
 def test_block_smb_has_nothing_of_the_real_game_in_it():
     # Fast and cheap: no emulator, no network, none of the game's pictures or levels.
     modules = imported("retroagi/domains/smb/sim")
@@ -85,3 +100,29 @@ def test_super_mario_bros_meets_the_interfaces():
     assert isinstance(world.step(controller.press(state)), Step)
     world.restore(saved)
     assert source.read(world).body == state.body
+
+
+def test_pong_meets_the_interfaces():
+    domain = registry.load("pong")
+    assert isinstance(domain.space.spec, ChoiceSpec) and domain.ends.index("infeasible") >= 0
+    for kind in domain.practices:
+        world = domain.practice(5, kind)
+        assert isinstance(world, World) and isinstance(world, Practice)
+        world.reset()
+        source = domain.truth_source()
+        source.reset()
+        state = source.read(world)
+        assert state.decidable
+        options = domain.space.candidates(state)
+        assert options and all(isinstance(c, Candidate) for c in options)
+        tokens, slots = domain.space.tokens(state)
+        assert [t.shape[-1] for t in tokens] == [g.width for g in domain.space.spec.groups]
+        assert all(c.ref in slots for c in options if c.ref is not None)
+        for k in domain.space.spec.kinds:
+            assert k.first + k.modifiers <= domain.space.spec.groups[k.group].heads
+        controller = domain.controller()
+        controller.start(options[0].choice, state)
+        saved = world.snapshot()
+        assert isinstance(world.step(controller.press(state) if controller.event is None else domain.idle), Step)
+        world.restore(saved)
+        assert source.read(world) == state
