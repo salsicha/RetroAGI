@@ -181,7 +181,7 @@ What this rules out:
 | In Block SMB the state is a lookup | Yes. |
 | One command retrains the deciding network from nothing | `scripts/learn_in_block_smb.sh NAME` (rounds of sampling, training and the Block SMB exam). A full run from nothing (2026-11-12, 7.7 hours) finished 4 of 8 whole plays of World 1-1 from the screen and 8 of 8 with exact positions; earlier trainings gave 4, 6 and 4 from the screen: a retraining does not yet pass 1-1 reliably. The run in the widened Block SMB (2026-11-14, 18.7 hours) finishes 33 of 64 whole plays of the eight scored levels with exact positions (the care run: 11), 15 of 32 on the held-out ones, but only 5 of 64 from the screen (care run: 9); 1-1 in 5 of 8 from the screen. Since vision's motion estimate stops Mario's fall when he stands (2026-11-15) and stops his run at walls, 24% of its tries at obstacles on the held-out levels fail from the screen, against 25% with exact positions (46% before), and 3 of 32 whole held-out plays finish from the screen. |
 | Composable, interchangeable parts | Interfaces for every part; so far one part has an alternative (how other things are predicted to move). |
-| Any game, later any robot | One game. The framework imports nothing of it (kept so by a test). |
+| Any game, later any robot | One game plays. The framework imports nothing of it (kept so by a test). Pong, the second, is being measured from its memory (2026-11-15, [pong.md](pong.md)); Block Pong is not built yet. |
 
 **Speed, measured 2026-11-11** on one processor core, in milliseconds:
 
