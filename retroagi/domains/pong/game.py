@@ -6,6 +6,10 @@ reset() and step(action) return the screen. memory() reads what the game
 keeps (the ball's place, both paddles, the hidden paddle knob, the score):
 for measuring how the game behaves and for scoring only, never for a policy
 (docs/requirements.md).
+
+The emulator keeps the paddle knob outside the game's saved state: reset()
+and load() both start it afresh (knob.py), so our paddle then heads for the
+knob's middle reading (182) until a button turns it.
 """
 
 from dataclasses import dataclass
@@ -18,6 +22,10 @@ STAY, UP, DOWN = 0, 1, 2
 ACTIONS = (STAY, UP, DOWN)
 # Memory addresses (the 128 bytes of the console's memory start at 0x80).
 BALL_X, BALL_Y, OUR_PADDLE, THEIR_PADDLE, THEIR_SCORE, OUR_SCORE, KNOB = 0xB1, 0xB6, 0xBC, 0xB2, 0x8D, 0x8E, 0x84
+# The ball's direction across (0xFF: right) and its vertical speed (signed),
+# our paddle where it is drawn (a frame behind), the frame count, the frames
+# left before a serve.
+ACROSS, SPEED, OUR_DRAWN, FRAME, SERVE_WAIT = 0xBA, 0xB8, 0xB3, 0x88, 0x8B
 
 
 @dataclass(frozen=True)
@@ -33,12 +41,18 @@ class PongMemory:
     knob: int
     our_score: int
     their_score: int
+    across: int = 0  # +1 toward us (right), -1 toward them
+    speed: int = 0  # pixels a frame, up negative
+    our_drawn: int = 0
+    frame: int = 0
+    serve_wait: int = 0
 
 
 def read_memory(ram) -> PongMemory:
     at = lambda address: int(ram[address - 0x80])
+    signed = lambda address: at(address) - 256 if at(address) > 127 else at(address)
     return PongMemory(at(BALL_X), at(BALL_Y), at(OUR_PADDLE), at(THEIR_PADDLE), at(KNOB), at(OUR_SCORE),
-                      at(THEIR_SCORE))
+                      at(THEIR_SCORE), -signed(ACROSS), signed(SPEED), at(OUR_DRAWN), at(FRAME), at(SERVE_WAIT))
 
 
 class RealPong:
