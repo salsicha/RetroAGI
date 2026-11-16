@@ -176,6 +176,9 @@ python -m retroagi.framework.practice --domain smb --levels 100 --first-seed 100
 python -m retroagi.framework.bench --domain smb --bench data/full_smb_obstacles/Level1-1 --source vision --model data/outcome/outcome_care_20261112.pt
 # play a whole real level from its start
 python -m retroagi.framework.play --domain smb --level Level1-1 --source vision --model data/outcome/outcome_care_20261112.pt
+# Pong: learn in Block Pong, then play the real game from the screen
+DOMAIN=pong scripts/learn_in_block_smb.sh NAME
+python -m retroagi.framework.play --domain pong --level Start --source vision --model data/outcome/outcome_pong1.pt
 # run the tests
 python -m pytest scripts/tests
 ```
@@ -215,7 +218,8 @@ retroagi/
     block_pong.py, knob.py       # Block Pong: the game's rules in plain arithmetic
     world.py                     # its practice worlds: points from random situations
     controller.py, choices.py    # returns with a part of the paddle, rests; the state as numbers
-    game.py, real.py             # the real game in the emulator, read from its memory
+    game.py, real.py             # the real game in the emulator, read from its memory or the screen
+    vision.py, seeing.py         # the vision network for its screen; following the exact state from it
   legacy/                        # retired code, kept running; nothing above imports it
 scripts/
   vit/, vision/                  # train and measure the vision networks

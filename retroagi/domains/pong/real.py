@@ -35,16 +35,18 @@ class RealPongWorld:
         self.game = RealPong(level)
         self.start_state = start_state
         self.points, self.returns, self.last = (0, 0), 0, None
+        self.screen = None  # the last screen shown (what seeing reads)
 
     def reset(self) -> None:
-        self.game.reset()
+        self.screen = self.game.reset()
         if self.start_state is not None:
             self.game.load(self.start_state)
+            self.screen = None  # nothing of the loaded state is drawn until its first frame
         self.returns, self.last = 0, self.game.memory()
         self.points = (self.last.our_score, self.last.their_score)
 
     def step(self, action: int) -> Step:
-        _, _, over = self.game.step(action)
+        self.screen, _, over = self.game.step(action)
         m = self.game.memory()
         if self.last is not None and self.last.across == 1 and m.across == -1 and m.ball_x > 128:
             self.returns += 1
@@ -84,3 +86,34 @@ class MemorySource:
 
     def acted(self, action: int) -> None:
         self.knob.press(action)
+
+
+DEFAULT_VISION = "data/pong_vision/vision.pt"
+
+
+class VisionSource:
+    """The state from the screen alone: the vision network's reading of
+    each frame (vision.py), followed by the tracker (seeing.py), with the
+    knob followed from the agent's presses. None (the agent waits) until
+    the tracker follows the ball."""
+
+    def __init__(self, model):
+        from .seeing import Seeing
+
+        self.model, self.seeing = model, Seeing()
+        self.reset()
+
+    def reset(self) -> None:
+        self.knob = Knob(step=0)
+        self.seeing.reset()
+
+    def read(self, world):
+        from .vision import read
+
+        if world.screen is None:
+            return None
+        return self.seeing.observe(read(self.model, world.screen), self.knob)
+
+    def acted(self, action: int) -> None:
+        self.knob.press(action)
+        self.seeing.acted(action)

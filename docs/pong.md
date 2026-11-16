@@ -123,7 +123,7 @@ progress.
 
 **The state** is Block Pong's own (a lookup); in the real game it is read
 from the game's memory (`real.py`), the hidden knob followed from the
-agent's own presses. Seeing for Pong is not built yet.
+agent's own presses, or from the screen alone (below).
 
 **What the hand-written chooser does** (`scripted_chooser.py`: every
 return with the middle of the paddle). In 200 practice points it lost
@@ -138,10 +138,113 @@ written by hand from that (always the bottom edge, the top edge where the
 bottom cannot be done) wins the real game 21 to 0; the outcome network is
 to find it in Block Pong alone.
 
+## The outcome network
+
+Learned from nothing in Block Pong alone, with the framework's commands
+unchanged (`DOMAIN=pong scripts/learn_in_block_smb.sh pong1`, 2026-11-16):
+three rounds of sampling every candidate's outcome in 300 random points
+and 400 return scenes, training (40,000 steps) and the exam on 100 points
+and 100 scenes not trained on; 45 minutes in all (kept as
+`data/outcome/outcome_pong1.pt`). Each round's network won
+all 100 exam points and passed all 100 scenes (the hand-written chooser
+wins 5 of 20, the rest rallies that never end).
+
+In the real game it won 21 to 0 in all 4 plays from the game's memory and
+in all 4 from the screen, with 24 returns for the 21 points, about 8,670
+frames (2.4 minutes) a game. What it chose: the paddle's top edge for most
+returns (18 of 24), the bottom edge or the part above it where the top
+edge could not reach, and a rest at the middle while the ball goes away.
+
+No practice point was ever lost: the controller always meets the ball, so
+the network has never seen a death, and its chance of death is untrained.
+
+## Seeing
+
+The real game is played from the screen by two parts (`real.py`'s vision
+source): a network that reads each frame, and a tracker that follows the
+exact state from what it reads. The knob is the agent's own, followed from
+its presses as with the memory.
+
+**What the screen shows** (measured against the game's memory, 2026-11-16).
+The ball is drawn at its left minus 49 and, as a rule, its top minus 14;
+their paddle at its top minus 15 (it is always at an even height); our
+paddle as it is drawn this frame (`drawn`, where it was a frame before),
+but in two-line rows: a drawn top of 2k-1 or 2k looks the same. A paddle
+near a wall is partly hidden behind it, as is a ball in a wall's rows. The
+scores are drawn above the top wall, theirs on the left, ours on the right,
+a frame after they change. Not drawn at all: the ball's speed and
+direction, the game's frame count (their paddle rests every eighth frame,
+ours moves every second), the serve's wait.
+
+**The vision network** (`vision.py`) reads one screen and gives, for each
+of the ball's left and top, our paddle's drawn top, their top and the two
+scores, how likely each value is, in the game's own units. Three layers of
+3x3 convolutions at full resolution make one map per placed thing; a left
+is read from the map's strongest value in each column, a height from the
+strongest in each row, and a coarse view of the whole screen adds to both
+(a paddle half behind a wall is placed by what shows of it); each score is
+read from its own half of the band above the walls (read from the whole
+band, the network learned which scores come together and misread pairs it
+had not seen). It learned from 200,000 frames of whole real games, in 8
+parts of 25,000 frames, labelled from the memory. Each point was played
+either by the agent on the game's memory, returning off a part of the
+paddle drawn at random with the edges favoured, or by held random buttons,
+the share of each drawn anew for each game, so the games end anywhere from
+21-0 to 0-21 and both scores are seen through their whole range. 8,000
+steps on the GPU. On the part it did not learn from (25,000 frames, every
+score of both sides):
+
+| | most likely value right | the true value given 1% or more |
+|---|---|---|
+| the ball's left | 99.8% | 99.95% |
+| the ball's top | 99.0% | 99.9% |
+| our paddle's drawn top | 67.9% (two values look alike) | 98.9% |
+| their paddle's top | 98.3% | 99.8% |
+| our score, theirs | 99.9% (every value at least 99.3%) | 99.9% |
+
+**The tracker** (`seeing.py`, no network) keeps every exact Block Pong
+state the screen allows. Each frame it steps each by Block Pong's own
+rules with the button the agent pressed, weighs each by how likely the
+network finds what it shows there (the weights add up over frames, older
+ones fading, since the network's slight steady preference between two
+heights drawn alike is no evidence), and drops those far behind the best.
+When even the best no longer fits (the network or the rules went wrong
+somewhere) it starts again from what the screen shows: every likely place,
+both directions, every speed and every point in the opponent's eight-frame
+rhythm, which the next frames thin out. It starts only while the ball is in
+play, and gives a state only once the likely ones agree on the ball's
+direction and speed; until then the agent waits. The returns are counted
+from the states it gives (the ball turned from coming to going away on our
+side), so starting again forgets none. On the same held-out games
+(`scripts/dev/pong_seeing_check.py`), with the ball in play, it gave a
+state in 99.7% of 20,795 frames, and was wrong in:
+
+| | share of frames wrong |
+|---|---|
+| the ball's left | 0 |
+| the ball's top | 0.08% |
+| its direction across, its vertical speed | 0, 0.01% |
+| our paddle (where it is, where it is drawn) | 1.5% |
+| their paddle | 0.01% |
+| the opponent's eight-frame rhythm | 3.0% |
+| the score | 0 |
+
+Our paddle at rest may sit on either of two heights the screen draws
+alike (the knob holds it at its reading or one above), so there it is a
+guess until it moves. The network takes 0.74 ms a frame on the GPU, the
+tracker 0.02 ms on the processor.
+
+With a stand-in for the network that sees exactly what the screen allows
+(heights in two-line rows), the tracker settles on the exact state in
+5,971 of 5,979 frames of Block Pong (`scripts/tests/test_pong_seeing.py`).
+
 ## Next
 
-1. The outcome network learned in Block Pong (the framework's sampling
-   and training, `--domain pong`), on the project owner's go, then scored
-   on the real game.
-2. Seeing: a vision network trained on the real game's frames, labelled
-   from its memory, so the real game is played from the screen.
+1. Practice points that can be lost: situations from the game's own
+   ranges where a return cannot be made in time (a steep ball close to our
+   side, which the practice worlds now leave out), so that the network
+   learns its chance of death; in the practice worlds as they are, nothing
+   it chooses ever loses.
+2. A third domain, or back to Super Mario Bros with what Pong showed: a
+   controller exact in the practice world's own rules, and a tracker that
+   keeps every state the screen allows rather than one guess.

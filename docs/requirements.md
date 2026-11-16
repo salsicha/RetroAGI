@@ -167,7 +167,7 @@ What this rules out:
 - The README explains with diagrams as well as text, and is kept up to
   date with the code.
 
-## Where the code stands against this (2026-11-13)
+## Where the code stands against this (2026-11-16)
 
 | Requirement | Where it stands |
 |---|---|
@@ -181,7 +181,7 @@ What this rules out:
 | In Block SMB the state is a lookup | Yes. |
 | One command retrains the deciding network from nothing | `scripts/learn_in_block_smb.sh NAME` (rounds of sampling, training and the Block SMB exam). A full run from nothing (2026-11-12, 7.7 hours) finished 4 of 8 whole plays of World 1-1 from the screen and 8 of 8 with exact positions; earlier trainings gave 4, 6 and 4 from the screen: a retraining does not yet pass 1-1 reliably. The run in the widened Block SMB (2026-11-14, 18.7 hours) finishes 33 of 64 whole plays of the eight scored levels with exact positions (the care run: 11), 15 of 32 on the held-out ones, but only 5 of 64 from the screen (care run: 9); 1-1 in 5 of 8 from the screen. Since vision's motion estimate stops Mario's fall when he stands (2026-11-15) and stops his run at walls, 24% of its tries at obstacles on the held-out levels fail from the screen, against 25% with exact positions (46% before), and 3 of 32 whole held-out plays finish from the screen. |
 | Composable, interchangeable parts | Interfaces for every part; so far one part has an alternative (how other things are predicted to move). |
-| Any game, later any robot | One game plays. The framework imports nothing of it (kept so by a test). Pong, the second, has been measured from its memory and Block Pong built from it (2026-11-15, [pong.md](pong.md)): frame by frame it agrees with the game on our paddle, theirs, the serve and the score always, and on the ball but where it grazes our paddle's rim (17 of 200,000 frames). Its domain is built: choices (a return with one of five parts of the paddle, or a rest), a controller that meets the ball with the chosen part in 993 of 1,000 tries, practice worlds of random situations; no network has learned in it yet, and it has no vision yet. |
+| Any game, later any robot | Two games play. The framework imports nothing of either (kept so by a test). Pong, the second, has been measured from its memory and Block Pong built from it (2026-11-15, [pong.md](pong.md)): frame by frame it agrees with the game on our paddle, theirs, the serve and the score always, and on the ball but where it grazes our paddle's rim (17 of 200,000 frames). Its outcome network learned from nothing in Block Pong alone with the framework's commands unchanged (2026-11-16, 45 minutes) and wins the real game 21 to 0 in 4 of 4 plays from the screen, as from memory: seeing is a vision network trained on the real game's frames and a tracker that keeps every exact state the screen allows. In Block Pong no point it chooses is ever lost, so its chance of death is untrained. |
 
 **Speed, measured 2026-11-11** on one processor core, in milliseconds:
 

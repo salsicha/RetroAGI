@@ -4,12 +4,12 @@
 #
 # Each round: every choice open at a decision is tried in random levels and skill scenes
 # (framework/sampling.py), the network is trained from nothing on all rounds' outcomes so far
-# (framework/training.py), and it takes the Block SMB exam on worlds not trained on
+# (framework/training.py), and it takes the practice exam on worlds not trained on
 # (framework/practice.py). In round 1 the hand-written chooser's play visits the situations;
 # from round 2 on the network of the round before plays, so each learns where its own play
 # takes it. The real game is not touched: scoring the result there is a separate, later step
 # (framework/bench.py, framework/play.py), and seeing is trained apart, on real frames
-# (scripts/vit/train_full_vit.py).
+# (scripts/vit/train_full_vit.py; for Pong, retroagi/domains/pong/vision.py).
 #
 #   scripts/learn_in_block_smb.sh NAME
 #
@@ -63,7 +63,7 @@ for round in $(seq 1 "$ROUNDS"); do
   python -m retroagi.framework.training --domain "$DOMAIN" --data "${data[@]}" --fresh "$fresh" --steps "$STEPS" \
     --width "$WIDTH" --layers "$LAYERS" --heads "$HEADS" --output "$network"
   driver=(--driver "$network/outcome.pt")
-  echo "round $round: the Block SMB exam $(date +%T)"
+  echo "round $round: the practice exam $(date +%T)"
   python -m retroagi.framework.practice --domain "$DOMAIN" --levels "$EXAM_LEVELS" --scenes "$EXAM_SCENES" \
     --first-seed 100000 --model "$network/outcome.pt" --output "$network/exam.json"
 done
