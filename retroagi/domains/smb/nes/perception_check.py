@@ -140,7 +140,7 @@ def check(bench: Path, model: str = None) -> dict:
                 truth = true_frame(world.game.env.get_ram(), world.game.start)
                 slots = truth["slots"]
                 names = [KIND_NAMES.get(slots[e.ref[1]]["kind"], f"object {slots[e.ref[1]]['kind']:02X}")
-                         for e in true.enemies]
+                         if e.ref[0] == "slots" else "thrown" for e in true.enemies]
                 compare(seen, true, names, found, truth["camera"] - vision.feedback.camera_position)
             if world.step(action).over:
                 break

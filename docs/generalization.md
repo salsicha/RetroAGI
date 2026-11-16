@@ -863,6 +863,46 @@ What vision loses is in Mario's own position and motion and in the
 enemies, about equally, and not in the ground. (Exact ground under a
 Mario placed a few pixels off is no better than seen ground.)
 
+### What seeing cost the widened network, and the fall that never stopped (2026-11-15)
+
+The network learned in the widened Block SMB (`outcome_widened_20261113`)
+passed 0.74 of tries at obstacles on the six untouched levels with exact
+positions and only 0.53 from the screen. The same bench played from the
+screen with one part of the state exact at a time
+(`scripts/dev/perception_parts.py`):
+
+| Exact in place of seen | Untouched levels |
+|---|---|
+| Nothing (vision) | 0.53 |
+| Where Mario's body is | 0.54 |
+| Whether he stands | 0.59 |
+| How he moves | 0.66 |
+| All of Mario | 0.78 |
+| The enemies | 0.60 |
+| The ground, pipes and blocks | 0.60 |
+| Mario, enemies and ground | 0.76 |
+
+Nearly all the loss was in Mario's own motion. Compared field by field
+with the game's (`scripts/dev/motion_check.py`), vision's motion model
+held Mario's vertical speed at 4 pixels a frame, the fastest fall, in
+most frames he stood: the model's own movement rules never stop a fall,
+the game's landing does, and Block SMB copies the landing every frame he
+stands. The outcome network reads his vertical speed, so from the screen
+a standing Mario looked to it like one falling fast, in every situation
+it decided in. Vision's estimate now stops the fall when Mario is seen
+standing and the model has him falling or level (a jump just started is
+kept: the screen shows the takeoff a frame late). With the same network:
+
+| Share of tries passed, from the screen | Before | Fall stopped | Exact positions |
+|---|---|---|---|
+| 1-1 and 5-1 (tuned) | 0.77 | 0.79 | 0.98 |
+| The six untouched levels | 0.53 | 0.71 | 0.74 |
+
+1-1 went from 0.82 to 0.96, 4-1 from 0.46 to 0.67, 7-1 from 0.50 to 0.81.
+5-1 fell from 0.73 to 0.67: one start, where Mario jumps into a Piranha
+Plant rising from the next pipe, is shared by nine of the bench's
+obstacles and counted in each.
+
 ## Tried and not kept, 2026-11-11
 
 Measured with exact positions, against 0.97 on the tuned levels and 0.77

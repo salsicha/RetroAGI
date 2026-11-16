@@ -247,4 +247,12 @@ class MotionEstimator:
             # one, it threw Mario's jump over 1-1's second pit short).
             self.motion.bounce()
             self.motion.y_force = 0
+        if not airborne and self.motion.y_speed >= 0:
+            # Seen standing: the landing stops the fall, as the game's
+            # collision code and Block SMB do every frame he stands (the
+            # model's own movement never does; it kept the fastest fall, 4
+            # pixels a frame, through every stand, and the outcome network
+            # read a standing Mario as falling). A jump just started (rising)
+            # is left alone: the screen shows the takeoff a frame late.
+            self.motion.vertical_contact()
         self.previous = scene
