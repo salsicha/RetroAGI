@@ -991,6 +991,11 @@ those deaths are Mario touching the Bro himself, as it jumps up to a ledge
 he stands on or as a run starts beside it, and when a Bro will next jump is
 not seen.
 
+Scored on the real game with these corrections (score only; the network
+unchanged), World 1-1's four starts in each of the two modes finish in 8 of
+8 plays with exact positions (6 of 8 before) and in 5 of 8 from the screen
+(4 of 8 before).
+
 Two causes seen and not yet dealt with: a lift coming down onto a rising
 Mario pushes him aside in Block SMB (13 pixels, off the jump), which the
 planner does not foresee; and a Paratroopa stomped out of the air falls
