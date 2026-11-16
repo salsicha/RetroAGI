@@ -917,6 +917,21 @@ before). In play it changes little: 0.82 of tries passed on the tuned
 levels (0.79) and 0.70 on the untouched ones (0.71), within what one
 bench to the next varies.
 
+Scored again with both corrections (same network, score only):
+
+| On the real game | Before | Both corrections | Exact positions |
+|---|---|---|---|
+| Tries at an obstacle failing, held-out levels, from the screen | 46% | 24% | 25% |
+| Whole held-out levels finished from the screen | 0 of 32 | 3 of 32 | 15 of 32 |
+| Whole plays finished from the screen, all eight levels | 5 of 64 | 8 of 64 | 33 of 64 |
+| 1-1 whole plays finished from the screen | 5 of 8 | 4 of 8 | 6 of 8 |
+
+Obstacle by obstacle, seeing now costs the agent almost nothing on the
+held-out levels. Whole levels still finish far less often from the
+screen than with exact positions: a level is about 35 obstacles in a row,
+and what vision gets wrong now is rarer but still enough to end most
+plays somewhere.
+
 ## Tried and not kept, 2026-11-11
 
 Measured with exact positions, against 0.97 on the tuned levels and 0.77
