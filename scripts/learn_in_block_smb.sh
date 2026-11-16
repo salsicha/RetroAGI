@@ -1,5 +1,6 @@
 #!/bin/bash
-# Learn the deciding network from nothing, in Block SMB alone (docs/requirements.md).
+# Learn the deciding network from nothing, in the practice world alone (docs/requirements.md):
+# Block SMB, or Block Pong with DOMAIN=pong.
 #
 # Each round: every choice open at a decision is tried in random levels and skill scenes
 # (framework/sampling.py), the network is trained from nothing on all rounds' outcomes so far
@@ -12,15 +13,16 @@
 #
 #   scripts/learn_in_block_smb.sh NAME
 #
-# Settings, from the environment: ROUNDS (3), LEVELS (300) and SCENES (400) sampled a round,
+# Settings, from the environment: DOMAIN (smb, or pong), ROUNDS (3), LEVELS (300) and SCENES (400) sampled a round,
 # STEPS (40000) of training, the network's size (WIDTH 192, LAYERS 4, HEADS 4), WORKERS (14), and
-# where things go: DATA (data/datasets/block_smb) and OUT (artifacts/block_smb). The last round's network is OUT/outcome_NAME_<ROUNDS>/outcome.pt.
+# where things go: DATA (data/datasets/block_DOMAIN) and OUT (artifacts/block_DOMAIN). The last round's network is OUT/outcome_NAME_<ROUNDS>/outcome.pt.
 #
 # A round that has taken its exam is not done again: the same NAME with more ROUNDS goes on
 # from where an earlier run stopped (an unfinished round is done again from its start; play
 # is deterministic, so what it had sampled is sampled the same).
 set -euo pipefail
 NAME=${1:?usage: scripts/learn_in_block_smb.sh NAME}
+DOMAIN=${DOMAIN:-smb}
 ROUNDS=${ROUNDS:-3}
 LEVELS=${LEVELS:-300}
 SCENES=${SCENES:-400}
@@ -29,8 +31,8 @@ WIDTH=${WIDTH:-192}
 LAYERS=${LAYERS:-4}
 HEADS=${HEADS:-4}
 WORKERS=${WORKERS:-14}
-DATA=${DATA:-data/datasets/block_smb}
-OUT=${OUT:-artifacts/block_smb}
+DATA=${DATA:-data/datasets/block_$DOMAIN}
+OUT=${OUT:-artifacts/block_$DOMAIN}
 # The exam and each round's fresh set use seeds from 100000; training seeds stay below.
 EXAM_LEVELS=${EXAM_LEVELS:-100}
 EXAM_SCENES=${EXAM_SCENES:-100}
@@ -52,17 +54,17 @@ for round in $(seq 1 "$ROUNDS"); do
     continue
   fi
   echo "round $round: sampling $(date +%T)"
-  python -m retroagi.framework.sampling --domain smb --levels "$LEVELS" --scenes "$SCENES" \
+  python -m retroagi.framework.sampling --domain "$DOMAIN" --levels "$LEVELS" --scenes "$SCENES" \
     --first-seed $((round * 10000)) ${driver[@]+"${driver[@]}"} --workers "$WORKERS" --output "$sampled"
-  python -m retroagi.framework.sampling --domain smb --levels "$FRESH_LEVELS" --scenes "$FRESH_SCENES" \
+  python -m retroagi.framework.sampling --domain "$DOMAIN" --levels "$FRESH_LEVELS" --scenes "$FRESH_SCENES" \
     --first-seed 100000 ${driver[@]+"${driver[@]}"} --workers "$WORKERS" --output "$fresh"
   data+=("$sampled")
   echo "round $round: training $(date +%T)"
-  python -m retroagi.framework.training --domain smb --data "${data[@]}" --fresh "$fresh" --steps "$STEPS" \
+  python -m retroagi.framework.training --domain "$DOMAIN" --data "${data[@]}" --fresh "$fresh" --steps "$STEPS" \
     --width "$WIDTH" --layers "$LAYERS" --heads "$HEADS" --output "$network"
   driver=(--driver "$network/outcome.pt")
   echo "round $round: the Block SMB exam $(date +%T)"
-  python -m retroagi.framework.practice --domain smb --levels "$EXAM_LEVELS" --scenes "$EXAM_SCENES" \
+  python -m retroagi.framework.practice --domain "$DOMAIN" --levels "$EXAM_LEVELS" --scenes "$EXAM_SCENES" \
     --first-seed 100000 --model "$network/outcome.pt" --output "$network/exam.json"
 done
 echo "done $(date +%T): $OUT/outcome_${NAME}_$ROUNDS/outcome.pt"
