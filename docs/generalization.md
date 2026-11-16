@@ -903,6 +903,20 @@ kept: the screen shows the takeoff a frame late). With the same network:
 Plant rising from the next pipe, is shared by nine of the bench's
 obstacles and counted in each.
 
+The next error the field-by-field check showed: run into a wall, Mario
+is stopped by the game (speed 0, pushed back a pixel a frame) while
+vision's model ran on at full speed, because each change in his running
+sprite's width threw away its speed samples before they could correct
+it. The estimate now stops him as the game's wall contact does when, over
+four frames, his leading edge has moved on at most a pixel while the
+model has him running, and a seen solid's side is just ahead (without
+that condition a scroll measured wrong stopped him in open running, in 8
+of 46 stops on 2-1 and 7-1; with it, in none). On the ground of 6-1 his
+speed now agrees with the game's in 1,636 frames of about 1,720 (1,593
+before). In play it changes little: 0.82 of tries passed on the tuned
+levels (0.79) and 0.70 on the untouched ones (0.71), within what one
+bench to the next varies.
+
 ## Tried and not kept, 2026-11-11
 
 Measured with exact positions, against 0.97 on the tuned levels and 0.77

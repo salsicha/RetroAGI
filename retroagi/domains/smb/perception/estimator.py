@@ -81,6 +81,33 @@ def moving_support(scene):
     return support
 
 
+def _wall_ahead(scene, speed: float) -> bool:
+    """Whether a solid's side (or, running left, the screen's left edge)
+    is within WALL_REACH pixels of Mario's drawn leading edge, beside his
+    body (not only under his feet)."""
+    from .state import solids_of  # (state imports the controller; kept out of this module's import)
+
+    box = scene.mario.box
+    if speed < 0 and box[0] <= VISIBLE_COLUMNS[0] + WALL_REACH:
+        return True
+    for solid in solids_of(scene, 0.0):
+        if solid.top < box[3] - 2 and solid.bottom > box[1]:
+            gap = solid.x0 - box[2] if speed > 0 else box[0] - solid.x1
+            if -WALL_REACH <= gap <= WALL_REACH:
+                return True
+    return False
+
+
+# A seen solid's side this near his drawn leading edge (pixels) can be the
+# wall that stopped him (_wall_ahead).
+WALL_REACH = 3
+# A wall has stopped him when over this many frames his leading edge moved
+# on at most WALL_SLACK pixels while the model had him running
+# (_wall_stopped): at a pixel a frame or more the model's run covers at
+# least 4, the seen box jitters by a pixel or two.
+WALL_FRAMES, WALL_SLACK = 4, 1
+
+
 @dataclass
 class MotionEstimator:
     previous: object = None
@@ -102,6 +129,9 @@ class MotionEstimator:
     # Mario's feet's movement since the last frame (pixels, down positive;
     # 0 when either frame lost him): the vertical part of his estimate.
     feet_velocity: float = 0.0
+    # His leading edge's moves in the world over the last frames, unknown
+    # scrolls breaking the run (_wall_stopped).
+    edge_moves: deque = field(default_factory=lambda: deque(maxlen=WALL_FRAMES))
 
     def _lost(self) -> None:
         """Mario is not in the picture."""
@@ -112,6 +142,32 @@ class MotionEstimator:
     def _observed(self, scene, shift) -> None:
         """A picture with Mario in it was taken in (``shift``: the camera's
         scroll since the last, None if unknown)."""
+
+    def _wall_stopped(self, scene, shift) -> None:
+        """A wall stops him, as the game's wall contact and Block SMB's do:
+        over the last WALL_FRAMES frames his leading edge moved on at most
+        WALL_SLACK pixels in the world while the model has him running at
+        least a pixel a frame, and a solid's side is just ahead of him
+        (_wall_ahead: without it a scroll measured wrong stopped him in
+        open running). (The model's own movement knows no walls.
+        Pressed against one, the game pushes him back a pixel a frame and
+        his running sprite changes width every few frames, so the speed
+        samples never filled and the model ran on at 40 where the game had
+        him at 0.) ``shift``: the camera's measured scroll (None: unknown,
+        or only dead-reckoned from the model itself)."""
+        speed = self.motion.x_speed
+        if shift is None or self.previous is None or self.previous.mario.box is None:
+            self.edge_moves.clear()
+            return
+        edge = 2 if speed > 0 else 0
+        self.edge_moves.append(scene.mario.box[edge] - self.previous.mario.box[edge] + shift)
+        if (abs(speed) >= 16 and len(self.edge_moves) == WALL_FRAMES
+                and sum(self.edge_moves) * (1 if speed > 0 else -1) <= WALL_SLACK
+                and _wall_ahead(scene, speed)):
+            self.motion.wall_contact()
+            self.velocities.clear()
+            self.predicted_moves.clear()
+            self.edge_moves.clear()
 
     def executed(self, button, scene):
         """Propagate the actual button history, including release and braking."""
@@ -229,6 +285,7 @@ class MotionEstimator:
                 self.velocities.clear()
                 self.predicted_moves.clear()
                 self.speed = None
+        self._wall_stopped(scene, None if reckoned else shift)
         if shift is not None:
             self.camera_position += shift
         self.tracks.observe(scene, shift, reckoned)
