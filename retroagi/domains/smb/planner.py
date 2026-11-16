@@ -42,8 +42,11 @@ HORIZON = 96
 SPRING_HORIZON = 160
 # Below this the screen ends: Mario has fallen (pixels).
 SCREEN_BOTTOM = 240
-# A side touching a solid this far below its top is a wall, not a ledge.
-WALL_DEPTH = 2
+# A side touching a solid more than this far below its top is a wall, not a
+# ledge: the game sets Mario on top of a block he meets with his feet up to
+# 3 pixels below its top (so he walks or runs across a one-tile pit), and
+# stops him at 4 (measured in the game, 2026-11-16: scripts/dev/gap_rule.py).
+WALL_DEPTH = 3
 # Feet this close to a solid's top stand on it (pixels).
 STAND = 1
 # Enemies are kept this much wider on every side than their boxes when a
@@ -126,6 +129,13 @@ PASS_GAP = 4
 # pit, the soonest landing was a 3-frame hop that a few pixels of vision's
 # error put against the step's side.
 ROBUST_SHIFT = 3
+# How much of Mario's width a landing should put on what he lands on
+# (pixels; all of a thing narrower than that): a plan landing so is firm,
+# and firm plans are preferred. Of the landings planned with 1 to 3 pixels
+# on the solid, 37% did not happen where planned in fresh Block SMB levels
+# (a pixel of drift, a lift, a wall's corner), against 2.4% of those with
+# all of him on it (scripts/dev/jump_check.py, 2026-11-16).
+FOOTING = 4
 # How far inside a thing's ends a landing is kept (pixels; Mario is 10-12
 # wide): the goal region's margin. On a thing too narrow for it (a 16-pixel
 # step), at least NARROW_KEEP of it: Mario's middle stays on the top.
@@ -346,6 +356,18 @@ class Plan:
 
 def _overlap(a0, a1, b0, b1) -> bool:
     return a0 < b1 and b0 < a1
+
+
+def firm(outcome: "Outcome") -> bool:
+    """Whether a landing puts at least FOOTING pixels of Mario's width on
+    what he lands on (all of it, if it is narrower), a lift where it will
+    be by then."""
+    s, (x0, _, x1, _) = outcome.solid, outcome.body
+    if outcome.end != "landed" or s is None:
+        return False
+    moved = s.vx * outcome.frame
+    on = min(x1, s.x1 + moved) - max(x0, s.x0 + moved)
+    return on >= min(FOOTING, s.x1 - s.x0, x1 - x0)
 
 
 def screen_edge(camera: float) -> Solid:
@@ -974,8 +996,8 @@ def plan_jump(goal: Optional[Goal], motion: NESPlayerMotion, body: tuple, solids
               items: Sequence[Enemy] = (), dynamics=RULES, berth: float = ENEMY_MARGIN,
               safe_after: int = SAFE_AFTER) -> Optional[Plan]:
     """The plan meeting ``goal`` (None: any safe landing), robust to a seen
-    position's error (ROBUST_SHIFT) if any is, with the most margin (then
-    the soonest);
+    position's error (ROBUST_SHIFT) if any is, then firm (FOOTING) if any
+    is, with the most margin (then the soonest);
     None when no takeoff and hold (nor walking on) does: the goal is
     infeasible from here. ``latest_takeoff``: no plan taking off later
     (frames of running) than this; walking on without jumping is a plan that
@@ -1021,7 +1043,7 @@ def plan_jump(goal: Optional[Goal], motion: NESPlayerMotion, body: tuple, solids
                          stompable, horizon, False, steer, steer_direction, safe_after, item_paths, float(berth))
         robust = again[0] == _LANDED and (
             goal is None or _meets(goal, _outcome(again, solids, enemies, items), enemies) is not None)
-        key = (robust, margin, -outcome.frame)
+        key = (robust, firm(outcome), margin, -outcome.frame)
         if best is None or key > best[0]:
             best = (key, Plan(pre_run, hold, direction, outcome, margin,
                               buttons_of(pre_run, hold, after, outcome.frame + 1, steer, steer_direction)))
@@ -1066,7 +1088,9 @@ def plan_flight(goal: Optional[Goal], motion: NESPlayerMotion, body: tuple, soli
     button steering ``direction``, if it still meets ``goal`` (None: any
     safe landing); else the correction meeting it with the most margin: the
     button released sooner (or held as long as the jump allows, while it is
-    still held) and STEERS frames released or braking first. Failing all,
+    still held) and STEERS frames released or braking first; a firm
+    landing (FOOTING) before one that is not, the jump as planned among the
+    ones that are not. Failing all,
     the safe landing nearest ``aim`` (the planned landing's middle); with no
     safe landing, the one nearest ``aim`` that no enemy reaches within
     LAST_RESORT_SAFE frames (time to jump again on landing: better than a
@@ -1082,7 +1106,7 @@ def plan_flight(goal: Optional[Goal], motion: NESPlayerMotion, body: tuple, soli
     tries = [(hold_left, 0, 0)] + [(h, 0, 0) for h in holds if h != hold_left] + [
         (h, steer, d) for h in holds for steer in STEERS for d in (0, -direction)
     ]
-    best, fallback = None, None
+    best, best_key, fallback = None, None, None
     for hold, steer, d in tries:
         raw = _rollout(m, x, y, x1, y1, 0, hold, direction, packed_solids, paths, stompable, HORIZON,
                        True, steer, d, safe_after, item_paths, float(berth))
@@ -1093,12 +1117,14 @@ def plan_flight(goal: Optional[Goal], motion: NESPlayerMotion, body: tuple, soli
                     buttons_of(0, hold, direction, outcome.frame + 1, steer, d))
         margin = 0.0 if goal is None else _meets(goal, outcome, enemies)
         if margin is not None:
-            if (hold, steer) == (hold_left, 0):
-                plan.margin = margin
+            plan.margin = margin
+            as_planned = (hold, steer) == (hold_left, 0)
+            if as_planned and firm(outcome):
                 return plan  # the jump as planned still does
-            if best is None or (margin, -outcome.frame) > (best.margin, -best.outcome.frame):
-                plan.margin = margin
-                best = plan
+            # (a firm correction before the plan as it is, landing less firmly)
+            key = (firm(outcome), as_planned, margin, -outcome.frame)
+            if best is None or key > best_key:
+                best, best_key = plan, key
         near = -abs((outcome.body[0] + outcome.body[2]) / 2 - aim)
         if fallback is None or near > fallback[0]:
             fallback = (near, plan)

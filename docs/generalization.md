@@ -932,6 +932,58 @@ screen than with exact positions: a level is about 35 obstacles in a row,
 and what vision gets wrong now is rarer but still enough to end most
 plays somewhere.
 
+## What ends plays in Block SMB itself (2026-11-16)
+
+Since the corrections to vision, an obstacle tried from the screen fails
+about as often as with exact positions; what is left is in choosing and
+controlling, and those are worked on in Block SMB only (requirements.md,
+section 3). The widened network (`outcome_widened_20261113`) finished 134
+of 200 plays of the exam's 100 fresh random levels (both modes) and died in
+65. What killed Mario (`scripts/dev/block_smb_deaths.py`): pits 24, Hammer
+Bros and their hammers 13, fire bars, lava, Spinies, Bullet Bills and the
+rest fewer each; in 44 of the 65 deaths the network had given the fatal
+choice less than a 5% chance of death.
+
+**The jump planner against Block SMB.** Every jump in those plays, the
+plan in force as Mario left the ground against what then happened
+(`scripts/dev/jump_check.py`): of 5,832 jumps, 91.5% landed where planned,
+4.1% elsewhere on the planned solid (some by a correction in the air as an
+enemy moved), 3.1% on another solid, and 37 (0.6%) died where a landing had
+been planned; at about 29 jumps a level, those alone end one level in six.
+The landings planned with only a pixel or three of Mario's 12-pixel width on
+the solid failed to happen as planned 37% of the time (2.4% with all of him
+on it): a pixel of drift in the air, a wall's corner, a lift. The planner
+now prefers a **firm** landing, with at least 4 pixels of him on the solid
+(all of a narrower one), at takeoff and among its corrections in the air
+(planner.FOOTING).
+
+**A one-tile pit, as the game has it.** Runs ended in pits too: Mario ran
+at a one-tile pit, dipped a pixel over it, met the far ledge's side and was
+stopped by it as by a wall, and fell. Measured in the game (World 1-1 with
+one column of its floor blocks cleared in the game's memory,
+`scripts/dev/gap_rule.py`): walking or running, Mario crosses a one-tile pit;
+the game sets him on top of a block he meets with his feet up to 3 pixels
+below its top, and stops him at 4; stopped over the pit, he falls in; a
+two-tile pit he falls into. Block SMB stopped him at any overlap, the
+planner at 3 pixels. Both now follow the game (sim/env.py STEP_UP, for
+blocks; lifts, the game's objects, were not measured so and keep their
+sides; planner.WALL_DEPTH).
+
+With the same network, unchanged:
+
+| Fresh Block SMB levels (200 plays) | Before | Firm landings | And the game's step onto a ledge |
+|---|---|---|---|
+| Finished | 134 | 141 | 144 |
+| Died | 65 | 59 | 56 |
+| ... in a pit | 24 | 22 | 13 |
+| Jumps dying where a landing was planned | 37 | 33 | 32 |
+
+Two causes seen and not yet dealt with: a lift coming down onto a rising
+Mario pushes him aside in Block SMB (13 pixels, off the jump), which the
+planner does not foresee; and a Paratroopa stomped out of the air falls
+faster than the planner's straight-line guess, which planned a second
+bounce off it that never came.
+
 ## Tried and not kept, 2026-11-11
 
 Measured with exact positions, against 0.97 on the tuned levels and 0.77

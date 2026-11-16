@@ -155,8 +155,11 @@ frames (2.4 minutes) a game. What it chose: the paddle's top edge for most
 returns (18 of 24), the bottom edge or the part above it where the top
 edge could not reach, and a rest at the middle while the ball goes away.
 
-No practice point was ever lost: the controller always meets the ball, so
-the network has never seen a death, and its chance of death is untrained.
+Its chance of death has next to nothing to learn from, and needs nothing:
+of the 27,665 choices sampled in the three rounds, 18 lost the point, all
+in one practice point where the ball could not be reached at all and every
+candidate lost alike. In Pong as the controller plays it, no choice ever
+decides whether a point is lost.
 
 ## Seeing
 
@@ -240,11 +243,6 @@ With a stand-in for the network that sees exactly what the screen allows
 
 ## Next
 
-1. Practice points that can be lost: situations from the game's own
-   ranges where a return cannot be made in time (a steep ball close to our
-   side, which the practice worlds now leave out), so that the network
-   learns its chance of death; in the practice worlds as they are, nothing
-   it chooses ever loses.
-2. A third domain, or back to Super Mario Bros with what Pong showed: a
+1. A third domain, or back to Super Mario Bros with what Pong showed: a
    controller exact in the practice world's own rules, and a tracker that
    keeps every state the screen allows rather than one guess.

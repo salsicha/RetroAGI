@@ -100,6 +100,13 @@ COIN_POINTS, MUSHROOM_POINTS = 10, 50
 MUSHROOM_SPEED = 1.0
 SMALL_W, SMALL_H, BIG_W, BIG_H = 10, 12, 12, 24
 HURT_FRAMES = 120
+# A block Mario meets with his feet at most this far below its top (pixels)
+# is not a wall: the game sets him on top of it, so he walks or runs across a
+# one-tile pit (dipping a pixel over it) and falls in only if he stops over
+# it; at 4 he is stopped and falls (measured in the game, 2026-11-16:
+# scripts/dev/gap_rule.py). Lifts are the game's objects, not blocks, and
+# not measured so: they keep their sides.
+STEP_UP = 3
 # Blocks invisible until hit (platform kind "hidden"; game memory: 2-1,
 # 3-1, 4-2, 5-1, 5-2, 6-2 and 1-4's, and the game's program): until Mario's
 # head hits one from below it is not seen, and nothing else meets it: he
@@ -958,6 +965,9 @@ class MarioScenarioEnv:
                 continue  # (what he stands on, risen into his feet: carried up below, not a wall)
             if unseen(plat):
                 continue  # (walked through)
+            if (not plat["moving"] and self.mario["vy"] >= 0
+                    and 0 < mario_rect.bottom - r.top <= STEP_UP):
+                continue  # (feet just below a block's top: set on it by the Y pass, as the game does)
             if mario_rect.colliderect(r):
                 if self.mario["vx"] > 0:
                     mario_rect.right = r.left
