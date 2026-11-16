@@ -92,6 +92,15 @@ ENEMY_KINDS = ("walker", "hopper", "plant", "flier", "thrown", "pacer", "egg", "
 FOUNTAIN_GRAVITY, FOUNTAIN_FALL = 28 / 256, 3.25
 JUMPER_GRAVITY, JUMPER_FALL, JUMPER_FEET = 15 / 256, 2.0, 3.0
 THROWN_GRAVITY, THROWN_FALL = 0.0625, 4.5
+# A thrown thing still held (a hammer over its Hammer Bro's head: it has
+# moved only as the Bro walks, never up or down, all the time it has been
+# seen) is thrown THROWN_HOLD frames after it appeared, toward Mario,
+# THROWN_SPEED pixels a frame sideways and THROWN_UP upward (the game's,
+# 116 throws: sim/env.HAMMER_HOLD, HAMMER_SPEED, HAMMER_THROW). Taken for
+# thrown already, a held hammer was foreseen falling from over the Bro's
+# head, and the one actually thrown at Mario met him in 4 of 15 deaths by
+# Hammer Bros in fresh Block SMB levels (2026-11-16).
+THROWN_HOLD, THROWN_SPEED, THROWN_UP = 14, 1.0, -2.0
 EGG_GRAVITY, EGG_FALL, EGG_FEET = 0.125, 3.25, 4.0
 LEAPER_GRAVITY = 0.0524
 HOP_SPEED, HOP_GRAVITY, HOPPER_FEET = -3.25, 0.12, 3
@@ -204,6 +213,7 @@ class Enemy:
     hub: Optional[tuple] = None
     turn: float = 0.0
     level: Optional[float] = None
+    toward: int = 1  # a held thrown thing: the way it will be thrown (toward Mario)
 
     def at(self, frame: int) -> tuple:
         if self.path is not None and frame < len(self.path):
@@ -226,13 +236,16 @@ def enemy_paths(enemies: Sequence[Enemy], solids: Sequence[Solid], frames: int) 
     at pipes and steps, and falling once it walks off what it stands on (a
     Goomba off a brick row); hopping; rising from its pipe; flying."""
     for e in enemies:
-        if e.kind == "turner":
+        if e.kind == "thrown" and held(e):
+            e.path = _held(e, frames)
+        elif e.kind == "turner":
             e.path = _turning(e, frames)
         elif e.kind == "fountain":
             e.path = _fountain(e, frames)
         elif e.kind == "flame":
             e.path = _flame(e, frames)
-    enemies = [e for e in enemies if e.kind not in ("turner", "fountain", "flame")]
+    enemies = [e for e in enemies if e.kind not in ("turner", "fountain", "flame")
+               and not (e.kind == "thrown" and held(e))]
     if not enemies:
         return
     boxes = np.array([e.box for e in enemies], np.float64)
@@ -242,6 +255,40 @@ def enemy_paths(enemies: Sequence[Enemy], solids: Sequence[Solid], frames: int) 
     paths = _paths(boxes, velocities, kinds, _solid_array([s for s in solids if s.kind != "edge"]), frames)
     for e, path in zip(enemies, paths):
         e.path = path
+
+
+def aim_throws(enemies: Sequence[Enemy], body: tuple) -> None:
+    """Each held thrown thing's way (Enemy.toward): toward Mario's middle now."""
+    middle = (body[0] + body[2]) / 2
+    for e in enemies:
+        if e.kind == "thrown":
+            e.toward = 1 if middle > (e.box[0] + e.box[2]) / 2 else -1
+
+
+def held(e: Enemy) -> bool:
+    """Whether a thrown thing is still held (THROWN_HOLD): seen a while, and
+    neither moving up or down nor ever having moved so."""
+    track = e.track
+    return (e.vy == 0.0 and track is not None and len(track) >= 2
+            and max(p[1] for p in track) - min(p[1] for p in track) < 0.5)
+
+
+def _held(e: Enemy, frames: int) -> np.ndarray:
+    """A held thing's boxes for ``frames`` frames from now: moving as it
+    does until THROWN_HOLD frames from its first sighting, then thrown
+    toward Mario (Enemy.toward) under THROWN_GRAVITY."""
+    hold = max(0, THROWN_HOLD - len(e.track))
+    dx, dy = np.zeros(frames + 1), np.zeros(frames + 1)
+    x, y, vy = 0.0, 0.0, THROWN_UP
+    for k in range(1, frames + 1):
+        if k <= hold:
+            x += e.vx
+        else:  # (thrown at THROWN_UP, gravity added each frame before it moves, as in the game)
+            vy = min(vy + THROWN_GRAVITY, THROWN_FALL)
+            x += THROWN_SPEED * e.toward
+            y += vy
+        dx[k], dy[k] = x, y
+    return np.asarray(e.box, np.float64)[None, :] + np.stack([dx, dy, dx, dy], axis=1)
 
 
 def _fountain(e: Enemy, frames: int) -> np.ndarray:
@@ -1008,6 +1055,7 @@ def plan_jump(goal: Optional[Goal], motion: NESPlayerMotion, body: tuple, solids
     spring = standing_spring(body, solids)
     horizon = HORIZON if spring is None else SPRING_HORIZON
     frames = horizon + safe_after + 1
+    aim_throws(enemies, body)
     dynamics.paths(enemies, solids, frames)
     paths, stompable = _packed(enemies, frames)
     item_paths = _item_paths(items, solids, frames, dynamics)
@@ -1097,6 +1145,7 @@ def plan_flight(goal: Optional[Goal], motion: NESPlayerMotion, body: tuple, soli
     plan known to hit); None when nothing lands even so. ``berth`` and
     ``safe_after`` as in rollout."""
     frames = HORIZON + safe_after + 1
+    aim_throws(enemies, body)
     dynamics.paths(enemies, solids, frames)
     paths, stompable = _packed(enemies, frames)
     item_paths = _item_paths(items, solids, frames, dynamics)

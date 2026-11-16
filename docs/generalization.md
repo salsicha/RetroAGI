@@ -978,6 +978,19 @@ With the same network, unchanged:
 | ... in a pit | 24 | 22 | 13 |
 | Jumps dying where a landing was planned | 37 | 33 | 32 |
 
+**Hammers still held.** Of the 15 deaths by Hammer Bros, 6 were hammers,
+and 4 of those had been in sight when the fatal jump was chosen, most still
+held over the Bro's head: the planner took a held hammer for one already
+thrown and foresaw it falling from there. It now tells a held one by what
+is seen (it has moved only with the Bro, never up or down) and foresees it
+kept there until the game's 14 frames of hold are up, then thrown toward
+Mario (planner.held): 32 of 36 held hammers in Hammer Bro scenes are then
+foreseen to the pixel for 60 frames. It changes little by itself (144
+levels finished; Hammer Bro scenes 169 of 200 passed against 171): most of
+those deaths are Mario touching the Bro himself, as it jumps up to a ledge
+he stands on or as a run starts beside it, and when a Bro will next jump is
+not seen.
+
 Two causes seen and not yet dealt with: a lift coming down onto a rising
 Mario pushes him aside in Block SMB (13 pixels, off the jump), which the
 planner does not foresee; and a Paratroopa stomped out of the air falls
