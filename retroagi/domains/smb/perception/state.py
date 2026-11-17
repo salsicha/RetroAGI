@@ -193,7 +193,7 @@ def perceived(feedback, scene, items: Optional[ItemTracker] = None) -> Optional[
             kind, vx = "egg", (EGG_WALK if (world[0] + world[2]) / 2 < (body[0] + body[2]) / 2 else -EGG_WALK)
         stompable = (kind in ("walker", "hopper") and t.type != SPINY_TYPE) or t.type in (BULLET_TYPE, LAKITU_TYPE)
         enemies.append(Enemy(world, vx, vy, ("enemies", t.identity), stompable=stompable, kind=kind,
-                             track=t.places(world[0], world[1]), type=t.type))
+                             track=t.places(world[0], world[1]), type=t.type, throws=t.type == HAMMER_BRO_TYPE))
     # Nothing solid lies inside Mario's own drawn box: at the screen's left
     # edge, parts of his cut-off sprite read as a 3-pixel pipe.
     drawn = (box[0] + camera, box[1], box[2] + camera, box[3])

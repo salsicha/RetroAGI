@@ -487,3 +487,26 @@ def test_a_jump_whose_buttons_are_done_lets_go_once_mario_is_down():
     assert controller.press(air) == 1  # (still in the air: steering on to the right)
     assert controller.press(down) == 0 and controller.event is None  # (down a frame: let go)
     assert controller.press(air) == 0  # (slid off: still let go)
+
+
+def test_a_hammer_bros_next_hammer_is_foreseen_from_its_last():
+    from retroagi.domains.smb.planner import THROWN_EVERY, THROWN_HOLD, THROWN_OVER, coming_throws
+
+    bro = Enemy((200.0, 184.0, 208.0, 208.0), 0.0, 0.0, ("enemies", 0), kind="walker", throws=True)
+    # Its last hammer was first seen over its head 20 frames ago, thrown since.
+    track = tuple((201.0 + k, 150.0 + k) for k in range(21))
+    hammer = Enemy((221.0, 170.0, 229.0, 178.0), 1.0, 1.0, ("enemies", 1), kind="thrown", track=track)
+    enemies = [bro, hammer]
+    enemy_paths(enemies, [FLOOR], 120)
+    (coming, later) = coming_throws(enemies, 120)
+    first = THROWN_EVERY - 20
+    assert coming.path[first - 1][0] < -1000  # (not there before it appears)
+    middle = (coming.path[first][0] + coming.path[first][2]) / 2
+    assert middle == 204.0 and (coming.path[first][1] + coming.path[first][3]) / 2 == 184.0 - THROWN_OVER
+    assert coming.path[first + THROWN_HOLD][0] == coming.path[first][0]  # (held over its head)
+    assert coming.path[first + THROWN_HOLD + 10][0] > coming.path[first][0]  # (then thrown toward Mario)
+    assert later.path[first + THROWN_EVERY][0] > -1000 > later.path[first + THROWN_EVERY - 1][0]
+    # None of its throws in sight: one is held over its head all the while.
+    enemy_paths([bro], [FLOOR], 120)
+    (always,) = coming_throws([bro], 120)
+    assert all((b[0] + b[2]) / 2 == 204.0 for b in always.path)

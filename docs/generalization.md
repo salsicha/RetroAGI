@@ -1143,6 +1143,20 @@ not at all as he rises off it, as the game throws him straight up
 (583 finished against 588, 56 deaths in pits against 57); it is kept as a
 correction of Block SMB to the game.
 
+**Hammers not yet thrown.** Hammer Bros and their hammers became the next
+killer (51 of the 800 plays). Of the deaths by hammers during a jump, nearly
+all were by a hammer that did not exist when the jump was chosen: it
+appeared over the Bro's head as Mario jumped over or onto it and met him
+while still held, 6 to 15 frames old. A Hammer Bro throws on a beat (one
+every 49 frames, measured in the game), so the planner now foresees each
+one's next hammers from the last one seen of it (its age is how long it has
+been in sight), held over its head as the Bro moves and then thrown toward
+Mario; one with none of its hammers in sight keeps one over its head all
+the while, as a hammer may appear any frame (planner.coming_throws; a
+Hammer Bro is told by the state, Block SMB's record or vision's type). The
+800 plays: 584 finished against 583, deaths by hammers 25 against 30; the
+Hammer Bro scenes: 187 of 200 passed against 182.
+
 Tried and not kept: a run that asks whether Mario could still stop short of
 a pit after this frame's press, not as if released now (a run chosen again
 each frame pressed on a frame and braked the next, and slid off a ledge):

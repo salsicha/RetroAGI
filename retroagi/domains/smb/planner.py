@@ -110,6 +110,17 @@ THROWN_GRAVITY, THROWN_FALL = 0.0625, 4.5
 # head, and the one actually thrown at Mario met him in 4 of 15 deaths by
 # Hammer Bros in fresh Block SMB levels (2026-11-16).
 THROWN_HOLD, THROWN_SPEED, THROWN_UP = 14, 1.0, -2.0
+# A thrower (Enemy.throws: a Hammer Bro) throws its next THROWN_EVERY frames
+# after its last, held with its middle THROWN_OVER above the thrower's top,
+# then thrown as above (the game's, sim/env.HAMMER_FRAMES and HAMMER_OVER;
+# the longer wait once in eight throws aside). Foreseen from the last one
+# seen (its age: its track's length), as the thrower moves; with none of
+# its own seen, one may appear any frame: one is held over its head all the
+# while (coming_throws). Not foreseen, a hammer appearing over a Hammer
+# Bro's head as Mario jumped over or onto it killed him in most deaths by
+# hammers in fresh Block SMB levels (2026-11-17). A thrown thing is a
+# thrower's when first seen within THROWER_NEAR of its middle.
+THROWN_EVERY, THROWN_OVER, THROWER_NEAR, THROWN_SIDE = 49, 5, 10, 8  # (THROWN_SIDE: a hammer's box, sim/env.HAMMER_W)
 EGG_GRAVITY, EGG_FALL, EGG_FEET = 0.125, 3.25, 4.0
 LEAPER_GRAVITY = 0.0524
 HOP_SPEED, HOP_GRAVITY, HOPPER_FEET = -3.25, 0.12, 3
@@ -208,7 +219,8 @@ class Enemy:
     kept), and ``type``, what the state source calls it (any label: things
     of one type are taken to move alike). A turner goes round ``hub`` (x,
     y) at ``turn`` radians a frame (clockwise on the screen positive); a
-    flame goes up or down until its box's top is at ``level``."""
+    flame goes up or down until its box's top is at ``level``. One that
+    ``throws`` (a Hammer Bro) throws thrown things (coming_throws)."""
 
     box: tuple
     vx: float
@@ -223,6 +235,7 @@ class Enemy:
     turn: float = 0.0
     level: Optional[float] = None
     toward: int = 1  # a held thrown thing: the way it will be thrown (toward Mario)
+    throws: bool = False
 
     def at(self, frame: int) -> tuple:
         if self.path is not None and frame < len(self.path):
@@ -298,6 +311,56 @@ def _held(e: Enemy, frames: int) -> np.ndarray:
             y += vy
         dx[k], dy[k] = x, y
     return np.asarray(e.box, np.float64)[None, :] + np.stack([dx, dy, dx, dy], axis=1)
+
+
+def coming_throws(enemies: Sequence[Enemy], frames: int) -> list:
+    """The thrown things each thrower (Enemy.throws) will throw within
+    ``frames`` frames (THROWN_EVERY after the last it was seen to throw),
+    as enemies on their paths (their boxes far off before they appear):
+    held over the thrower's head as it moves (its path), then thrown
+    toward Mario (Enemy.toward of its last throw) under THROWN_GRAVITY.
+    A thrower none of whose throws is in sight holds one all the while."""
+    last = {k: (None, None) for k, e in enumerate(enemies) if e.throws}  # -> (age of its latest throw, that thing)
+    for t in enemies:
+        if t.kind != "thrown" or not t.track:
+            continue
+        first_x = (t.box[0] + t.box[2]) / 2 + t.track[0][0] - t.track[-1][0]  # (its middle when first seen)
+        near = [(abs((e.box[0] + e.box[2]) / 2 - first_x), k) for k, e in enumerate(enemies)
+                if e.throws and abs((e.box[0] + e.box[2]) / 2 - first_x) <= THROWER_NEAR]
+        if near:
+            k = min(near)[1]
+            age = len(t.track) - 1
+            if last[k][0] is None or age < last[k][0]:
+                last[k] = (age, t)
+    coming = []
+    for k, (age, t) in last.items():
+        thrower = enemies[k]
+        path = np.asarray(thrower.path if thrower.path is not None else _straight(thrower, frames), np.float64)
+        path = np.concatenate([path, np.repeat(path[-1:], max(0, frames + 1 - len(path)), axis=0)])[:frames + 1]
+        if t is None:  # (none of its throws in sight: one held over its head all the while)
+            middle, top = (path[:, 0] + path[:, 2]) / 2, path[:, 1] - THROWN_OVER
+            boxes = np.stack([middle - THROWN_SIDE / 2, top - THROWN_SIDE / 2, middle + THROWN_SIDE / 2,
+                              top + THROWN_SIDE / 2], axis=1)
+            coming.append(Enemy(boxes[0], 0.0, 0.0, ("coming", len(coming)), stompable=False, path=boxes,
+                                kind="thrown"))
+            continue
+        half_w, half_h = (t.box[2] - t.box[0]) / 2, (t.box[3] - t.box[1]) / 2
+        start = max(0, THROWN_EVERY - age)
+        while start <= frames:
+            boxes = np.full((frames + 1, 4), -10_000.0)
+            x = y = vy = 0.0
+            for f in range(start, frames + 1):
+                if f <= start + THROWN_HOLD:
+                    x, y = (path[f, 0] + path[f, 2]) / 2, path[f, 1] - THROWN_OVER
+                    vy = THROWN_UP
+                else:
+                    vy = min(vy + THROWN_GRAVITY, THROWN_FALL)
+                    x, y = x + THROWN_SPEED * t.toward, y + vy
+                boxes[f] = (x - half_w, y - half_h, x + half_w, y + half_h)
+            coming.append(Enemy(boxes[start], 0.0, 0.0, ("coming", len(coming)), stompable=False, path=boxes,
+                                kind="thrown"))
+            start += THROWN_EVERY
+    return coming
 
 
 def _fountain(e: Enemy, frames: int) -> np.ndarray:
@@ -1106,6 +1169,7 @@ def plan_jump(goal: Optional[Goal], motion: NESPlayerMotion, body: tuple, solids
     frames = horizon + safe_after + 1
     aim_throws(enemies, body)
     dynamics.paths(enemies, solids, frames)
+    enemies = list(enemies) + coming_throws(enemies, frames)
     paths, stompable = _packed(enemies, frames)
     item_paths = _item_paths(items, solids, frames, dynamics)
     m, packed_solids = _motion_array(motion), _solid_paths(solids, horizon)
@@ -1196,6 +1260,7 @@ def plan_flight(goal: Optional[Goal], motion: NESPlayerMotion, body: tuple, soli
     frames = HORIZON + safe_after + 1
     aim_throws(enemies, body)
     dynamics.paths(enemies, solids, frames)
+    enemies = list(enemies) + coming_throws(enemies, frames)
     paths, stompable = _packed(enemies, frames)
     item_paths = _item_paths(items, solids, frames, dynamics)
     m, packed_solids = _motion_array(motion), _solid_paths(solids, HORIZON)

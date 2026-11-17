@@ -188,7 +188,7 @@ class SimSource:
             level = e["level"] + FLAME_BOX[1] if kind == "flame" else None
             enemies.append(Enemy(box, vx, vy, ("enemies", k),
                                  stompable=bool(e.get("stompable", True)), kind=kind, track=e.get("track") or None,
-                                 type=kind, level=level))
+                                 type=kind, level=level, throws=e.get("kind") == "hammer_bro"))
         items = [Enemy((i["x"], i["y"], i["x"] + i["w"], i["y"] + i["h"]), i["vx"], i["vy"], ("items", k),
                        stompable=False, track=i.get("track") or None, type="item")
                  for k, i in enumerate(env.items) if in_sight(env, i)]
