@@ -62,21 +62,23 @@ not of the present one.
 
 Three numbers, on the held-out levels (`scripts/dev/scorecard.py FOLDER`):
 
-| | First contact | After the second round | Learned from Block SMB alone, round 2 | A working agent |
+| | First contact | After the second round | Learned in Block SMB alone (2026-11-17) | A working agent |
 |---|---|---|---|---|
-| Whole levels finished from the screen alone | 0 of 32 plays | 0 of 32 | 1 of 32 | most |
-| Tries at an obstacle that fail, from the screen alone | 47% | 41% | 34% | about 2% |
-| The same with exact positions in place of seeing | 35% | 24% | 35% | about 2% |
+| Whole levels finished from the screen alone | 0 of 32 plays | 0 of 32 | 4 of 32 | most |
+| Tries at an obstacle that fail, from the screen alone | 47% | 41% | 30% | about 2% |
+| The same with exact positions in place of seeing | 35% | 24% | 18% | about 2% |
 
 (The first two columns are of policies changed by hand while watching real
 levels, which the rule below forbids and which were put back. The third is
-of the present policy: its deciding network learned in Block SMB alone.)
+of the present policy: its deciding network learned in Block SMB alone,
+`outcome_corrected_20261116`.)
 
 A level has about 35 obstacles, so half its plays finish only when about 2%
 of tries at an obstacle fail (0.98 to the 35th is a half), and 9 in 10 at
-about 0.3%. The agent now passes 2.4 obstacles between failures from the
-screen and 4.2 with exact positions; it needs about 50. World 1-1, one of
-the two levels it was built on, it finishes from the screen in every play.
+about 0.3%. The agent now passes 3.4 obstacles between failures from the
+screen and 5.6 with exact positions; it needs about 50. World 1-1, one of
+the two levels it was built on, it finishes from the screen in 7 of its 8
+plays.
 
 "With exact positions" (elsewhere here: "from game memory") is a measuring
 device, not the agent: the positions of Mario, the enemies and the ground
@@ -1020,6 +1022,68 @@ the planner now follow (sim/env.py and planner.py LIFT_*). With both, the
 same 400 plays finish 284 (286 with the first alone: no change beyond what
 a different course through a level gives); the network learned with the
 old lifts.
+
+## Learned again in the corrected Block SMB (2026-11-17)
+
+The deciding network learned from nothing again (`scripts/learn_in_block_smb.sh
+corrected_20261116`, three rounds, 7.8 hours) in Block SMB with the firm
+landings, the game's step onto a ledge and held hammers above, but not yet
+the falling and the lifts, which came while it ran. The network is kept as
+`data/outcome/outcome_corrected_20261116.pt`. The exam after each round
+(100 fresh random levels, both modes, and 4,200 skill scenes):
+
+| Round | Fresh levels finished (of 200) | Skill scenes passed | The widened run's round |
+|---|---|---|---|
+| 1 | 114 | 96.9% | 114 |
+| 2 | 142 | 98.2% | 133 |
+| 3 | 142 | 97.6% | 134 (144 with the corrected controller) |
+
+Both networks played with the present code: in Block SMB, 400 plays of 200
+fresh levels (`scripts/dev/block_smb_deaths.py`, first seeds 100000 and
+100100), and on the real game (score only), every bench in both ways to
+play and every level whole, from four starts in each of the two modes:
+
+| | The widened network | Learned again |
+|---|---|---|
+| Fresh Block SMB levels finished (of 400 plays) | 284 | 291 |
+| ... died in a pit | 32 | 38 |
+| ... by Hammer Bros and their hammers | 23 | 26 |
+| ... in lava or by fire bars | 22 | 16 |
+| Held-out real levels: tries at an obstacle that fail, exact positions | 26% | 18% |
+| ... from the screen | 27% | 30% |
+| Held-out real levels finished, exact positions (of 32) | 10 | 2 |
+| ... from the screen | 2 | 4 |
+| World 1-1 finished (of 8), exact positions / from the screen | 8 / 7 | 8 / 7 |
+| All eight scored levels finished (of 64), exact positions / from the screen | 27 / 9 | 16 / 12 |
+
+Per level (share of tries at an obstacle that fail, and whole plays
+finished of 8; W the widened network, A the one learned again):
+
+| Level | Exact positions, W | A | From the screen, W | A | Whole, exact, W | A | Whole, screen, W | A |
+|---|---|---|---|---|---|---|---|---|
+| 1-1 | 2% | 5% | 6% | 8% | 8 | 8 | 7 | 7 |
+| 5-1 | 3% | 4% | 29% | 31% | 2 | 6 | 0 | 1 |
+| 2-1 | 16% | 40% | 35% | 35% | 7 | 0 | 0 | 0 |
+| 3-1 | 29% | 31% | 42% | 44% | 0 | 0 | 0 | 0 |
+| 4-1 | 15% | 15% | 36% | 18% | 3 | 2 | 2 | 2 |
+| 6-1 | 50% | 28% | 32% | 48% | 5 | 0 | 0 | 2 |
+| 7-1 | 32% | 28% | 37% | 34% | 2 | 0 | 0 | 0 |
+| 8-1 | 13% | 6% | 12% | 24% | 0 | 0 | 0 | 0 |
+
+Learning again in the corrected Block SMB made no clear difference. In
+Block SMB it finishes 7 more plays of 400, about what a different course
+through the levels gives. On the real game the two differ level by level
+in both directions. A whole play is deterministic and the four starts
+differ by a few frames only, so each level's eight whole plays are close
+to two samples, one for each mode: one change of course swings a level
+from 7 of 8 to 0. The benches, which try each obstacle from its own
+start, are the finer measure. With exact positions the network learned
+again fails 18% of its tries on the held-out levels, against 26%; from
+the screen it fails 30%, against 27%. What seeing costs it is that
+difference, largest on 6-1 and 8-1, and is worked on with seeing's own
+data. Its deaths in Block SMB are those of before: pits first, then Hammer
+Bros, and in 73 of its 108 deaths the network had given the fatal choice
+less than a 5% chance of death.
 
 ## Tried and not kept, 2026-11-11
 
