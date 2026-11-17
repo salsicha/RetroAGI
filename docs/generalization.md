@@ -1018,7 +1018,8 @@ memory, `scripts/dev/lift_contact.py`): rising into its underside, he falls
 from where he is, neither pushed down nor aside, his run kept; falling, he
 is set on it only with his feet at most 4 pixels into its top, and passes
 through it deeper; met from beside, it stops him as a wall. Block SMB and
-the planner now follow (sim/env.py and planner.py LIFT_*). With both, the
+the planner now follow (sim/env.py and planner.py LIFT_*; met from beside near its top, as measured
+afterwards: below). With both, the
 same 400 plays finish 284 (286 with the first alone: no change beyond what
 a different course through a level gives); the network learned with the
 old lifts.
@@ -1084,6 +1085,46 @@ difference, largest on 6-1 and 8-1, and is worked on with seeing's own
 data. Its deaths in Block SMB are those of before: pits first, then Hammer
 Bros, and in 73 of its 108 deaths the network had given the fatal choice
 less than a 5% chance of death.
+
+### Pits, traced again (2026-11-17)
+
+Pits were still the first killer of the network learned again (38 of 109
+deaths in the 400 plays). Two causes were found by replaying them, both
+where the planner and what Mario then did came apart.
+
+**Lifts and ledges met from beside.** Jumping up to a balance lift, Mario
+reached its side still rising with his feet 2 pixels below its top; Block
+SMB stopped him there and he fell past it into the pit, while the plan had
+him land on it. Measured in the game (World 1-3's lift, Mario run right into
+its side at every depth and vertical speed, `scripts/dev/lift_contact.py
+--side`), by where his feet are after the frame's moves of Mario and lift:
+from 1 pixel above its top to 4 into it, falling or level, he is set on it;
+rising with them there or deeper, or falling with them deeper than 4, his
+run is stopped; higher, he passes clear. Block SMB stopped him at any depth
+(wrong when falling); the planner let him through whenever his feet were
+within 3 pixels of the top (wrong when rising), and when falling let him
+through a lift's side, or a block's within its 3-pixel step, and on down to
+the floor under it. Both now follow the game, and from the same standing
+starts the planner foresees every jump at a raised block or lift where
+Block SMB lands him (`scripts/tests/test_lifts.py`). The same 400 plays:
+295 finished against 291, 32 deaths in pits against 38.
+
+**Letting go once down.** An in-flight correction kept Mario clear of a
+piranha plant rising out of the pipe he was to land on by landing him on
+its last pixel; the planner allowed it because, buttons released, he would
+slide off onto the ground beside it. The controller instead kept pressing
+on, as it does after a plan's last button until it has seen him stand two
+frames, and carried him over that ground into a pit. Now, once Mario has
+been down on something after the plan's buttons are done, it lets go, as
+the planner foresees. Over 800 plays (the 400 and another 400 from first
+seed 100200) it finishes 571 against 567, 72 deaths in pits against 77: no
+clear difference, kept because the controller now does what the planner
+expects of it.
+
+Tried and not kept: a run that asks whether Mario could still stop short of
+a pit after this frame's press, not as if released now (a run chosen again
+each frame pressed on a frame and braked the next, and slid off a ledge):
+574 of the 800 finished, but 90 deaths in pits against 72.
 
 ## Tried and not kept, 2026-11-11
 

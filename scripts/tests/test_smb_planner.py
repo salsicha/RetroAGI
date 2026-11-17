@@ -452,3 +452,26 @@ def test_a_jump_lands_only_after_mario_is_seen_in_the_air():
     for _ in range(takeoff + 4):
         controller.press(standing)
     assert controller.event is None
+
+
+def test_a_jump_whose_buttons_are_done_lets_go_once_mario_is_down():
+    # Past the plan's last button Mario steers on toward its landing while
+    # he is still in the air; once down on something, even for a frame (a
+    # landing on a pipe's last pixel, sliding off it), the buttons are
+    # released, as the planner foresees him sliding on.
+    start = State(body=STANDING, motion=NESPlayerMotion(), grounded=True, solids=[FLOOR], enemies=[])
+    controller = Controller()
+    controller.start(Choice("jump", Goal("land", FLOOR.ref, 150, 200, side=1)), start)
+    plan = controller.plan
+    assert plan is not None
+    controller._check_flight = lambda state, plan, step: (plan, step)  # (no corrections: the plan as it is)
+    air = State(body=(160.0, 150.0, 172.0, 166.0), motion=start.motion, grounded=False, solids=[FLOOR], enemies=[])
+    down = State(body=(160.0, 192.0, 172.0, 208.0), motion=start.motion, grounded=True, solids=[FLOOR], enemies=[])
+    for _ in range(plan.pre_run + 1):
+        controller.press(start)
+    while controller.frame - controller.plan_frame < len(controller.plan.buttons):  # (its buttons played out)
+        controller.press(air)
+    assert controller.event is None
+    assert controller.press(air) == 1  # (still in the air: steering on to the right)
+    assert controller.press(down) == 0 and controller.event is None  # (down a frame: let go)
+    assert controller.press(air) == 0  # (slid off: still let go)

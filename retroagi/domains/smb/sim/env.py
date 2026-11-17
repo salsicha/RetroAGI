@@ -115,8 +115,12 @@ STEP_UP = 3
 # bottom, and with up to LIFT_BUMP pixels of it there he falls from where
 # he is, at LIFT_DROP pixels a frame (no push down, nor aside); deeper he
 # passes through. Met from beside (not under or over it the frame before),
-# it stops him as a wall.
-LIFT_LAND, LIFT_REACH, LIFT_BUMP, LIFT_DROP = 4, 5, 4, 1
+# with his feet after the frame's moves from LIFT_TOUCH above its top (its
+# box in the game reaches a pixel over what is drawn) down: falling or level
+# he is set on it as from above, with his feet at most LIFT_LAND into it;
+# rising, or deeper, it stops him as a wall (2026-11-17: scripts/dev/
+# lift_contact.py, run right into it at every depth and vertical speed).
+LIFT_LAND, LIFT_REACH, LIFT_BUMP, LIFT_DROP, LIFT_TOUCH = 4, 5, 4, 1, 1
 # Blocks invisible until hit (platform kind "hidden"; game memory: 2-1,
 # 3-1, 4-2, 5-1, 5-2, 6-2 and 1-4's, and the game's program): until Mario's
 # head hits one from below it is not seen, and nothing else meets it: he
@@ -982,6 +986,11 @@ class MarioScenarioEnv:
                 old_left, lift_left = mario_rect.left - dx, r.left - plat.get("delta_x", 0)
                 if old_left < lift_left + r.width and lift_left < old_left + mario_rect.width:
                     continue  # (under or over it already: met by his feet or his head, the Y pass)
+                depth = self.mario["y"] + dy + self.mario["h"] - r.top  # (his feet into it, after the moves)
+                if depth < -LIFT_TOUCH or self.mario["y"] + dy >= r.bottom:
+                    continue  # (clear of it)
+                if self.mario["vy"] >= 0 and depth <= LIFT_LAND:
+                    continue  # (falling or level: set on it by the Y pass, as the game does)
             if mario_rect.colliderect(r):
                 if self.mario["vx"] > 0:
                     mario_rect.right = r.left
@@ -1031,7 +1040,7 @@ class MarioScenarioEnv:
             if plat["moving"] and plat.get("lift") != "spring":  # (a lift; a springboard is met as a block)
                 if not horizontal_overlap:
                     continue
-                if self.mario["vy"] >= 0 and (landed_on_top or 0 <= current_bottom - r.top <= LIFT_LAND):
+                if self.mario["vy"] >= 0 and (landed_on_top or -LIFT_TOUCH <= current_bottom - r.top <= LIFT_LAND):
                     mario_rect.bottom = r.top
                     self.mario.update(y=mario_rect.y, vy=0, on_ground=True)
                     if self.mario["_platform"] is None or self.mario["_platform"].get("lift") != "spring":

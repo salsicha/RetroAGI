@@ -14,10 +14,17 @@ Measured 2026-11-16: rising into its underside he falls from where he is
 above its top after a slow rise, 21 after a fast one, not at 28 or 26; met
 from beside, it stops his run as a wall; falling into it, he is set on it
 with his feet up to 4 pixels into its top, and passes through it deeper.
-Block SMB follows (sim/env.py LIFT_*).
+Measured 2026-11-17, run right into its side at every depth and vertical
+speed (``--side``): with his feet, after the frame's moves of Mario and
+lift, from 1 pixel above its top to 4 into it, falling or level, he is set
+on it; rising with them there or deeper, or falling with them deeper than
+4, his run is stopped; higher, he passes clear. Block SMB follows (sim/env.py
+LIFT_*), and the planner foresees the same.
 
-    python scripts/dev/lift_contact.py
+    python scripts/dev/lift_contact.py [--side]
 """
+
+import sys
 
 import numpy as np
 
@@ -95,8 +102,25 @@ def trial(state: bytes, dx: int, dy: int, y_speed: int, x_speed: int, buttons=()
     return rows
 
 
+def side(state: bytes) -> None:
+    """Mario run right into the lift's side, a pixel short of it, with his
+    feet ``d`` below its top and vertical speed ``vy``: how it meets him, by
+    where his feet are after the frame's moves (the lift's included)."""
+    for vy in (-3, -2, -1, 0, 1, 2, 3):
+        ends = []
+        for d in range(-3, 9):
+            rows = trial(state, dx=-13, dy=-32 + d, y_speed=vy, x_speed=24, buttons=("RIGHT",), frames=1)
+            x, y, y_speed, x_speed = rows[0]
+            end = "stopped" if x_speed == 0 else "on" if y == -32 and y_speed == 0 else "clear"
+            ends.append(f"{y + 32:+d} {end}")
+        print(f"vertical speed {vy:+d}: " + ", ".join(ends))
+
+
 def main() -> int:
     state = at_lift()
+    if "--side" in sys.argv:
+        side(state)
+        return 0
     tries = {"rising slowly under it": dict(dx=16, dy=30, y_speed=-4, x_speed=0),
              "rising fast under it": dict(dx=16, dy=40, y_speed=-5, x_speed=0),
              "rising under its left end, running right": dict(dx=-8, dy=30, y_speed=-4, x_speed=16, buttons=("RIGHT",)),

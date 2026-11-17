@@ -123,11 +123,84 @@ def test_lifts_meet_mario_as_the_games_do():
         for _ in range(4):
             world.step(0)
         assert mario["on_ground"] == on
-    # Run into from beside, it stops him as a wall.
-    world, lift, mario = _put("updown", 40, -14, 6, 0, 24)
+    # Run into from beside well below its top, it stops him as a wall.
+    world, lift, mario = _put("updown", 40, -14, 12, 0, 24)
     for _ in range(8):
         world.step(1)
     assert mario["x"] + mario["w"] <= lift["rect"].x and world.env.motion.x_speed < 24
     # The planner foresees the same.
-    assert (planner.LIFT_REACH, planner.LIFT_BUMP, planner.LIFT_DROP) == (block.LIFT_REACH, block.LIFT_BUMP,
-                                                                          block.LIFT_DROP)
+    assert ((planner.LIFT_LAND, planner.LIFT_REACH, planner.LIFT_BUMP, planner.LIFT_DROP, planner.LIFT_TOUCH)
+            == (block.LIFT_LAND, block.LIFT_REACH, block.LIFT_BUMP, block.LIFT_DROP, block.LIFT_TOUCH))
+
+
+def test_a_lift_met_from_beside_sets_mario_on_it_or_stops_him_as_the_games_do():
+    # Measured in 1-3's memory (scripts/dev/lift_contact.py), Mario run right
+    # into the lift's side at every depth and vertical speed: with his feet
+    # after the frame's moves from a pixel above its top to 4 into it, falling
+    # or level, he is set on it; rising with them there or below, or falling
+    # deeper, his run is stopped; above that he passes clear.
+    seen = set()
+    for y_speed in (-3, -2, -1, 0, 1, 2, 3):
+        for feet in range(-3, 10):
+            world, lift, mario = _put("updown", 40, -10, feet, y_speed, 24)
+            alone, _, _ = _put("updown", 40, -10, feet, y_speed, 24)  # (without the lift: where his feet go)
+            alone.env.platforms, alone.env.platform_kinds = alone.env.platforms[:1], alone.env.platform_kinds[:1]
+            before = mario["y"] + mario["h"]
+            world.step(1)
+            alone.step(1)
+            depth = alone.env.mario["y"] + alone.env.mario["h"] - lift["rect"].top
+            rising = alone.env.mario["vy"] < 0
+            on = mario["on_ground"] and mario["y"] + mario["h"] == lift["rect"].top
+            stopped = mario["x"] + mario["w"] <= lift["rect"].x and world.env.motion.x_speed == 0
+            if depth < -block.LIFT_TOUCH:
+                expected = "clear"
+            elif not rising and depth <= block.LIFT_LAND:
+                expected = "on"
+            elif before > lift["rect"].top:
+                expected = "stopped"
+            else:
+                continue  # (his feet crossing its top this frame: met from above)
+            got = "on" if on else "stopped" if stopped else "clear"
+            assert got == expected, (y_speed, feet, round(depth, 2), rising, got)
+            seen.add(expected)
+    assert seen == {"on", "stopped", "clear"}
+
+
+def test_the_planner_meets_a_lift_or_a_ledge_from_beside_as_block_smb_does():
+    # Mario jumps right at a raised ledge from every start and run-up and for
+    # every hold of the button; where the planner says he lands (on the
+    # ledge or the floor under it, and his x) is where Block SMB lands him.
+    from retroagi.domains.smb.domain import DOMAIN
+
+    def ledge_scene(lift, x, rise):
+        top = FLOOR - rise
+        ledge = ({"x": 200, "y": top, "w": 48, "h": block.LIFT_H, "lift": "balance", "partner": 1} if lift
+                 else [200, top, 48, 8])
+        platforms, kinds = [[0, FLOOR, 1200, 32], ledge], ["ground", None if lift else "ground"]
+        if lift:  # (its partner far away: a pair at rest)
+            platforms.append({"x": 1000, "y": top, "w": 48, "h": block.LIFT_H, "lift": "balance", "partner": -1})
+            kinds.append(None)
+        return {"world_width": 1200, "scroll_x": 115, "mario": [x, FLOOR - 12], "frame_budget": 600,
+                "platforms": platforms, "platform_kinds": kinds, "enemies": [], "task": {"family": "game_level"}}
+
+    checked = 0
+    for lift in (False, True):
+        for rise in (20, 32):
+            for x in range(130, 180, 4):
+                for pre, hold in ((0, 12), (0, 20), (6, 8), (6, 16), (12, 12)):
+                    world = SimWorld(ledge_scene(lift, x, rise))
+                    world.reset()
+                    world.step(0)
+                    state = DOMAIN.truth_source().read(world)
+                    plan = rollout(state.motion, state.body, pre, hold, 1, state.solids, [])
+                    mario, flown = world.env.mario, False
+                    for button in planner.buttons_of(pre, hold, 1, 120):
+                        world.step(button)
+                        flown = flown or not mario["on_ground"]
+                        if flown and mario["on_ground"]:
+                            break
+                    assert plan.end == "landed" and mario["on_ground"]
+                    assert (plan.solid.top < FLOOR - 1) == (mario["y"] + mario["h"] < FLOOR - 1), (lift, rise, x, pre, hold)
+                    assert abs(plan.body[0] - mario["x"]) <= 1, (lift, rise, x, pre, hold)
+                    checked += plan.solid.top < FLOOR - 1
+    assert checked > 20

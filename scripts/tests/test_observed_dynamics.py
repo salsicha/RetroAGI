@@ -164,16 +164,19 @@ def test_the_simulator_gives_each_thing_its_track_and_puts_it_back_with_a_saved_
     from retroagi.domains.smb.domain import DOMAIN
     from retroagi.framework.agent import Agent
 
-    world = DOMAIN.practice(100003)
-    world.reset()
-    source = DOMAIN.truth_source()
-    agent = Agent(source, DOMAIN.behaviour, DOMAIN.controller, DOMAIN.idle)
-    agent.reset(0, "speed_run")
     enemy = None
-    for _ in range(1500):  # (played until an enemy has been in sight a while)
-        state = source.read(world)
-        enemy = next((e for e in state.enemies if len(e.track or ()) >= 8), None)
-        if enemy is not None or world.step(agent.step(state)).over:
+    for seed in range(100003, 100013):  # (a level played until an enemy has been in sight a while)
+        world = DOMAIN.practice(seed)
+        world.reset()
+        source = DOMAIN.truth_source()
+        agent = Agent(source, DOMAIN.behaviour, DOMAIN.controller, DOMAIN.idle)
+        agent.reset(0, "speed_run")
+        for _ in range(1500):
+            state = source.read(world)
+            enemy = next((e for e in state.enemies if len(e.track or ()) >= 8), None)
+            if enemy is not None or world.step(agent.step(state)).over:
+                break
+        if enemy is not None:
             break
     assert enemy is not None and enemy.track[-1] == (enemy.box[0], enemy.box[1]) and enemy.type is not None
     saved = world.snapshot()

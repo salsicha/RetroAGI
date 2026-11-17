@@ -62,10 +62,11 @@ ENEMY_MARGIN = 2
 FEET_BELOW = 4
 # A lift meets a rising Mario's head LIFT_REACH pixels below its drawn bottom;
 # with up to LIFT_BUMP pixels of it there he falls from where he is at
-# LIFT_DROP pixels a frame; met from beside (not under or over it before),
-# it is a wall; under or over it, not (the game's, as Block SMB has them:
-# sim/env.py LIFT_*).
-LIFT_REACH, LIFT_BUMP, LIFT_DROP = 5, 4, 1
+# LIFT_DROP pixels a frame. Falling or level, he is set on it with his feet
+# from LIFT_TOUCH above its top to LIFT_LAND into it, whether he comes from
+# above or from beside; met from beside rising, or deeper, it is a wall
+# (the game's, as Block SMB has them: sim/env.py LIFT_*).
+LIFT_LAND, LIFT_REACH, LIFT_BUMP, LIFT_DROP, LIFT_TOUCH = 4, 5, 4, 1, 1
 FEET_ABOVE = 4  # a Hammer Bro's feet over its box's bottom (sim/env.py HAMMER_BRO_FEET)
 AIRBORNE = -99.0  # (a walker's offset to its feet while it is in the air)
 ENEMY_GRAVITY = 0.2
@@ -563,22 +564,30 @@ def _advance(m, direction, jump, grounded, y, run):
 
 
 @njit(cache=True)
-def _blocked(x, start, width, top, feet, solids):
+def _blocked(x, start, width, top, feet, solids, dy=0.0, rising=False):
     """Whether a body moved from ``start`` to ``x`` goes deeper into a solid's
     side (a wall, not a ledge it stands on); one already overlapping a wall
     may move out (Mario pressed against a pipe overlaps it by a few pixels:
     the game tests walls at points inside his box; taken for blocked every
     way, he stood by 5-1's tall pipe until the time ran out). A lift (a
-    sixth column of 1) is a wall only to a body coming from beside it: one
-    under or over it already passes."""
+    sixth column of 1) is a wall only to a body coming from beside it (one
+    under or over it already passes), as it moves ``dy`` this frame:
+    ``rising`` (its speed upward after the move) with its feet from
+    LIFT_TOUCH above the lift's top down, or falling or level with them
+    deeper than LIFT_LAND (between, it is set on the lift)."""
     for i in range(solids.shape[0]):
-        if x < solids[i, 2] and solids[i, 0] < x + width and feet > solids[i, 1] + WALL_DEPTH and top < solids[i, 3]:
-            now = min(x + width, solids[i, 2]) - max(x, solids[i, 0])
-            before = min(start + width, solids[i, 2]) - max(start, solids[i, 0])
-            if solids.shape[1] > 5 and solids[i, 5] > 0 and before > 0:
-                continue
-            if now > before:
+        if not (x < solids[i, 2] and solids[i, 0] < x + width):
+            continue
+        now = min(x + width, solids[i, 2]) - max(x, solids[i, 0])
+        before = min(start + width, solids[i, 2]) - max(start, solids[i, 0])
+        if solids.shape[1] > 5 and solids[i, 5] > 0:
+            depth = feet + dy - solids[i, 1]
+            if (before <= 0 and feet > solids[i, 1] and depth >= -LIFT_TOUCH and top + dy < solids[i, 3]
+                    and (rising or depth > LIFT_LAND) and now > before):  # (feet crossing its top: a landing)
                 return True
+            continue
+        if feet > solids[i, 1] + WALL_DEPTH and top < solids[i, 3] and now > before:
+            return True
     return False
 
 
@@ -870,7 +879,7 @@ def _rollout(m0, x, y, x1, y1, pre_run, hold, direction, solid_paths, paths, sto
         airborne = airborne or jumped
         nx = x + dx
         feet = y + height
-        if _blocked(nx, x, width, y, feet, solids):
+        if _blocked(nx, x, width, y, feet, solids, dy if airborne else 0.0, airborne and m[3] + m[4] / 256 < 0):
             nx = x  # a wall: no sideways motion, as the game stops it
             m[0] = 0
             m[1] = 0
@@ -913,8 +922,14 @@ def _rollout(m0, x, y, x1, y1, pre_run, hold, direction, solid_paths, paths, sto
                         break
             else:
                 for i in range(after.shape[0]):
+                    # (his feet crossing its top; or met with them just into
+                    # it: a block's up to WALL_DEPTH before the move, a
+                    # lift's LIFT_TOUCH above to LIFT_LAND into it after)
+                    step = WALL_DEPTH if after[i, 5] == 0 else 0.0
                     if (nx < after[i, 2] and after[i, 0] < nx + width
-                            and min(feet, feet + solids[i, 1] - after[i, 1]) <= after[i, 1] <= ny + height):
+                            and (min(feet, feet + solids[i, 1] - after[i, 1]) - step <= after[i, 1] <= ny + height
+                                 or (after[i, 5] > 0
+                                     and -LIFT_TOUCH <= ny + height - after[i, 1] <= LIFT_LAND))):
                         top = after[i, 1]
                         got = _touch(nx, top - height, nx + width, top, items, frame, got)
                         threat = _reached(nx, top - height, nx + width, top, m, paths, down, frame, safe_after,

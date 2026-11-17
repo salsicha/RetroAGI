@@ -224,6 +224,7 @@ class Controller:
         self.choice, self.plan, self.frame, self.event = choice, None, 0, None
         self.stood = 0  # frames in a row Mario has stood
         self.flown = False  # Mario seen in the air since the jump took off
+        self.touched = False  # and seen on something since
         if choice.verb == "jump":
             self._plan(state)
 
@@ -289,6 +290,7 @@ class Controller:
         # standing frames counted on, and a jump across a 5-1 pit "landed"
         # at its top (a hop never seen in the air ends by PLAN_SLACK).
         self.flown = self.flown or (taken_off and not state.grounded)
+        self.touched = self.touched or (self.flown and state.grounded)
         if taken_off and self.flown and self.stood >= LANDING_FRAMES and step > plan.pre_run + 1:
             # Landed (or stomped and landed): the choice is done, whatever
             # buttons the plan had left.
@@ -300,6 +302,12 @@ class Controller:
                 return 0
             if step >= len(plan.buttons) + PLAN_SLACK:
                 self.event = "landed"
+                return 0
+            if self.touched:
+                # Down on something, the plan's buttons done: released, as
+                # the planner foresees him sliding on (planner._reached).
+                # Steering on, Mario landed on a pipe's last pixel slid off
+                # it past the ground beside it and into a pit.
                 return 0
             return BUTTON[plan.direction, False]
         return plan.buttons[step]
