@@ -227,10 +227,13 @@ def test_a_walker_falls_off_a_ledge_and_walks_off_the_screen():
     assert goomba.at(4)[3] == 76.0  # still on the row
     assert goomba.at(120)[3] == 204.0  # on the floor
     assert goomba.at(240)[0] < 40.0  # walked on past the edge
-    # One already in the air keeps its own motion.
-    flying = Enemy((200.0, 100.0, 210.0, 106.0), -0.5, 0.0, ("slots", 1))
-    enemy_paths([flying], [FLOOR], 20)
-    assert flying.at(20)[1] == 100.0
+    # One already in the air (a Paratroopa stomped out of the air) falls as
+    # the game's do, 0.2 faster each frame up to 3.4 (sim/env.py
+    # ENEMY_GRAVITY), and lands on the floor.
+    falling = Enemy((200.0, 100.0, 210.0, 106.0), -0.5, 0.0, ("slots", 1))
+    enemy_paths([falling], [FLOOR], 60)
+    assert abs(falling.at(20)[1] - (100.0 + 0.2 * 17 * 18 / 2 + 3 * 3.4)) < 1e-9
+    assert falling.at(60)[3] == FLOOR.top and falling.at(60)[0] == 170.0
 
 
 def test_the_planner_bumps_a_block_and_collects_an_item():

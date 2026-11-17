@@ -5,6 +5,7 @@ shows a lift's speed; that the planner keeps a lift moving and carries
 Mario on it; and that the ledges' gaps hold lifts."""
 
 from retroagi.domains.smb.physics import NESPlayerMotion
+from retroagi.domains.smb import planner
 from retroagi.domains.smb.planner import Solid, rollout
 from retroagi.domains.smb.sim import env as block
 from retroagi.domains.smb.sim.levels import FLOOR, skill_scene
@@ -86,3 +87,47 @@ def test_the_state_shows_a_lift_moving_and_the_planner_carries_mario_on_it():
 def test_ledges_gaps_hold_every_kind_of_lift():
     kinds = {p["lift"] for seed in range(80) for p in skill_scene(seed, "ledges")["platforms"] if isinstance(p, dict)}
     assert kinds == set(("across", "updown", "falls"))
+
+
+def _put(kind, phase, dx, feet, y_speed, x_speed):
+    """Mario put in the air ``dx`` from the lift's left and his feet
+    ``feet`` below its top, with those speeds (the game's units)."""
+    world = SimWorld(scene(kind, phase=phase))
+    world.reset()
+    lift, mario, motion = lift_of(world), world.env.mario, world.env.motion
+    mario.update(x=float(lift["rect"].x + dx), y=float(lift["rect"].top + feet - mario["h"]), vy=y_speed,
+                 on_ground=False)
+    motion.y_speed, motion.y_force, motion.x_speed = y_speed, 0, x_speed
+    motion.force = motion.force_down = 0x28
+    return world, lift, mario
+
+
+def test_lifts_meet_mario_as_the_games_do():
+    # As measured in 1-3's memory (scripts/dev/lift_contact.py), the lift
+    # coming down: rising into its underside, running right under its left
+    # end, his rise stops with his feet some 21 to 24 below its top and he
+    # falls from there; he is not pushed aside, nor is his run stopped.
+    world, lift, mario = _put("updown", 40, -4, 36, -4, 16)
+    rows = []
+    for _ in range(12):
+        world.step(1)  # (right)
+        rows.append((mario["x"] - lift["rect"].x, mario["y"] + mario["h"] - lift["rect"].top, mario["vy"]))
+    stop = next(i for i, r in enumerate(rows) if r[2] > 0)
+    assert 20 <= rows[stop][1] <= 25 and rows[stop - 1][1] > 25
+    assert all(b[0] > a[0] for a, b in zip(rows, rows[1:]))  # (on to the right all the while)
+    assert world.env.motion.x_speed > 16
+    # Falling into it: set on it with his feet up to 4 pixels into its top;
+    # deeper, through it.
+    for feet, on in ((-1, True), (1, True), (4, False)):
+        world, lift, mario = _put("updown", 40, 16, feet, 3, 0)
+        for _ in range(4):
+            world.step(0)
+        assert mario["on_ground"] == on
+    # Run into from beside, it stops him as a wall.
+    world, lift, mario = _put("updown", 40, -14, 6, 0, 24)
+    for _ in range(8):
+        world.step(1)
+    assert mario["x"] + mario["w"] <= lift["rect"].x and world.env.motion.x_speed < 24
+    # The planner foresees the same.
+    assert (planner.LIFT_REACH, planner.LIFT_BUMP, planner.LIFT_DROP) == (block.LIFT_REACH, block.LIFT_BUMP,
+                                                                          block.LIFT_DROP)

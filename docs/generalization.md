@@ -996,11 +996,30 @@ unchanged), World 1-1's four starts in each of the two modes finish in 8 of
 8 plays with exact positions (6 of 8 before) and in 5 of 8 from the screen
 (4 of 8 before).
 
-Two causes seen and not yet dealt with: a lift coming down onto a rising
-Mario pushes him aside in Block SMB (13 pixels, off the jump), which the
-planner does not foresee; and a Paratroopa stomped out of the air falls
-faster than the planner's straight-line guess, which planned a second
-bounce off it that never came.
+**Things falling through the air.** The planner kept a walker already in
+the air (a Paratroopa stomped out of the air, a Goomba, a Koopa or a Spiny
+falling, a Hammer Bro jumping) at the speed it was falling at, and planned a
+second bounce off a stomped Paratroopa that never came. It now lets one fall
+as the game's do, faster each frame to the same limit as Block SMB, onto
+the first top under it (planner.enemy_paths). Measured against Block SMB in
+25 fresh levels, the place it foresees for a falling Goomba, Koopa or Spiny
+16 frames on is now at the pixel at the median (12 to 16 pixels off before);
+a Hammer Bro's still drifts (7 pixels at 16 frames, 22 before: it falls a little
+faster, and when it jumps is not seen). On 400 plays of 200 fresh levels the
+network unchanged finishes 286 against 280.
+
+**Lifts, as the game has them.** A lift coming down onto a rising Mario
+pushed him aside in Block SMB (13 pixels, off the jump), and one he fell
+into from below, deeper than its top, set him on it. Measured in the game
+(World 1-3's lift going up and down, Mario put beside, under and over it in
+memory, `scripts/dev/lift_contact.py`): rising into its underside, he falls
+from where he is, neither pushed down nor aside, his run kept; falling, he
+is set on it only with his feet at most 4 pixels into its top, and passes
+through it deeper; met from beside, it stops him as a wall. Block SMB and
+the planner now follow (sim/env.py and planner.py LIFT_*). With both, the
+same 400 plays finish 284 (286 with the first alone: no change beyond what
+a different course through a level gives); the network learned with the
+old lifts.
 
 ## Tried and not kept, 2026-11-11
 

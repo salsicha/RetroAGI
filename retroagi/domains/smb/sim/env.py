@@ -104,9 +104,19 @@ HURT_FRAMES = 120
 # is not a wall: the game sets him on top of it, so he walks or runs across a
 # one-tile pit (dipping a pixel over it) and falls in only if he stops over
 # it; at 4 he is stopped and falls (measured in the game, 2026-11-16:
-# scripts/dev/gap_rule.py). Lifts are the game's objects, not blocks, and
-# not measured so: they keep their sides.
+# scripts/dev/gap_rule.py). Lifts are the game's objects, not blocks: they
+# meet him by LIFT_* below.
 STEP_UP = 3
+# Lifts meet Mario as the game's do (measured in its memory, 1-3's lift
+# going up and down, Mario put beside, under and over it, 2026-11-16:
+# scripts/dev/lift_contact.py). Falling, he is set on a lift only with his
+# feet at most LIFT_LAND pixels into its top; deeper he passes through it.
+# Rising, his head meets its underside LIFT_REACH pixels below its drawn
+# bottom, and with up to LIFT_BUMP pixels of it there he falls from where
+# he is, at LIFT_DROP pixels a frame (no push down, nor aside); deeper he
+# passes through. Met from beside (not under or over it the frame before),
+# it stops him as a wall.
+LIFT_LAND, LIFT_REACH, LIFT_BUMP, LIFT_DROP = 4, 5, 4, 1
 # Blocks invisible until hit (platform kind "hidden"; game memory: 2-1,
 # 3-1, 4-2, 5-1, 5-2, 6-2 and 1-4's, and the game's program): until Mario's
 # head hits one from below it is not seen, and nothing else meets it: he
@@ -968,6 +978,10 @@ class MarioScenarioEnv:
             if (not plat["moving"] and self.mario["vy"] >= 0
                     and 0 < mario_rect.bottom - r.top <= STEP_UP):
                 continue  # (feet just below a block's top: set on it by the Y pass, as the game does)
+            if plat["moving"] and plat.get("lift") != "spring":
+                old_left, lift_left = mario_rect.left - dx, r.left - plat.get("delta_x", 0)
+                if old_left < lift_left + r.width and lift_left < old_left + mario_rect.width:
+                    continue  # (under or over it already: met by his feet or his head, the Y pass)
             if mario_rect.colliderect(r):
                 if self.mario["vx"] > 0:
                     mario_rect.right = r.left
@@ -1014,6 +1028,20 @@ class MarioScenarioEnv:
             )
             if unseen(plat) and not hit_ceiling:
                 continue  # (fallen through; met only by his head from below)
+            if plat["moving"] and plat.get("lift") != "spring":  # (a lift; a springboard is met as a block)
+                if not horizontal_overlap:
+                    continue
+                if self.mario["vy"] >= 0 and (landed_on_top or 0 <= current_bottom - r.top <= LIFT_LAND):
+                    mario_rect.bottom = r.top
+                    self.mario.update(y=mario_rect.y, vy=0, on_ground=True)
+                    if self.mario["_platform"] is None or self.mario["_platform"].get("lift") != "spring":
+                        self.mario["_platform"] = plat
+                    self.motion.vertical_contact()
+                elif self.mario["vy"] < 0 and (previous_y >= r.bottom + LIFT_REACH > self.mario["y"]
+                                               or 0 < r.bottom + LIFT_REACH - self.mario["y"] <= LIFT_BUMP):
+                    self.motion.vertical_contact()  # (he falls from where he is)
+                    self.motion.y_speed = self.mario["vy"] = LIFT_DROP
+                continue
             if mario_rect.colliderect(r) or landed_on_top or hit_ceiling:
                 if self.mario["vy"] >= 0:  # falling / level
                     mario_rect.bottom = r.top

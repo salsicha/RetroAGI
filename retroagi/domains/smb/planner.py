@@ -60,6 +60,14 @@ ENEMY_MARGIN = 2
 # under the game's rules; the 0.5 up to 4.5 written first put a falling
 # Goomba 11 pixels off on average).
 FEET_BELOW = 4
+# A lift meets a rising Mario's head LIFT_REACH pixels below its drawn bottom;
+# with up to LIFT_BUMP pixels of it there he falls from where he is at
+# LIFT_DROP pixels a frame; met from beside (not under or over it before),
+# it is a wall; under or over it, not (the game's, as Block SMB has them:
+# sim/env.py LIFT_*).
+LIFT_REACH, LIFT_BUMP, LIFT_DROP = 5, 4, 1
+FEET_ABOVE = 4  # a Hammer Bro's feet over its box's bottom (sim/env.py HAMMER_BRO_FEET)
+AIRBORNE = -99.0  # (a walker's offset to its feet while it is in the air)
 ENEMY_GRAVITY = 0.2
 ENEMY_FALL = 3.4
 # What an enemy is, for its path (enemy_paths): a walker walks and falls off
@@ -471,14 +479,17 @@ NO_SPRING = -2
 def _solid_paths(solids: Sequence[Solid], frames: int) -> np.ndarray:
     """Each solid's box every frame for ``frames`` frames from now, and the
     frame of its squash a springboard is at now (Solid.spring; NO_SPRING:
-    none) [frames + 1, solids, 5]: a lift at its velocity, the rest where
-    they are (a springboard moves only pressed down by Mario: _rollout)."""
+    none), and 1 for a lift (0 for the rest) [frames + 1, solids, 6]: a lift
+    at its velocity, the rest where they are (a springboard moves only
+    pressed down by Mario: _rollout)."""
     now = _solid_array(solids)
     speed = np.array([(0, 0, 0, 0) if s.spring is not None else (s.vx, s.vy, s.vx, s.vy) for s in solids],
                      np.float64).reshape(-1, 4)
     boxes = now[None] + np.arange(frames + 1, dtype=np.float64)[:, None, None] * speed[None]
     springs = np.array([NO_SPRING if s.spring is None else s.spring for s in solids], np.float64)
-    return np.concatenate([boxes, np.broadcast_to(springs[None, :, None], (frames + 1, len(solids), 1))], axis=2)
+    lifts = np.array([float(s.kind == "moving") for s in solids], np.float64)
+    columns = np.stack([springs, lifts], axis=1)
+    return np.concatenate([boxes, np.broadcast_to(columns[None], (frames + 1, len(solids), 2))], axis=2)
 
 
 @njit(cache=True)
@@ -557,11 +568,15 @@ def _blocked(x, start, width, top, feet, solids):
     side (a wall, not a ledge it stands on); one already overlapping a wall
     may move out (Mario pressed against a pipe overlaps it by a few pixels:
     the game tests walls at points inside his box; taken for blocked every
-    way, he stood by 5-1's tall pipe until the time ran out)."""
+    way, he stood by 5-1's tall pipe until the time ran out). A lift (a
+    sixth column of 1) is a wall only to a body coming from beside it: one
+    under or over it already passes."""
     for i in range(solids.shape[0]):
         if x < solids[i, 2] and solids[i, 0] < x + width and feet > solids[i, 1] + WALL_DEPTH and top < solids[i, 3]:
             now = min(x + width, solids[i, 2]) - max(x, solids[i, 0])
             before = min(start + width, solids[i, 2]) - max(start, solids[i, 0])
+            if solids.shape[1] > 5 and solids[i, 5] > 0 and before > 0:
+                continue
             if now > before:
                 return True
     return False
@@ -655,13 +670,15 @@ def _paths(boxes, velocities, kinds, solids, frames):
                     y0 = max(y0 - PLANT_SPEED, min(top, y0))
                 out[e, k] = (x0, y0, x1, y0 + height)
             continue
-        # A walker standing on something (its feet up to FEET_BELOW under its
-        # box) falls once it walks off it; one already in the air keeps its
-        # own motion.
-        offset = -3.0
+        # A walker standing on something (its feet from FEET_ABOVE over its
+        # box's bottom, a Hammer Bro's, to FEET_BELOW under it) falls once it
+        # walks off it; one in the air falls as the game's do (ENEMY_GRAVITY,
+        # up to ENEMY_FALL: a stomped Paratroopa, a jumping Hammer Bro) and
+        # lands on the first top its box's bottom meets on the way down.
+        offset = AIRBORNE
         for i in range(solids.shape[0]):
             if (x0 < solids[i, 2] and solids[i, 0] < x1
-                    and -2.0 <= solids[i, 1] - y1 <= FEET_BELOW + 2.0):
+                    and -FEET_ABOVE - 1.0 <= solids[i, 1] - y1 <= FEET_BELOW + 2.0):
                 offset = solids[i, 1] - y1
                 vy = 0.0
                 break
@@ -697,7 +714,18 @@ def _paths(boxes, velocities, kinds, solids, frames):
                 x0, x1, y0, y1 = nx0, nx1, y0 + dy, y1 + dy
                 out[e, k] = (x0, y0, x1, y1)
                 continue
-            if offset >= -2.0 and _floor_under(nx0, nx1, y1 + offset, solids) < 0:
+            if offset == AIRBORNE:
+                vy = min(vy + ENEMY_GRAVITY, ENEMY_FALL)
+                dy = vy
+                if vy > 0:
+                    for i in range(solids.shape[0]):
+                        if nx0 < solids[i, 2] and solids[i, 0] < nx1 and y1 <= solids[i, 1] <= y1 + vy:
+                            dy, vy, offset = solids[i, 1] - y1, 0.0, 0.0
+                            break
+                x0, x1, y0, y1 = nx0, nx1, y0 + dy, y1 + dy
+                out[e, k] = (x0, y0, x1, y1)
+                continue
+            if _floor_under(nx0, nx1, y1 + offset, solids) < 0:
                 vy = min(vy + ENEMY_GRAVITY, ENEMY_FALL)
                 feet, landed = y1 + offset + vy, -1.0
                 for i in range(solids.shape[0]):
@@ -708,10 +736,8 @@ def _paths(boxes, velocities, kinds, solids, frames):
                 dy = vy if landed < 0 else landed - (y1 + offset)
                 if landed >= 0:
                     vy = 0.0
-            elif offset >= -2.0:
-                dy = 0.0
             else:
-                dy = vy
+                dy = 0.0
             x0, x1, y0, y1 = nx0, nx1, y0 + dy, y1 + dy
             out[e, k] = (x0, y0, x1, y1)
     return out
@@ -870,6 +896,14 @@ def _rollout(m0, x, y, x1, y1, pre_run, hold, direction, solid_paths, paths, sto
             ny = y + dy
             if dy < 0:
                 for i in range(solids.shape[0]):
+                    if after[i, 5] > 0:  # a lift (where it is after its move this frame)
+                        reach = after[i, 3] + LIFT_REACH
+                        if (nx < after[i, 2] and after[i, 0] < nx + width
+                                and (ny < reach <= y or 0 < reach - ny <= LIFT_BUMP)):
+                            m[3] = LIFT_DROP  # (he falls from where he is)
+                            m[4] = 0
+                            break
+                        continue
                     if nx < solids[i, 2] and solids[i, 0] < nx + width and ny < solids[i, 3] <= y:
                         if bumped < 0:
                             bumped = i
