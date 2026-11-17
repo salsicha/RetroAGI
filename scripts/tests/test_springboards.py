@@ -121,3 +121,21 @@ def test_a_drop_from_a_tall_wall_with_speed_is_planned_by_letting_go():
     plan = planner.plan_jump(goal, motion, body, [wall, floor], [], 1)
     assert plan is not None and plan.outcome.solid.ref == floor.ref
     assert plan.buttons[-1] in (0, 5)  # (released before landing: nothing pressed toward it)
+
+
+def test_thrown_up_running_mario_is_not_pushed_aside():
+    # Pressing on to the right through the squash and the throw, small and
+    # big: the springboard springing back under his feet is not a wall (it
+    # pushed him back a whole width off it, and his jump then went astray).
+    for big in (False, True):
+        world = SimWorld(scene(wall=False))
+        world.reset()
+        if big:
+            world.env._resize(True)
+        dropped_on(world)
+        mario, places = world.env.mario, []
+        for _ in range(40):
+            world.step(1)
+            places.append(mario["x"])
+        assert all(b >= a for a, b in zip(places, places[1:])), (big, places)
+        assert mario["y"] + mario["h"] < REST  # (thrown up)

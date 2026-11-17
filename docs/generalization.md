@@ -1134,6 +1134,15 @@ or wider, and not a one-tile gap whose far side is at most a step above his
 feet, which he crosses as in the game) is a pit (controller.pit_ahead). Over
 the same 800 plays: 588 finished against 571, 57 deaths in pits against 72.
 
+**A springboard springing back.** Thrown up by a springboard with his run
+held, Mario was shoved a whole width back off it: the springboard snaps back
+to its rest in a frame, into his feet as he rises, and Block SMB took its
+side for a wall. It now meets a Mario already over it only by his feet, and
+not at all as he rises off it, as the game throws him straight up
+(`scripts/tests/test_springboards.py`). On the 800 plays it changes little
+(583 finished against 588, 56 deaths in pits against 57); it is kept as a
+correction of Block SMB to the game.
+
 Tried and not kept: a run that asks whether Mario could still stop short of
 a pit after this frame's press, not as if released now (a run chosen again
 each frame pressed on a frame and braked the next, and slid off a ledge):

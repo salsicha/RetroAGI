@@ -982,6 +982,8 @@ class MarioScenarioEnv:
             if (not plat["moving"] and self.mario["vy"] >= 0
                     and 0 < mario_rect.bottom - r.top <= STEP_UP):
                 continue  # (feet just below a block's top: set on it by the Y pass, as the game does)
+            if plat.get("lift") == "spring" and mario_rect.left - dx < r.right and r.left < mario_rect.right - dx:
+                continue  # (over it already, thrown up as it springs back under him: not a wall)
             if plat["moving"] and plat.get("lift") != "spring":
                 old_left, lift_left = mario_rect.left - dx, r.left - plat.get("delta_x", 0)
                 if old_left < lift_left + r.width and lift_left < old_left + mario_rect.width:
@@ -1037,6 +1039,8 @@ class MarioScenarioEnv:
             )
             if unseen(plat) and not hit_ceiling:
                 continue  # (fallen through; met only by his head from below)
+            if plat.get("lift") == "spring" and self.mario["vy"] < 0 and not hit_ceiling:
+                continue  # (rising off it as it springs back under him)
             if plat["moving"] and plat.get("lift") != "spring":  # (a lift; a springboard is met as a block)
                 if not horizontal_overlap:
                     continue
