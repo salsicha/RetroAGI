@@ -65,3 +65,21 @@ def test_the_state_shows_a_flyer_moving_and_a_stomp_leaves_a_walking_koopa_of_it
 def test_random_levels_have_flying_paratroopas():
     kinds = [e.get("kind") for seed in range(60) for e in random_level(seed)["enemies"]]
     assert kinds.count("red_paratroopa") > 0 and kinds.count("green_flyer") > 0
+
+
+def test_a_paratroopa_just_stomped_does_not_hurt_mario_still_touching_it():
+    # Measured in 1-3's memory (scripts/dev/stomp_contact.py): stomped deep,
+    # Mario bounces up still touching it a frame or two, and is not hurt.
+    for depth in (2, 4, 6):
+        world = SimWorld(scene("red_paratroopa"))
+        world.reset()
+        koopa, mario = world.env.enemies[0], world.env.mario
+        mario.update(x=koopa["x"] + 1, y=koopa["y"] + depth - mario["h"], vy=1.0, on_ground=False)
+        world.env.motion.y_speed, world.env.motion.y_force = 1, 0
+        touching, over = 0, False
+        for _ in range(4):
+            over = over or world.step(0).over
+            touching += (mario["x"] < koopa["x"] + koopa["w"] and koopa["x"] < mario["x"] + mario["w"]
+                         and mario["y"] < koopa["y"] + koopa["h"] and koopa["y"] < mario["y"] + mario["h"])
+        assert not koopa.get("wings") and mario["vy"] < 0 and not over, depth
+    assert touching  # (the deepest still touched it after the stomp)

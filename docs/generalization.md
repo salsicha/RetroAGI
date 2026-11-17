@@ -1157,6 +1157,16 @@ Hammer Bro is told by the state, Block SMB's record or vision's type). The
 800 plays: 584 finished against 583, deaths by hammers 25 against 30; the
 Hammer Bro scenes: 187 of 200 passed against 182.
 
+**A Paratroopa just stomped.** In a quarter of the deaths by Koopas, Mario
+had stomped the Koopa out of its wings the frame before: bounced up but
+still touching it, Block SMB had it hurt him. Measured in the game (World
+1-3's red Paratroopas, big Mario dropped onto one from a range of heights
+and speeds, `scripts/dev/stomp_contact.py`): stomped deep, he still touches
+it one or two frames after, and is never hurt. Block SMB now leaves a Koopa
+just stomped out of its wings harmless while he still touches it (the
+planner already took a stomped enemy for harmless). The 800 plays: 587
+finished against 584, 16 deaths by Koopas against 21.
+
 Tried and not kept: a run that asks whether Mario could still stop short of
 a pit after this frame's press, not as if released now (a run chosen again
 each frame pressed on a frame and braked the next, and slid off a ledge):

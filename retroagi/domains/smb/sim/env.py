@@ -1168,7 +1168,10 @@ class MarioScenarioEnv:
             if (self._goal_on_stomp or self._require_stomp_before_goal) and stomp_geometry is None:
                 stomp_geometry = geometry
             if not mario_rect.colliderect(er):
+                enemy.pop("stomped_touching", None)
                 continue
+            if enemy.get("stomped_touching"):
+                continue  # (still touching the one he stomped: the game does not hurt him)
             if enemy.get("kind") == "koopa" and self._touch_koopa(enemy, geometry, mario_rect, reward_terms):
                 continue  # stomped into a shell, a shell stopped or kicked: no harm
             if geometry["stomp"] and enemy.get("stompable", True):
@@ -1757,7 +1760,10 @@ class MarioScenarioEnv:
         just kicked does not hurt. False when the touch hurts him."""
         shell = enemy.get("shell")
         if geometry["stomp"] and enemy.get("wings"):
-            enemy.update(wings=False, vy=0.0)  # its wings lost: an ordinary Koopa
+            # Its wings lost: an ordinary Koopa, harmless while Mario still
+            # touches it after the stomp (game memory, 1-3's Paratroopas:
+            # scripts/dev/stomp_contact.py).
+            enemy.update(wings=False, vy=0.0, stomped_touching=True)
             self.score += 5
             reward_terms["enemy_stomp"] += self.reward_config.enemy_stomp
             self.stomped = True
