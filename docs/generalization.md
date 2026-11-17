@@ -1170,7 +1170,11 @@ finished against 584, 16 deaths by Koopas against 21.
 Tried and not kept: a run that asks whether Mario could still stop short of
 a pit after this frame's press, not as if released now (a run chosen again
 each frame pressed on a frame and braked the next, and slid off a ledge):
-574 of the 800 finished, but 90 deaths in pits against 72.
+574 of the 800 finished, but 90 deaths in pits against 72. Nor: each foreseen
+fireball's box kept wider by how far off it may be (half a step of its
+bar's turn at its distance from the hub): 593 finished against 587 and the
+fire bar scenes 190 of 200 against 186, but as many deaths by fire bars (23
+against 21), so not what kills Mario at them.
 
 ## Tried and not kept, 2026-11-11
 
