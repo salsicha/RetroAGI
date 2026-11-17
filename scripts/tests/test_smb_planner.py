@@ -414,6 +414,18 @@ def test_a_run_at_a_pipe_is_no_pit_but_one_over_a_gap_is():
     block = Solid(160, 144, 176, 160, "block", ("blocks", 0))
     gap = State(body=state.body, motion=state.motion, grounded=True, solids=[left, block, right], enemies=[])
     assert pit_ahead(gap, 1)
+    # A one-tile gap is crossed when its far side is level; before a step up
+    # it is a pit (he meets the step's side and falls in); narrower than
+    # Mario, he cannot fall in.
+    fast = NESPlayerMotion(x_speed=40, moving=1)
+    for width, far_top, pit in ((16, 208, False), (16, 192, True), (8, 192, False), (32, 208, True)):
+        far = Solid(160 + width, far_top, 600, 240, "ground", ("surfaces", 1))
+        ahead = State(body=state.body, motion=fast, grounded=True, solids=[left, far], enemies=[])
+        assert pit_ahead(ahead, 1) == pit, (width, far_top)
+        mirrored = State(body=(320 - 140, 196.0, 320 - 130, 208.0), motion=fast, grounded=True, enemies=[],
+                         solids=[Solid(320 - 160, 208, 320, 240, "ground", ("surfaces", 0)),
+                                 Solid(-280, far_top, 320 - 160 - width, 240, "ground", ("surfaces", 1))])
+        assert pit_ahead(mirrored, -1) == pit, ("left", width, far_top)
 
 
 def test_a_goomba_on_the_floor_beyond_a_pipe_is_on_the_way():

@@ -1089,8 +1089,11 @@ less than a 5% chance of death.
 ### Pits, traced again (2026-11-17)
 
 Pits were still the first killer of the network learned again (38 of 109
-deaths in the 400 plays). Two causes were found by replaying them, both
-where the planner and what Mario then did came apart.
+deaths in the 400 plays). Three causes were found by replaying them, each
+where the planner or the controller and what Mario then did came apart.
+With all three, the network unchanged finishes 588 of 800 plays (from first
+seeds 100000 and 100200) against 567 with the lifts' first correction alone,
+and 57 of them end in pits against 77.
 
 **Lifts and ledges met from beside.** Jumping up to a balance lift, Mario
 reached its side still rising with his feet 2 pixels below its top; Block
@@ -1120,6 +1123,16 @@ the planner foresees. Over 800 plays (the 400 and another 400 from first
 seed 100200) it finishes 571 against 567, 72 deaths in pits against 77: no
 clear difference, kept because the controller now does what the planner
 expects of it.
+
+**A gap before a step up.** A run ended where Mario could still stop, asked
+only of the spot where he would stop: beyond the end of the ground there was
+a one-tile gap and then a ledge 16 pixels higher, and the run took the
+ledge for a wall that would stop him, as a pipe does. He ran off the ground,
+met the ledge's side over the gap and fell in. A run now asks of the whole
+stretch to where he would stop: a gap he would fall into (as wide as he is
+or wider, and not a one-tile gap whose far side is at most a step above his
+feet, which he crosses as in the game) is a pit (controller.pit_ahead). Over
+the same 800 plays: 588 finished against 571, 57 deaths in pits against 72.
 
 Tried and not kept: a run that asks whether Mario could still stop short of
 a pit after this frame's press, not as if released now (a run chosen again

@@ -37,6 +37,7 @@ from .planner import (
     HORIZON,
     RULES,
     SAFE_AFTER,
+    WALL_DEPTH,
     Enemy,
     Goal,
     Plan,
@@ -63,6 +64,11 @@ ARRIVE = 2
 BRAKE_SPEED, EDGE_KEEP = 11, 4
 # (a solid's top this far above his feet still counts as under them)
 STAND_SLACK = 2
+# A gap in what he runs on this wide or less (one tile) is crossed walking or
+# running when its far side is at most a step (WALL_DEPTH) above his feet;
+# met at a higher side he falls in, if he is narrower than it (the game's,
+# scripts/dev/gap_rule.py).
+GAP_CROSS = 16
 # A wait ends when a coming enemy is this close (pixels) whatever else.
 TOO_CLOSE = 24
 # Frames a run may last before the chooser decides again.
@@ -179,13 +185,36 @@ def _brake(state: State) -> int:
 
 def pit_ahead(state: State, direction: int) -> bool:
     """Whether Mario, released now, would slide (EDGE_KEEP more) over a pit:
-    under his front there no solid reaching down to his feet (the floor, a
-    lower one, or a pipe or step: a wall stops him; taken for a pit, every
-    run at 1-1's first pipe stopped short of it)."""
+    on the way his front goes, a stretch with no solid reaching down to his
+    feet (the floor, a lower one, or a pipe or step: a wall stops him; taken
+    for a pit, every run at 1-1's first pipe stopped short of it) that he
+    would fall into: as wide as he is or wider, and not a gap of GAP_CROSS
+    with its far side at most a step above his feet. (Asked only where he
+    would stop, a run went on at a step up beyond a one-tile gap, taking the
+    step for a wall that stops him; he fell into the gap against it.)"""
     x0, _, x1, feet = state.body
-    front = (x1 if direction > 0 else x0) + direction * (stopping_distance(state.motion, direction) + EDGE_KEEP)
-    return not any(s.x0 <= front <= s.x1 and s.bottom >= feet - STAND_SLACK and s.kind != "edge"
-                   for s in state.solids)
+    start = x1 if direction > 0 else x0
+    end = (start + direction * (stopping_distance(state.motion, direction) + EDGE_KEEP)) * direction
+    spans = [(min(s.x0 * direction, s.x1 * direction), max(s.x0 * direction, s.x1 * direction), s.top)
+             for s in state.solids if s.bottom >= feet - STAND_SLACK and s.kind != "edge"]
+    at = start * direction  # (along the run: how far it is known to hold him)
+    while True:
+        on = [a1 for a0, a1, _ in spans if a0 <= at < a1]
+        while on:  # (on along what holds him, one solid to the next)
+            at = max(on)
+            on = [a1 for a0, a1, _ in spans if a0 <= at < a1]
+        if at >= end:
+            return False
+        beyond = [(a0, top) for a0, _, top in spans if a0 > at]
+        if not beyond:
+            return True
+        far, top = min(beyond)
+        if far > end:
+            return True  # (where he would stop, nothing under him)
+        gap = far - at
+        if gap >= x1 - x0 and (gap > GAP_CROSS or top < feet - WALL_DEPTH):
+            return True
+        at = far
 
 
 def stopping_distance(motion: NESPlayerMotion, direction: int) -> float:
