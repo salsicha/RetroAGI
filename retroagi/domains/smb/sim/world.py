@@ -15,14 +15,12 @@ import math
 from copy import copy
 
 from retroagi.domains.smb.controller import State
-from retroagi.domains.smb.planner import Enemy, Solid, screen_edge
+from retroagi.domains.smb.planner import TRACK_FRAMES, Enemy, Solid, screen_edge
 from retroagi.framework.interfaces import Step
 
 from .env import FIREBAR_STEPS, FLAME_BOX, LAVA_TOP, SPINY_SPEED, MarioScenarioEnv, unseen
 from .env_state import restore_env_state, snapshot_env_state
 
-# The places of a thing kept as its track (frames).
-TRACK_FRAMES = 32
 
 
 def in_sight(env, thing: dict) -> bool:

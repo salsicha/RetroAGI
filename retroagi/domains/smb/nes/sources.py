@@ -28,7 +28,7 @@ from retroagi.domains.smb.perception.state import (
     thrown_box,
 )
 from retroagi.domains.smb.physics import NESPlayerMotion
-from retroagi.domains.smb.planner import Enemy, floor_behind, screen_edge
+from retroagi.domains.smb.planner import TRACK_FRAMES, Enemy, floor_behind, screen_edge
 
 from .pixel_labels import (
     ENEMY_KIND_CLASSES,
@@ -48,8 +48,6 @@ LABEL_FRAMES = 16
 SPEED_FRAMES = 16
 # A slot's enemy moving more than this in a frame is another enemy.
 JUMP = 16
-# The places of an enemy kept as its track (frames).
-TRACK_FRAMES = 32
 
 
 # The planner's kind of enemy (smb_planner.ENEMY_KINDS) by the game's enemy

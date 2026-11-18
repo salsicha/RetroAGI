@@ -121,6 +121,7 @@ THROWN_GRAVITY, THROWN_FALL = 0.0625, 4.5
 # head, and the one actually thrown at Mario met him in 4 of 15 deaths by
 # Hammer Bros in fresh Block SMB levels (2026-11-16).
 THROWN_HOLD, THROWN_SPEED, THROWN_UP = 14, 1.0, -2.0
+HELD_NEAR = 24.0  # (holder: pixels at most between a held thing's middle and its holder's)
 # A thrower (Enemy.throws: a Hammer Bro) throws its next THROWN_EVERY frames
 # after its last, held with its middle THROWN_OVER above the thrower's top,
 # then thrown as above (the game's, sim/env.HAMMER_FRAMES and HAMMER_OVER;
@@ -131,6 +132,9 @@ THROWN_HOLD, THROWN_SPEED, THROWN_UP = 14, 1.0, -2.0
 # Bro's head as Mario jumped over or onto it killed him in most deaths by
 # hammers in fresh Block SMB levels (2026-11-17). A thrown thing is a
 # thrower's when first seen within THROWER_NEAR of its middle.
+# The places of a thing every state source keeps as its track (Enemy.track;
+# frames): Block SMB's, the game's memory's, vision's.
+TRACK_FRAMES = 32
 THROWN_EVERY, THROWN_OVER, THROWER_NEAR, THROWN_SIDE = 49, 5, 10, 8  # (THROWN_SIDE: a hammer's box, sim/env.HAMMER_W)
 EGG_GRAVITY, EGG_FALL, EGG_FEET = 0.125, 3.25, 4.0
 LEAPER_GRAVITY = 0.0524
@@ -267,27 +271,30 @@ def enemy_paths(enemies: Sequence[Enemy], solids: Sequence[Solid], frames: int) 
     kind (ENEMY_KINDS): moving at its velocity, turned back when it walks
     into a wall (a solid rising above its feet), as the game turns walkers
     at pipes and steps, and falling once it walks off what it stands on (a
-    Goomba off a brick row); hopping; rising from its pipe; flying."""
+    Goomba off a brick row); hopping; rising from its pipe; flying; a thing
+    still held over its thrower's head going where the thrower goes."""
+    holders = {id(e): holder(e, enemies) for e in enemies if e.kind == "thrown"}
+    is_held = {key for key, h in holders.items() if h is not None}
+    is_held |= {id(e) for e in enemies if e.kind == "thrown" and id(e) not in is_held and held(e)}
     for e in enemies:
-        if e.kind == "thrown" and held(e):
-            e.path = _held(e, frames)
-        elif e.kind == "turner":
+        if e.kind == "turner":
             e.path = _turning(e, frames)
         elif e.kind == "fountain":
             e.path = _fountain(e, frames)
         elif e.kind == "flame":
             e.path = _flame(e, frames)
-    enemies = [e for e in enemies if e.kind not in ("turner", "fountain", "flame")
-               and not (e.kind == "thrown" and held(e))]
-    if not enemies:
-        return
-    boxes = np.array([e.box for e in enemies], np.float64)
-    velocities = np.array([(e.vx, e.vy) for e in enemies], np.float64)
-    kinds = np.array([BRO if e.throws else ENEMY_KINDS.index(e.kind) for e in enemies], np.int64)
-    # (the screen's edge stops Mario only: walkers walk off the screen)
-    paths = _paths(boxes, velocities, kinds, _solid_array([s for s in solids if s.kind != "edge"]), frames)
-    for e, path in zip(enemies, paths):
-        e.path = path
+    moving = [e for e in enemies if e.kind not in ("turner", "fountain", "flame") and id(e) not in is_held]
+    if moving:
+        boxes = np.array([e.box for e in moving], np.float64)
+        velocities = np.array([(e.vx, e.vy) for e in moving], np.float64)
+        kinds = np.array([BRO if e.throws else ENEMY_KINDS.index(e.kind) for e in moving], np.int64)
+        # (the screen's edge stops Mario only: walkers walk off the screen)
+        paths = _paths(boxes, velocities, kinds, _solid_array([s for s in solids if s.kind != "edge"]), frames)
+        for e, path in zip(moving, paths):
+            e.path = path
+    for e in enemies:
+        if id(e) in is_held:
+            e.path = _held(e, frames, holders.get(id(e)))
 
 
 def aim_throws(enemies: Sequence[Enemy], body: tuple) -> None:
@@ -299,29 +306,69 @@ def aim_throws(enemies: Sequence[Enemy], body: tuple) -> None:
 
 
 def held(e: Enemy) -> bool:
-    """Whether a thrown thing is still held (THROWN_HOLD): seen a while, and
-    neither moving up or down nor ever having moved so."""
+    """Whether a thrown thing is still held (THROWN_HOLD), its thrower not
+    seen (holder): seen a while, and neither moving up or down nor ever
+    having moved so."""
     track = e.track
     return (e.vy == 0.0 and track is not None and len(track) >= 2
             and max(p[1] for p in track) - min(p[1] for p in track) < 0.5)
 
 
-def _held(e: Enemy, frames: int) -> np.ndarray:
-    """A held thing's boxes for ``frames`` frames from now: moving as it
-    does until THROWN_HOLD frames from its first sighting, then thrown
-    toward Mario (Enemy.toward) under THROWN_GRAVITY."""
-    hold = max(0, THROWN_HOLD - len(e.track))
-    dx, dy = np.zeros(frames + 1), np.zeros(frames + 1)
-    x, y, vy = 0.0, 0.0, THROWN_UP
+def holder(e: Enemy, enemies: Sequence[Enemy]) -> Optional[Enemy]:
+    """The thing holding the thrown thing ``e``, if one is: a thrower
+    (Enemy.throws, a Hammer Bro) or a jumper (Bowser) within HELD_NEAR of it
+    whose last moves it has made exactly (a held thing goes where its holder
+    goes), the nearest; ``e`` not yet seen longer than a hold lasts. Told
+    only by its never moving up or down (held), a hammer over Bowser jumping
+    was taken for thrown already and foreseen falling, 56 pixels below where
+    it went."""
+    track = e.track or ()
+    if len(track) > THROWN_HOLD + 2:  # (Bowser holds one a frame longer than a Hammer Bro)
+        return None
+    mx, my = (e.box[0] + e.box[2]) / 2, (e.box[1] + e.box[3]) / 2
+    best = None
+    for t in enemies:
+        if not (t.throws or t.kind == "jumper"):
+            continue
+        apart = max(abs((t.box[0] + t.box[2]) / 2 - mx), abs((t.box[1] + t.box[3]) / 2 - my))
+        if apart > HELD_NEAR:
+            continue
+        theirs = t.track or ()
+        n = min(len(track), len(theirs)) - 1
+        if any(abs((track[-k][0] - track[-k - 1][0]) - (theirs[-k][0] - theirs[-k - 1][0])) > 0.5
+               or abs((track[-k][1] - track[-k - 1][1]) - (theirs[-k][1] - theirs[-k - 1][1])) > 0.5
+               for k in range(1, n + 1)):
+            continue
+        if best is None or apart < best[0]:
+            best = (apart, t)
+    return None if best is None else best[1]
+
+
+def _held(e: Enemy, frames: int, by: Optional[Enemy] = None) -> np.ndarray:
+    """A held thing's boxes for ``frames`` frames from now: over the head of
+    its thrower ``by`` as it goes (its path), or moving as it does when its
+    thrower is not seen, until THROWN_HOLD frames from its first sighting,
+    then thrown toward Mario (Enemy.toward) under THROWN_GRAVITY."""
+    hold = max(0, THROWN_HOLD - len(e.track or ()))
+    half_w, half_h = (e.box[2] - e.box[0]) / 2, (e.box[3] - e.box[1]) / 2
+    x, y = (e.box[0] + e.box[2]) / 2, (e.box[1] + e.box[3]) / 2
+    path = by.path if by is not None and by.path is not None else None
+    out = np.empty((frames + 1, 4))
+    out[0] = e.box
+    vy = THROWN_UP
     for k in range(1, frames + 1):
         if k <= hold:
-            x += e.vx
+            if path is not None:  # (where its holder goes, as far from it as now)
+                b = path[min(k, len(path) - 1)]
+                x, y = (e.box[0] + e.box[2]) / 2 + b[0] - path[0][0], (e.box[1] + e.box[3]) / 2 + b[1] - path[0][1]
+            else:
+                x += e.vx
         else:  # (thrown at THROWN_UP, gravity added each frame before it moves, as in the game)
             vy = min(vy + THROWN_GRAVITY, THROWN_FALL)
             x += THROWN_SPEED * e.toward
             y += vy
-        dx[k], dy[k] = x, y
-    return np.asarray(e.box, np.float64)[None, :] + np.stack([dx, dy, dx, dy], axis=1)
+        out[k] = (x - half_w, y - half_h, x + half_w, y + half_h)
+    return out
 
 
 def coming_throws(enemies: Sequence[Enemy], frames: int) -> list:
@@ -330,10 +377,13 @@ def coming_throws(enemies: Sequence[Enemy], frames: int) -> list:
     as enemies on their paths (their boxes far off before they appear):
     held over the thrower's head as it moves (its path), then thrown
     toward Mario (Enemy.toward of its last throw) under THROWN_GRAVITY.
-    A thrower none of whose throws is in sight holds one all the while."""
+    A thrower none of whose throws is in sight holds one all the while. A
+    thrown thing seen as long as tracks are kept (TRACK_FRAMES) tells neither its age nor its thrower: it counts as none
+    (taken for 31 frames old, a hammer 47 frames old put the next throw 16
+    frames late, and Mario jumped into it)."""
     last = {k: (None, None) for k, e in enumerate(enemies) if e.throws}  # -> (age of its latest throw, that thing)
     for t in enemies:
-        if t.kind != "thrown" or not t.track:
+        if t.kind != "thrown" or not t.track or len(t.track) >= TRACK_FRAMES:
             continue
         first_x = (t.box[0] + t.box[2]) / 2 + t.track[0][0] - t.track[-1][0]  # (its middle when first seen)
         near = [(abs((e.box[0] + e.box[2]) / 2 - first_x), k) for k, e in enumerate(enemies)

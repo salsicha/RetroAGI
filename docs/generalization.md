@@ -1293,6 +1293,32 @@ What is left, by what the deaths show:
 - **Choices rated safe that are not**: caught between two Spinies, each
   run toward one was given under 4%.
 
+Hammers, traced with the kept network (2026-11-18). Of its deaths by
+hammers, a third were by one not yet thrown when the choice was made, and
+others by one held when it was made. Two errors of foresight were behind
+them:
+
+- **A hammer's age past what tracks keep.** The planner tells when a
+  Hammer Bro throws next from the age of its last hammer, the time it has
+  been in sight; every source keeps a thing's places 32 frames
+  (planner.TRACK_FRAMES, now one value for all), so a hammer 47 frames old
+  read as 31, and the next throw was foreseen 16 frames late. A thrown
+  thing seen that long now tells neither its age nor its thrower, and a
+  Bro with no hammer of known age in sight holds one over its head all the
+  while.
+- **A hammer still held.** One counted as held only if it had never moved
+  up or down, so a hammer over Bowser jumping, or over a Hammer Bro
+  jumping, was taken for thrown and foreseen falling, 56 pixels below where
+  it went. A held thing is now told by its holder: a Hammer Bro or Bowser
+  near it whose last moves it has made exactly; it is foreseen going where
+  its holder goes until thrown (planner.holder). Over every hammer held by a
+  Bro jumping between floors its foreseen height is now Block SMB's exactly
+  (`scripts/tests/test_hammer_bros.py`; when a standing Bro will jump is not
+  known).
+
+The 800 plays with the kept network: 621 finished against 618, 21 deaths by
+hammers against 29.
+
 ## Tried and not kept, 2026-11-11
 
 Measured with exact positions, against 0.97 on the tuned levels and 0.77

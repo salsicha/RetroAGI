@@ -9,6 +9,8 @@ misses it.
 from dataclasses import dataclass, field
 from typing import Callable, Optional
 
+from ..planner import TRACK_FRAMES
+
 
 def translated(box, dx=0, dy=0):
     return (box[0] + dx, box[1] + dy, box[2] + dx, box[3] + dy)
@@ -24,8 +26,8 @@ def translated(box, dx=0, dy=0):
 # 16 sightings 3). A reversal starts the mean again.
 ESTIMATE_SAMPLES = 16
 # A track's moves kept for a model identified from what is seen (frames;
-# turns included, unlike the samples the velocity is averaged over).
-TRACK_FRAMES = 32
+# turns included, unlike the samples the velocity is averaged over): as long
+# as every state source keeps a thing's track (planner.TRACK_FRAMES).
 # A track not seen in a frame (vision missed it, or it crossed another) is
 # kept this many frames, moved by its velocity, and found again near there
 # with its identity and velocity.

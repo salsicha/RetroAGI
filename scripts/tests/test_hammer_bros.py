@@ -4,7 +4,7 @@ state shows them, how the planner predicts a hammer, and the generator's
 piece of them."""
 
 from retroagi.domains.smb.perception.state import hammer_bro_box, thrown_box
-from retroagi.domains.smb.planner import Enemy, Solid, enemy_paths
+from retroagi.domains.smb.planner import Enemy, Solid, aim_throws, enemy_paths
 from retroagi.domains.smb.sim import env as block
 from retroagi.domains.smb.sim.levels import (
     FLOOR,
@@ -174,3 +174,34 @@ def test_the_generator_has_a_piece_of_hammer_bros():
         assert 1 <= len(bros) <= 2 and rows == {LOW_ROW, HIGH_ROW}
         assert {b["y"] + 14 for b in bros} <= {FLOOR, LOW_ROW}
     assert any(e.get("kind") == "hammer_bro" for seed in range(40) for e in random_level(seed)["enemies"])
+
+
+def test_a_held_hammer_is_foreseen_going_where_its_hammer_bro_goes():
+    # A Hammer Bro jumping between floors while it holds a hammer carries it
+    # up or down; the planner foresees the hammer over its head, then thrown.
+    # (When a standing Bro will jump is not known: a jump starting after the
+    # forecast is not judged.)
+    world = SimWorld(scene([(200, FLOOR, 30, 3)]))
+    world.reset()
+    source, env = SimSource(), world.env
+    bro = bro_of(world)
+    checks, worst, flying = [], [0.0, 0.0], 0
+    for frame in range(700):
+        state = source.read(world)
+        held = [e for e in state.enemies if e.kind == "thrown" and env.enemies[e.ref[1]].get("held", 0) > 0]
+        if held and frame % 3 == 0:
+            aim_throws(state.enemies, state.body)
+            enemy_paths(state.enemies, state.solids, 20)
+            checks.append([frame, held[0].ref, held[0].path, bro["on_ground"], True])
+            flying += not bro["on_ground"]
+        world.step(0)
+        for check in checks:
+            start, ref, path, standing, judged = check
+            k = frame + 1 - start
+            if standing and not bro["on_ground"]:
+                check[4] = judged = False  # (it jumped since)
+            if judged and 1 <= k <= 20 and not env.enemies[ref[1]]["dead"]:
+                h = env.enemies[ref[1]]
+                worst[0] = max(worst[0], abs(path[k][0] - h["x"]))
+                worst[1] = max(worst[1], abs(path[k][1] - h["y"]))
+    assert flying >= 3 and worst[1] <= 1.0 and worst[0] <= 6.0, (flying, worst)  # (x: its patrol's turns not known)
