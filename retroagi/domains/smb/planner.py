@@ -1160,6 +1160,10 @@ def _rollout(m0, x, y, x1, y1, pre_run, hold, direction, solid_paths, paths, sto
                                  or (after[i, 5] > 0
                                      and -LIFT_TOUCH <= ny + height - after[i, 1] <= LIFT_LAND))):
                         top = after[i, 1]
+                        if top - height > SCREEN_BOTTOM:
+                            # (on a lift gone down past the screen's bottom:
+                            # off the screen he is dead, whatever is under him)
+                            return _FELL, frame, nx, top - height, nx + width, top, -1, -1, stomped, got, bumped
                         got = _touch(nx, top - height, nx + width, top, items, frame, got)
                         # (on a springboard nothing can be done until it
                         # throws him: watched that long, pressed down with it)

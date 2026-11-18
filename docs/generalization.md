@@ -1401,6 +1401,15 @@ at the top. It now keeps it, and foresees the bounce exactly
 (`scripts/tests/test_smb_planner.py`). The 800 plays: 632 finished against
 621, 16 deaths by Koopas against 18.
 
+**A landing below the screen.** Pits killed Mario 33 times in the 800
+plays. In one, a jump was planned onto a lift going down (a looping lift on
+its way round) that, by the time he came down to it, was below the
+screen's bottom: Block SMB takes Mario off the screen for dead whatever is
+under him, but the planner asked whether he landed before whether he was
+still on the screen. A landing with him off the screen is now a fall
+(`scripts/tests/test_smb_planner.py`). The 800 plays: 635 finished against
+632, 30 deaths in pits against 33.
+
 ## Tried and not kept, 2026-11-11
 
 Measured with exact positions, against 0.97 on the tuned levels and 0.77

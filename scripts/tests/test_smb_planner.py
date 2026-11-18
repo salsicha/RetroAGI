@@ -564,3 +564,16 @@ def test_a_slide_off_a_step_past_the_column_under_it_is_a_fall():
     fast = rollout(NESPlayerMotion(x_speed=39, y_speed=3), (1436.0, 135.0, 1446.0, 147.0), 0, 0, 0, solids, [],
                    airborne=True)
     assert fast.end == "landed" and fast.body[3] == 160
+
+
+def test_a_landing_on_a_lift_gone_below_the_screen_is_a_fall():
+    # A lift going down met past the screen's bottom (a looping lift on its
+    # way round): Block SMB takes Mario off the screen for dead, whatever is
+    # under him; met higher up, it is a landing.
+    from retroagi.domains.smb.planner import SCREEN_BOTTOM
+    from retroagi.domains.smb.sim.env import MarioScenarioEnv
+    assert MarioScenarioEnv().height == SCREEN_BOTTOM
+    for top, end in ((150, "landed"), (198, "fell")):
+        lift = Solid(96, top, 144, top + 8, "moving", ("platforms", 1), 0.0, 1.0)
+        outcome = rollout(NESPlayerMotion(), (110.0, 60.0, 120.0, 72.0), 0, 0, 0, [lift], [], airborne=True)
+        assert outcome.end == end
