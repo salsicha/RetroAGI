@@ -846,7 +846,10 @@ def _paths(boxes, velocities, kinds, solids, frames):
         # box's bottom meets on the way down.
         offset = AIRBORNE
         for i in range(solids.shape[0]):
-            if (x0 < solids[i, 2] and solids[i, 0] < x1
+            # (a hopper only when not moving up or down: one falling the last
+            # pixels onto the floor, taken for standing, hopped a frame early
+            # from where it was)
+            if (x0 < solids[i, 2] and solids[i, 0] < x1 and not (kinds[e] == 1 and abs(vy) >= 0.5)
                     and -FEET_ABOVE - 1.0 <= solids[i, 1] - y1 <= FEET_BELOW + 2.0):
                 offset = solids[i, 1] - y1
                 vy = 0.0
@@ -878,6 +881,13 @@ def _paths(boxes, velocities, kinds, solids, frames):
                     for i in range(solids.shape[0]):
                         if nx0 < solids[i, 2] and solids[i, 0] < nx1 and feet <= solids[i, 1] <= feet + vy:
                             dy = solids[i, 1] - feet
+                            vy = 0.0
+                            break
+                else:  # (its head meeting a solid's bottom stops its rise, as Block SMB's: under a
+                    # brick row one was foreseen hopping on up through it, and fell on Mario)
+                    for i in range(solids.shape[0]):
+                        if nx0 < solids[i, 2] and solids[i, 0] < nx1 and y0 + vy <= solids[i, 3] <= y0:
+                            dy = solids[i, 3] - y0
                             vy = 0.0
                             break
                 x0, x1, y0, y1 = nx0, nx1, y0 + dy, y1 + dy

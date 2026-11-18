@@ -1319,6 +1319,17 @@ them:
 The 800 plays with the kept network: 621 finished against 618, 21 deaths by
 hammers against 29.
 
+**A Paratroopa hopping under bricks.** Block SMB stops anything rising
+into a solid there (not yet checked against the game); the planner's hop
+did not, and foresaw a Paratroopa hopping on up through the brick row over
+it, while it fell back early into Mario's jump. Nor did it wait for one
+falling the last pixels onto the floor: taken for standing, it hopped a
+frame early from where it was. Both now as Block SMB has them: from every
+frame of a Paratroopa hopping under bricks its foreseen height is Block
+SMB's exactly (`scripts/tests/test_flying_paratroopas.py`). The 800 plays:
+621 finished, as before, 15 deaths by Koopas against 16; kept as the
+planner foreseeing what Block SMB does.
+
 ## Tried and not kept, 2026-11-11
 
 Measured with exact positions, against 0.97 on the tuned levels and 0.77

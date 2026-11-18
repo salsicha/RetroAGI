@@ -83,3 +83,35 @@ def test_a_paratroopa_just_stomped_does_not_hurt_mario_still_touching_it():
                          and mario["y"] < koopa["y"] + koopa["h"] and koopa["y"] < mario["y"] + mario["h"])
         assert not koopa.get("wings") and mario["vy"] < 0 and not over, depth
     assert touching  # (the deepest still touched it after the stomp)
+
+
+def test_the_planner_foresees_a_paratroopa_hopping_under_bricks_as_block_smb_has_it():
+    # Under a brick row a hop ends as its head meets the bricks; a hopper
+    # falling the last pixels onto the floor is not yet standing.
+    from retroagi.domains.smb.planner import enemy_paths
+    from retroagi.domains.smb.sim.world import SimSource, SimWorld
+
+    bricks = [[x, 144, 16, 16] for x in range(160, 320, 16)]
+    world = SimWorld({
+        "world_width": 2000, "scroll_x": 115, "mario": [40.0, 196.0],
+        "platforms": [[0, 208, 2000, 32]] + bricks, "platform_kinds": ["ground"] + ["brick"] * len(bricks),
+        "enemies": [{"x": 240.0, "y": 194.0, "game_rules": True, "kind": "paratroopa"}],
+        "task": {"family": "game_level"},
+    })
+    world.reset()
+    source, koopa = SimSource(), world.env.enemies[0]
+    forecasts, heights, bumped = [], [], False
+    for frame in range(200):
+        e = next((e for e in source.read(world).enemies if e.kind == "hopper"), None)
+        if e is not None and frame % 2 == 0:  # (in sight once awake)
+            enemy_paths([e], source.read(world).solids, 30)
+            forecasts.append((frame, e.path))
+        heights.append(koopa["y"])
+        bumped = bumped or koopa["y"] == 160
+        world.step(0)
+    heights.append(koopa["y"])
+    assert bumped and len(forecasts) > 80  # (its head met the bricks)
+    for start, path in forecasts:
+        for k in range(1, 30):
+            if start + k < len(heights):
+                assert abs(path[k][1] - heights[start + k]) < 1e-6, (start, k)
