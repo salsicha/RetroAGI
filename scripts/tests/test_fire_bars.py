@@ -117,3 +117,23 @@ def test_fire_bar_pieces_have_the_games_heights():
     fast = [e for seed in range(400) for e in skill_scene(seed, "firebar")["enemies"] if e.get("fast")]
     assert fast and all(b["clockwise"] for b in fast)
     assert any(e.get("kind") == "firebar" for seed in range(60) for e in random_level(seed)["enemies"])
+
+
+def test_once_a_fireball_is_seen_stepping_the_planner_foresees_its_steps():
+    # Its track tells how far into its step it is: each step is then
+    # foreseen on its frame, or one frame off (where in a frame the step came).
+    for clockwise in (True, False):
+        world = SimWorld(scene(angle=3.0, clockwise=clockwise, mario=(200.0, FLOOR - 12)))
+        world.reset()
+        for _ in range(20):
+            world.step(0)
+        state = SimSource().read(world)
+        balls = [e for e in state.enemies if e.kind == "turner"]
+        enemy_paths(balls, state.solids, 60)
+        off = []
+        for frame in range(1, 61):
+            world.step(0)
+            for e in balls:
+                sim = world.env.enemies[e.ref[1]]
+                off.append(math.hypot(e.path[frame][0] - sim["x"], e.path[frame][1] - sim["y"]) > 1.0)
+        assert sum(off) <= len(off) / 10, (clockwise, sum(off), len(off))  # (a step a frame off now and then)

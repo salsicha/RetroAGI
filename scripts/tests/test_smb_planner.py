@@ -511,3 +511,17 @@ def test_a_hammer_bros_next_hammer_is_foreseen_from_its_last():
     enemy_paths([bro], [FLOOR], 120)
     (always,) = coming_throws([bro], 120)
     assert all((b[0] + b[2]) / 2 == 204.0 for b in always.path)
+
+
+def test_a_landing_that_slides_off_a_step_is_watched_on_the_way_down():
+    # Landed on a step's last pixels with speed, Mario slides off onto the
+    # floor below; an enemy beside the step on his way down reaches him.
+    step = Solid(768, 176, 800, 240, "ground", ("surfaces", 1))
+    floor = Solid(800, 208, 1200, 240, "ground", ("surfaces", 2))
+    low = Solid(600, 208, 768, 240, "ground", ("surfaces", 0))
+    motion = NESPlayerMotion(x_speed=24, y_speed=3)  # (falling, moving right)
+    body = (790.0, 150.0, 800.0, 162.0)
+    clear = rollout(motion, body, 0, 0, 0, [low, step, floor], [], airborne=True)
+    assert clear.end == "landed" and clear.body[3] == 176 and clear.body[2] > 800  # (on its last pixels)
+    beside = Enemy((816.0, 178.0, 824.0, 186.0), 0.0, 0.0, ("enemies", 0), stompable=False, kind="flier")
+    assert rollout(motion, body, 0, 0, 0, [low, step, floor], [beside], airborne=True).end == "hit"

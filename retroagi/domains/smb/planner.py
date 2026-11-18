@@ -446,20 +446,38 @@ def _flame(e: Enemy, frames: int) -> np.ndarray:
 
 
 # A fire bar's fireballs are where the whole step of its turn puts them,
-# TURN_STEP radians a step (sim/env.FIREBAR_STEPS): seen, one is on average
-# half a step behind its turn.
+# TURN_STEP radians a step (sim/env.FIREBAR_STEPS; the step reached counted
+# down, whichever way it turns).
 TURN_STEP = 2 * np.pi / 32
 
 
 def _turning(e: Enemy, frames: int) -> np.ndarray:
-    """A turner's boxes for ``frames`` frames from now: its middle going
-    round its hub at its turn (angles from straight up, clockwise), from
-    half a step on (TURN_STEP)."""
+    """A turner's boxes for ``frames`` frames from now: at the whole steps
+    (TURN_STEP) its turn reaches round its hub (angles from straight up,
+    clockwise). How far into its step it is now is told by when it last
+    stepped (its track: each frame since then turned it on by its turn);
+    when its track does not show, it is foreseen turning smoothly from half
+    a step on (at most half a step off). Foreseen turning
+    smoothly from half a step on, a fireball far out on its bar was up to 5
+    pixels from where it went, and one turning the other way a whole half
+    step more."""
     x0, y0, x1, y1 = e.box
     hx, hy = e.hub
     dx, dy = (x0 + x1) / 2 - hx, (y0 + y1) / 2 - hy
-    radius, start = np.hypot(dx, dy), np.arctan2(dx, -dy) + np.sign(e.turn) * TURN_STEP / 2
-    angle = start + e.turn * np.arange(frames + 1, dtype=np.float64)
+    radius, step = np.hypot(dx, dy), round(np.arctan2(dx, -dy) / TURN_STEP)
+    turn = e.turn / TURN_STEP  # (steps a frame)
+    k = np.arange(frames + 1, dtype=np.float64)
+    track = e.track or ()
+    angle = None
+    for j in range(1, len(track)):
+        a, b = track[-j], track[-j - 1]
+        if abs(a[0] - b[0]) > 0.5 or abs(a[1] - b[1]) > 0.5:  # (it stepped j - 1 frames ago)
+            done = (j - 0.5) * abs(turn)
+            into = min(done, 0.999) if turn > 0 else max(1.0 - done, 0.001)
+            angle = np.floor(step + into + turn * k) * TURN_STEP
+            break
+    if angle is None:  # (not known: turning smoothly from half a step on, at most half a step off)
+        angle = np.arctan2(dx, -dy) + np.sign(e.turn) * TURN_STEP / 2 + e.turn * k
     mx, my = hx + radius * np.sin(angle), hy - radius * np.cos(angle)
     half_w, half_h = (x1 - x0) / 2, (y1 - y0) / 2
     return np.stack([mx - half_w, my - half_h, mx + half_w, my + half_h], axis=1)
@@ -935,23 +953,42 @@ def _reached(x0, y0, x1, y1, m0, paths, stomped, frame, safe_after, solids, marg
     every jump was refused and he slid into the pit)."""
     m = m0.copy()
     last = paths.shape[1] - 1
+    falling = False
     for k in range(1, safe_after + 1):
-        dx, _, _ = _advance(m, 0, False, True, y0, False)
-        if _blocked(x0 + dx, x0, x1 - x0, y0, y1, solids):
-            dx = 0.0  # stopped by a wall (the next step up)
-            m[0] = 0
-            m[1] = 0
-            m[2] = 0
-        x0 += dx
-        x1 += dx
-        supported, below = _footing(x0, x1 - x0, y1, solids, (m[0] > 0) - (m[0] < 0)), False
-        for i in range(solids.shape[0]):
-            if x0 < solids[i, 2] and solids[i, 0] < x1 and solids[i, 1] > y1 + STAND:
-                below = True
-        if not supported:
-            if not below:
-                return SLID_OFF
-            break  # off onto something lower: no longer sliding here
+        if falling:
+            # Slid off onto something lower: falling to it, released, the
+            # enemies still watched on the way (taken for out of reach once
+            # off the step, Mario dropped from its last pixel into the sweep
+            # of a fire bar beside it).
+            dx, dy, _ = _advance(m, 0, False, False, y0, False)
+            if _blocked(x0 + dx, x0, x1 - x0, y0, y1, solids, dy, False):
+                dx = 0.0
+            for i in range(solids.shape[0]):
+                if x0 + dx < solids[i, 2] and solids[i, 0] < x1 + dx and y1 <= solids[i, 1] <= y1 + dy:
+                    dy, falling = solids[i, 1] - y1, False
+                    m[3] = 0
+                    m[4] = 0
+                    break
+            x0, x1, y0, y1 = x0 + dx, x1 + dx, y0 + dy, y1 + dy
+        else:
+            dx, _, _ = _advance(m, 0, False, True, y0, False)
+            if _blocked(x0 + dx, x0, x1 - x0, y0, y1, solids):
+                dx = 0.0  # stopped by a wall (the next step up)
+                m[0] = 0
+                m[1] = 0
+                m[2] = 0
+            x0 += dx
+            x1 += dx
+            supported, below = _footing(x0, x1 - x0, y1, solids, (m[0] > 0) - (m[0] < 0)), False
+            for i in range(solids.shape[0]):
+                if x0 < solids[i, 2] and solids[i, 0] < x1 and solids[i, 1] > y1 + STAND:
+                    below = True
+            if not supported:
+                if not below:
+                    return SLID_OFF
+                falling = True  # off onto something lower
+                m[3] = 0
+                m[4] = 0
         for e in range(paths.shape[0]):
             if (stomped >> e) & 1:
                 continue

@@ -1330,6 +1330,27 @@ SMB's exactly (`scripts/tests/test_flying_paratroopas.py`). The 800 plays:
 621 finished, as before, 15 deaths by Koopas against 16; kept as the
 planner foreseeing what Block SMB does.
 
+**Fire bars.** The fireballs that killed Mario were foreseen within a few
+pixels, but two things came apart:
+
+- **A slide off a step, unwatched.** Landed on a step's last pixel with
+  speed, Mario slides off onto the floor below; the planner allowed it, as
+  there was floor to catch him, but stopped watching the enemies as soon
+  as he was off the step, and he dropped through a fire bar's sweep beside
+  it. He is now watched on the way down too, falling released until he
+  lands (`scripts/tests/test_smb_planner.py`).
+- **Fireballs step.** Block SMB, as the game, puts a fire bar's balls at
+  the whole step of its turn reached (32 a round, one every 4.6 or 6.4
+  frames); the planner foresaw them turning smoothly from half a step on,
+  half a step off either way (8 pixels a step far out on a bar), and half a
+  step more for a bar turning anticlockwise. How far into its step a ball
+  is shows when it last stepped (its track), so it is now foreseen at the
+  whole steps from there: forecasts up to 40 frames ahead in the fire bar
+  scenes are exact 94% of the time, against 41% (`scripts/tests/test_fire_bars.py`;
+  a ball not yet seen stepping is foreseen as before).
+
+The 800 plays: 623 finished against 621, 10 deaths by fire bars against 17.
+
 ## Tried and not kept, 2026-11-11
 
 Measured with exact positions, against 0.97 on the tuned levels and 0.77
