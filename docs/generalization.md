@@ -1179,6 +1179,21 @@ eight (framework/agent.py; it did so before 2026-11-11, and was put back
 then only because it had come from tracing a death in the real game). The
 800 plays: 607 finished against 587, 45 deaths in pits against 55.
 
+**A Hammer Bro's own path.** The planner foresaw a Hammer Bro as a walker,
+which walls turn back: one dropping through the brick row it had stood on
+was turned by the row every frame, foreseen 1.5 pixels from where it fell,
+and the jump past it grazed it. A Hammer Bro (Block SMB's, as measured in
+the game) meets no walls, stays at its height while it stands, falls under
+its own gravity (0.25 a frame, not a walker's 0.2) and passes through the
+top it drops from. The planner now gives it that path, the top dropped from
+told by its speed: a drop starts with a hop up at 3.25 pixels a frame, so
+the top under it where such a hop would have started is passed through
+(planner.BRO; the chooser still sees it as a walker, so the network's inputs
+are unchanged). Over every flight of a Bro jumping between floors its
+foreseen height is Block SMB's exactly (`scripts/tests/test_hammer_bros.py`).
+The 800 plays: 610 finished against 607, 13 deaths by Hammer Bros against
+26; the Hammer Bro scenes: 185 of 200 passed against 181.
+
 Tried and not kept: a run that asks whether Mario could still stop short of
 a pit after this frame's press, not as if released now (a run chosen again
 each frame pressed on a frame and braked the next, and slid off a ledge):

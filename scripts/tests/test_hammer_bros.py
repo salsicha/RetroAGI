@@ -94,6 +94,36 @@ def test_a_hammer_bro_jumps_to_the_floor_above_and_back_down_through_it():
     assert stood[:3] == [FLOOR, LOW_ROW, FLOOR] or stood[:3] == [FLOOR, LOW_ROW, HIGH_ROW]
 
 
+def test_the_planner_foresees_a_hammer_bro_s_jumps_up_and_drops_through_as_block_smb_has_them():
+    world = SimWorld(scene([(200, FLOOR, 10_000, 3)]))
+    world.reset()
+    bro, source = bro_of(world), SimSource()
+    foreseen, heights, flights = [], [], 0
+    for _ in range(900):
+        if not bro["on_ground"]:
+            e = next(e for e in source.read(world).enemies if e.throws)
+            enemy_paths([e], source.read(world).solids, 40)
+            foreseen.append((len(heights), e.path))
+        heights.append((bro["y"], bro["on_ground"], bro["x"]))
+        world.step(0)
+    for start, path in foreseen:
+        flights += heights[start - 1][1] if start else 0
+        for k in range(1, 40):
+            y, standing, x = heights[start + k]
+            assert abs(path[k][1] - y) < 1e-6, (start, k)
+            if standing:
+                break
+    stood = sorted({round(y) for y, standing, _ in heights if standing})
+    assert flights >= 3 and len(stood) == 3  # (up to the low row, the high one, and down through them)
+
+
+def test_the_planner_has_a_hammer_bro_walk_through_the_row_it_drops_through():
+    row = Solid(96, 144, 160, 160, "block", ("blocks", 0))
+    bro = Enemy((120.0, 130.0, 128.0, 154.0), -0.25, 3.4, ("enemies", 0), kind="walker", throws=True)
+    enemy_paths([bro], [row], 10)
+    assert [round(bro.at(k)[0], 2) for k in (1, 2, 4)] == [119.75, 119.5, 119.0]  # (never turned back)
+
+
 def test_mario_stomps_a_hammer_bro_and_a_hammer_kills_him():
     world = SimWorld(scene([(200, FLOOR, 10_000, 10_000)], rows=()))
     world.reset()

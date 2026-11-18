@@ -68,6 +68,17 @@ FEET_BELOW = 4
 # (the game's, as Block SMB has them: sim/env.py LIFT_*).
 LIFT_LAND, LIFT_REACH, LIFT_BUMP, LIFT_DROP, LIFT_TOUCH = 4, 5, 4, 1, 1
 FEET_ABOVE = 4  # a Hammer Bro's feet over its box's bottom (sim/env.py HAMMER_BRO_FEET)
+# A Hammer Bro (Enemy.throws; a walker to the chooser) has a path of its own
+# (Block SMB's, the game's measured: sim/env.HAMMER_BRO_*): it walks at its
+# vx through everything (its turns at the ends of its few pixels' patrol are
+# not known), and standing it stays at its height; in the air it falls under
+# BRO_GRAVITY to at most ENEMY_FALL until its feet meet a top, but for the
+# top it dropped from: a drop down starts with a hop up at BRO_DOWN, and the
+# top under it where that hop would have started is passed through. Taken
+# for a walker, one dropping through a brick row was turned back by the row
+# every frame, foreseen 1.5 pixels off, and a jump past it grazed it.
+BRO_GRAVITY, BRO_DOWN = 0.25, -3.25
+BRO = 12  # (its path's code in _paths, after ENEMY_KINDS')
 AIRBORNE = -99.0  # (a walker's offset to its feet while it is in the air)
 ENEMY_GRAVITY = 0.2
 ENEMY_FALL = 3.4
@@ -272,7 +283,7 @@ def enemy_paths(enemies: Sequence[Enemy], solids: Sequence[Solid], frames: int) 
         return
     boxes = np.array([e.box for e in enemies], np.float64)
     velocities = np.array([(e.vx, e.vy) for e in enemies], np.float64)
-    kinds = np.array([ENEMY_KINDS.index(e.kind) for e in enemies], np.int64)
+    kinds = np.array([BRO if e.throws else ENEMY_KINDS.index(e.kind) for e in enemies], np.int64)
     # (the screen's edge stops Mario only: walkers walk off the screen)
     paths = _paths(boxes, velocities, kinds, _solid_array([s for s in solids if s.kind != "edge"]), frames)
     for e, path in zip(enemies, paths):
@@ -717,6 +728,42 @@ def _paths(boxes, velocities, kinds, solids, frames):
                     y0, y1 = y0 + dy, y1 + dy
                 out[e, k] = (x0, y0, x1, y1)
             continue
+        if kinds[e] == BRO:
+            feet, standing, through = y1 - FEET_ABOVE, False, -1.0
+            if vy == 0.0:  # (standing, or at the top of its flight)
+                for i in range(solids.shape[0]):
+                    if x0 < solids[i, 2] and solids[i, 0] < x1 and abs(solids[i, 1] - feet) <= 1.0:
+                        standing = True
+                        break
+            if not standing and vy < ENEMY_FALL:
+                hopped = round((vy - BRO_DOWN) / BRO_GRAVITY)  # (frames since a drop's hop, were it one)
+                if hopped >= 1:
+                    start = feet - (hopped * BRO_DOWN + BRO_GRAVITY * hopped * (hopped + 1) / 2)
+                    for i in range(solids.shape[0]):
+                        if x0 < solids[i, 2] and solids[i, 0] < x1 and abs(solids[i, 1] - start) <= 2.0:
+                            through = solids[i, 1]
+                            break
+            if not standing and vy > 0.0:
+                for i in range(solids.shape[0]):
+                    if (x0 < solids[i, 2] and solids[i, 0] < x1 and abs(solids[i, 1] - feet) <= 1.0
+                            and solids[i, 1] != through):
+                        standing = True
+                        break
+            for k in range(1, frames + 1):
+                x0, x1 = x0 + vx, x1 + vx
+                if not standing:
+                    vy = min(vy + BRO_GRAVITY, ENEMY_FALL)
+                    dy = vy
+                    if vy > 0:
+                        feet = y1 - FEET_ABOVE
+                        for i in range(solids.shape[0]):
+                            if (x0 < solids[i, 2] and solids[i, 0] < x1 and feet <= solids[i, 1] <= feet + vy
+                                    and solids[i, 1] != through):
+                                dy, standing, vy = solids[i, 1] - feet, True, 0.0
+                                break
+                    y0, y1 = y0 + dy, y1 + dy
+                out[e, k] = (x0, y0, x1, y1)
+            continue
         if kinds[e] == 4:  # thrown
             for k in range(1, frames + 1):
                 vy = min(vy + THROWN_GRAVITY, THROWN_FALL)
@@ -743,10 +790,10 @@ def _paths(boxes, velocities, kinds, solids, frames):
                 out[e, k] = (x0, y0, x1, y0 + height)
             continue
         # A walker standing on something (its feet from FEET_ABOVE over its
-        # box's bottom, a Hammer Bro's, to FEET_BELOW under it) falls once it
-        # walks off it; one in the air falls as the game's do (ENEMY_GRAVITY,
-        # up to ENEMY_FALL: a stomped Paratroopa, a jumping Hammer Bro) and
-        # lands on the first top its box's bottom meets on the way down.
+        # box's bottom to FEET_BELOW under it) falls once it walks off it;
+        # one in the air falls as the game's do (ENEMY_GRAVITY, up to
+        # ENEMY_FALL: a stomped Paratroopa) and lands on the first top its
+        # box's bottom meets on the way down.
         offset = AIRBORNE
         for i in range(solids.shape[0]):
             if (x0 < solids[i, 2] and solids[i, 0] < x1
