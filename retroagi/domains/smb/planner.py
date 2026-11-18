@@ -941,17 +941,23 @@ def _paths(boxes, velocities, kinds, solids, frames):
 
 
 @njit(cache=True)
-def _reached(x0, y0, x1, y1, m0, paths, stomped, frame, safe_after, solids, margin):
+def _reached(x0, y0, x1, y1, m0, paths, stomped, frame, safe_after, solids, margin, pressed=False):
     """The enemy reaching Mario, landed at the box at ``frame`` and sliding
     on (buttons released), within ``safe_after`` frames (enemies ``margin``
     wider on every side),
-    those in the bit mask ``stomped`` aside; -1 if none does, SLID_OFF if
+    those in the bit mask ``stomped`` aside (landed on a springboard,
+    ``pressed``: held where he is and pressed down with it,
+    physics.SPRING_SQUASH); -1 if none does, SLID_OFF if
     he slides off what he landed on with nothing below to catch him (a
     landing on the last pixels before a pit at speed: he was falling before
     anything could be chosen), or so near its end, still sliding, that no
     jump could start (_footing: on the far end of 1-1's last staircase top,
     every jump was refused and he slid into the pit)."""
     m = m0.copy()
+    if pressed:
+        m[0] = 0  # (held on the springboard: no slide)
+        m[1] = 0
+        m[2] = 0
     last = paths.shape[1] - 1
     falling = False
     for k in range(1, safe_after + 1):
@@ -993,7 +999,8 @@ def _reached(x0, y0, x1, y1, m0, paths, stomped, frame, safe_after, solids, marg
             if (stomped >> e) & 1:
                 continue
             b = paths[e, min(frame + k, last)]
-            if x0 < b[2] + margin and b[0] - margin < x1 and y0 < b[3] + margin and b[1] - margin < y1:
+            sink = SPRING_SQUASH[min(k, len(SPRING_SQUASH) - 1)] if pressed else 0
+            if x0 < b[2] + margin and b[0] - margin < x1 and y0 + sink < b[3] + margin and b[1] - margin < y1 + sink:
                 return e
     while falling:
         # Still falling: down to what catches him, or off the screen (a
@@ -1154,8 +1161,11 @@ def _rollout(m0, x, y, x1, y1, pre_run, hold, direction, solid_paths, paths, sto
                                      and -LIFT_TOUCH <= ny + height - after[i, 1] <= LIFT_LAND))):
                         top = after[i, 1]
                         got = _touch(nx, top - height, nx + width, top, items, frame, got)
-                        threat = _reached(nx, top - height, nx + width, top, m, paths, down, frame, safe_after,
-                                          after, margin)
+                        # (on a springboard nothing can be done until it
+                        # throws him: watched that long, pressed down with it)
+                        on = after[i, 4] > NO_SPRING
+                        threat = _reached(nx, top - height, nx + width, top, m, paths, down, frame,
+                                          max(safe_after, SPRING_THROW) if on else safe_after, after, margin, on)
                         if threat == SLID_OFF:
                             return _FELL, frame, nx, top - height, nx + width, top, -1, -1, stomped, got, bumped
                         if threat >= 0:
@@ -1251,11 +1261,11 @@ def rollout(motion: NESPlayerMotion, body: tuple, pre_run: int, hold: int, direc
     and ``direction`` after, until something ends it; enemies kept
     ``berth`` wider, a landing safe once none reaches him within
     ``safe_after`` frames."""
-    paths, stompable = _packed(enemies, horizon + safe_after + 1)
+    paths, stompable = _packed(enemies, horizon + max(safe_after, SPRING_THROW) + 1)
     x, y, x1, y1 = (float(v) for v in body)
     raw = _rollout(_motion_array(motion), x, y, x1, y1, pre_run, hold, direction, _solid_paths(solids, horizon),
                    paths, stompable, horizon, airborne, steer, steer_direction, safe_after,
-                   _item_paths(items, solids, horizon + safe_after + 1, dynamics), float(berth))
+                   _item_paths(items, solids, horizon + max(safe_after, SPRING_THROW) + 1, dynamics), float(berth))
     return _outcome(raw, solids, enemies, items)
 
 
@@ -1325,7 +1335,7 @@ def plan_jump(goal: Optional[Goal], motion: NESPlayerMotion, body: tuple, solids
     best = None
     spring = standing_spring(body, solids)
     horizon = HORIZON if spring is None else SPRING_HORIZON
-    frames = horizon + safe_after + 1
+    frames = horizon + max(safe_after, SPRING_THROW) + 1
     aim_throws(enemies, body)
     dynamics.paths(enemies, solids, frames)
     enemies = list(enemies) + coming_throws(enemies, frames)
@@ -1416,7 +1426,7 @@ def plan_flight(goal: Optional[Goal], motion: NESPlayerMotion, body: tuple, soli
     LAST_RESORT_SAFE frames (time to jump again on landing: better than a
     plan known to hit); None when nothing lands even so. ``berth`` and
     ``safe_after`` as in rollout."""
-    frames = HORIZON + safe_after + 1
+    frames = HORIZON + max(safe_after, SPRING_THROW) + 1
     aim_throws(enemies, body)
     dynamics.paths(enemies, solids, frames)
     enemies = list(enemies) + coming_throws(enemies, frames)

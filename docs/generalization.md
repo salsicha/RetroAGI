@@ -1368,6 +1368,28 @@ or off the screen, a fall (`scripts/tests/test_smb_planner.py`). The 800
 plays: 617 finished against 623, 34 deaths in pits against 40: no clear
 difference, kept as the planner foreseeing what Block SMB does.
 
+**A springboard landing, watched until the throw.** Landed on a
+springboard, Mario is held where he is and pressed down with it until it
+throws him (18 frames); no choice can do anything before then. The
+planner watched such a landing for the chosen care's window only (a few
+frames bold, 12 usual), with Mario's box where he landed, and a Bullet Bill
+low enough to meet him only once pressed down, or coming a little after
+the window, was taken for a safe landing. A springboard landing is now
+watched until the throw, his box pressed down with the springboard frame by
+frame as Block SMB has it (`scripts/tests/test_springboards.py`). The 800
+plays: 621 finished against 617, 9 deaths by Bullet Bills against 14. Of
+the rest, half are shots just fired from a cannon, which the network
+cannot see coming (proposed above: cannons told from ground), and one is a
+wait on a springboard whose throw carried Mario into a Bullet: the network
+took that wait for safe.
+
+Tried and not kept: following every landing's slide until Mario stops
+(up to 64 frames, released), whatever the window, to catch a slide off a
+lift's end after a bold landing's short window. The agent chooses again
+within a few frames of landing, so a landing that would slide to an edge
+60 pixels on was refused for nothing: 515 of the 800 finished, 77 deaths
+in pits against 34.
+
 ## Tried and not kept, 2026-11-11
 
 Measured with exact positions, against 0.97 on the tuned levels and 0.77

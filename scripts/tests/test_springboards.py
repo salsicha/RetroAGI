@@ -139,3 +139,36 @@ def test_thrown_up_running_mario_is_not_pushed_aside():
             places.append(mario["x"])
         assert all(b >= a for a, b in zip(places, places[1:])), (big, places)
         assert mario["y"] + mario["h"] < REST  # (thrown up)
+
+
+def bill_at_landing(x):
+    """Mario dropping onto the springboard, a Bullet Bill flying left at
+    ``x`` low enough to meet him only once he is pressed down: the
+    planner's forecast of the drop with the usual care, and whether Block
+    SMB then kills him."""
+    from retroagi.domains.smb.sim.env import BULLET_H, BULLET_SPEED, BULLET_W
+    world = SimWorld(scene(wall=False))
+    world.reset()
+    mario = world.env.mario
+    mario["x"], mario["y"], mario["on_ground"] = 202, REST - mario["h"] - 30, False
+    world.env.enemies.append({
+        "kind": "bullet", "x": float(x), "y": float(REST + 4), "vx": 0.0, "vy": 0.0, "w": BULLET_W, "h": BULLET_H,
+        "speed": BULLET_SPEED, "direction": -1, "patrol_min": -1e9, "patrol_max": 1e9, "edge_aware": False,
+        "on_ground": False, "dead": False, "stompable": True})
+    source = SimSource()
+    for _ in range(3):
+        world.step(0)
+        state = source.read(world)
+    forecast = planner.rollout(state.motion, state.body, 0, 0, 0, state.solids, state.enemies, airborne=True)
+    for _ in range(60):
+        step = world.step(0)
+        if step.over:
+            return forecast.end, step.died
+    return forecast.end, False
+
+
+def test_a_landing_on_a_springboard_is_watched_until_it_throws_him():
+    # (nothing can be done before the throw: a Bill meeting him pressed
+    # down, after the usual care's window, was taken for a safe landing)
+    assert bill_at_landing(268) == ("hit", True)
+    assert bill_at_landing(286) == ("landed", False)  # (thrown before it comes)
