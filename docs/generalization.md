@@ -1351,6 +1351,16 @@ pixels, but two things came apart:
 
 The 800 plays: 623 finished against 621, 10 deaths by fire bars against 17.
 
+**A slide off a step, followed down.** Watched on the way down, the slide
+was still taken for caught once the watch ended (12 frames) with Mario in
+the air: under a step's end a one-tile column three tiles lower caught him
+only if he was still over it when he got down to it, and landed slowly he
+slid off past it into the pit beyond (fast, he is carried over the pit:
+Block SMB has both so). His fall is now followed down to what catches him,
+or off the screen, a fall (`scripts/tests/test_smb_planner.py`). The 800
+plays: 617 finished against 623, 34 deaths in pits against 40: no clear
+difference, kept as the planner foreseeing what Block SMB does.
+
 ## Tried and not kept, 2026-11-11
 
 Measured with exact positions, against 0.97 on the tuned levels and 0.77

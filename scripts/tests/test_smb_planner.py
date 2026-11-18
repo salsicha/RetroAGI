@@ -525,3 +525,21 @@ def test_a_landing_that_slides_off_a_step_is_watched_on_the_way_down():
     assert clear.end == "landed" and clear.body[3] == 176 and clear.body[2] > 800  # (on its last pixels)
     beside = Enemy((816.0, 178.0, 824.0, 186.0), 0.0, 0.0, ("enemies", 0), stompable=False, kind="flier")
     assert rollout(motion, body, 0, 0, 0, [low, step, floor], [beside], airborne=True).end == "hit"
+
+
+def test_a_slide_off_a_step_past_the_column_under_it_is_a_fall():
+    # Under the step's end a one-tile column three tiles lower, a pit beyond.
+    # Landed slowly, Mario slides off the step, past the column before he is
+    # down to it, into the pit; fast, he is carried over the pit (Block SMB
+    # has it so from both starts).
+    step = Solid(1424, 160, 1456, 240, "ground", ("surfaces", 1))
+    column = Solid(1456, 208, 1472, 240, "ground", ("surfaces", 2))
+    far = Solid(1520, 208, 1600, 240, "ground", ("surfaces", 3))
+    low = Solid(1300, 208, 1424, 240, "ground", ("surfaces", 0))
+    solids = [low, step, column, far]
+    slow = rollout(NESPlayerMotion(x_speed=24, y_speed=3), (1436.0, 135.0, 1446.0, 147.0), 0, 0, 0, solids, [],
+                   airborne=True)
+    assert slow.end == "fell"
+    fast = rollout(NESPlayerMotion(x_speed=39, y_speed=3), (1436.0, 135.0, 1446.0, 147.0), 0, 0, 0, solids, [],
+                   airborne=True)
+    assert fast.end == "landed" and fast.body[3] == 160

@@ -995,6 +995,21 @@ def _reached(x0, y0, x1, y1, m0, paths, stomped, frame, safe_after, solids, marg
             b = paths[e, min(frame + k, last)]
             if x0 < b[2] + margin and b[0] - margin < x1 and y0 < b[3] + margin and b[1] - margin < y1:
                 return e
+    while falling:
+        # Still falling: down to what catches him, or off the screen (a
+        # column a step lower under the step's end caught him only if he was
+        # still over it when he got down to it; at speed he was past it and
+        # in the pit beyond).
+        if y0 > SCREEN_BOTTOM:
+            return SLID_OFF
+        dx, dy, _ = _advance(m, 0, False, False, y0, False)
+        if _blocked(x0 + dx, x0, x1 - x0, y0, y1, solids, dy, False):
+            dx = 0.0
+        for i in range(solids.shape[0]):
+            if x0 + dx < solids[i, 2] and solids[i, 0] < x1 + dx and y1 <= solids[i, 1] <= y1 + dy:
+                falling = False
+                break
+        x0, x1, y0, y1 = x0 + dx, x1 + dx, y0 + dy, y1 + dy
     return -1
 
 
