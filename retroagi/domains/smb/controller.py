@@ -194,7 +194,9 @@ def pit_ahead(state: State, direction: int) -> bool:
     would fall into: as wide as he is or wider, and not a gap of GAP_CROSS
     with its far side at most a step above his feet. (Asked only where he
     would stop, a run went on at a step up beyond a one-tile gap, taking the
-    step for a wall that stops him; he fell into the gap against it.)"""
+    step for a wall that stops him; he fell into the gap against it.) A
+    lower one beyond its gap holds him only if, carried on at his speed as
+    he falls, he comes down over it."""
     x0, _, x1, feet = state.body
     start = x1 if direction > 0 else x0
     end = (start + direction * (stopping_distance(state.motion, direction) + EDGE_KEEP)) * direction
@@ -215,9 +217,52 @@ def pit_ahead(state: State, direction: int) -> bool:
         if far > end:
             return True  # (where he would stop, nothing under him)
         gap = far - at
+        if top > feet + STAND_SLACK:
+            # A lower one: he slides off and falls to it, carried on at his
+            # speed; caught only if he comes down over it (at full speed off
+            # a ledge he flew past a short platform below into the pit).
+            fall = _carried(state.motion, direction, at + (x1 - x0) - start, top - feet)
+            if fall is None:
+                return False  # (he stops before he is off)
+            carried, landed = fall
+            back = at + carried
+            lower = [a1 for a0, a1, t in spans if t == top and a0 == far]
+            if back + (x1 - x0) <= far or back >= max(lower):
+                return True
+            # (down on it at the speed he fell with: his slide from there)
+            end = back + (x1 - x0) + stopping_distance(landed, direction) + EDGE_KEEP
+            feet = top
+            spans = [span for span in spans if span[2] >= feet - STAND_SLACK]
+            at = max(back, far)
+            continue
         if gap >= x1 - x0 and (gap > GAP_CROSS or top < feet - WALL_DEPTH):
             return True
         at = far
+
+
+def _carried(motion: NESPlayerMotion, direction: int, slide: float, drop: float) -> Optional[tuple]:
+    """How far Mario, released now, has gone on when he has come down
+    ``drop`` pixels after sliding ``slide`` pixels off an edge (pixels, from
+    where he left it), and his motion then; None if he stops before."""
+    m = copy(motion)
+    slid = 0.0
+    while slid < slide:
+        dx, _, _ = m.advance(direction=0, jump=False, grounded=True, y=0, run=False)
+        slid += abs(dx)
+        if m.x_speed == 0:
+            return None
+    m.y_speed = m.y_force = 0
+    m.force = m.force_down
+    carried, fallen, y = 0.0, 0.0, 0
+    for _ in range(240):
+        dx, dy, _ = m.advance(direction=0, jump=False, grounded=False, y=y, run=False)
+        carried += abs(dx)
+        fallen += dy
+        y += dy
+        if fallen >= drop:
+            break
+    m.y_speed = m.y_force = 0
+    return carried, m
 
 
 def stopping_distance(motion: NESPlayerMotion, direction: int) -> float:

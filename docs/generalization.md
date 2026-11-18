@@ -1410,6 +1410,33 @@ still on the screen. A landing with him off the screen is now a fall
 (`scripts/tests/test_smb_planner.py`). The 800 plays: 635 finished against
 632, 30 deaths in pits against 33.
 
+**A run's edge, and a lift's pixel.** Two more of the pits:
+
+- **A lower platform beyond a gap.** A run ends where Mario can still stop
+  short of a pit, and the controller took a lower platform beyond a short
+  gap for floor he would slide onto. At speed he slid off the ledge and
+  flew past it as he fell, or landed on it at speed and slid off its far
+  end. A lower one now holds him only if, carried on at his speed as he
+  falls, he comes down over it, and his slide is counted again from where
+  he lands at the speed he lands with. Released at every speed and place
+  on such a ledge in Block SMB, the run's check no longer misses a fall
+  (the old one missed 29 of 195), at 8 more stops where he would have
+  stayed on (`scripts/tests/test_smb_planner.py`).
+- **A lift at whole pixels.** Block SMB places a lift at whole pixels each
+  frame, as Mario's collisions take it; the planner moved it in fractions
+  of a pixel, and a head bump on a lift going down, a fifth of a pixel
+  outside Block SMB's 4-pixel reach in the planner, was missed: the jump
+  meant to land on it bumped and fell into the pit under it. Foreseen
+  lifts are now at whole pixels: at Block SMB's place exactly 77% of the
+  time against 5%, and never more than a pixel off (where in its pixel a
+  lift is, the state does not show; `scripts/tests/test_looping_lifts.py`).
+
+The 800 plays with both: 637 finished against 635, 35 deaths in pits
+against 30. The plays that newly die in a pit were traced: each change on
+its own takes some of them, and a run toward a lift moving across killed
+him on a path the change had only nudged (no clear difference, kept as the
+controller and the planner doing what Block SMB does).
+
 ## Tried and not kept, 2026-11-11
 
 Measured with exact positions, against 0.97 on the tuned levels and 0.77

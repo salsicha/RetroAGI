@@ -577,3 +577,34 @@ def test_a_landing_on_a_lift_gone_below_the_screen_is_a_fall():
         lift = Solid(96, top, 144, top + 8, "moving", ("platforms", 1), 0.0, 1.0)
         outcome = rollout(NESPlayerMotion(), (110.0, 60.0, 120.0, 72.0), 0, 0, 0, [lift], [], airborne=True)
         assert outcome.end == end
+
+
+def test_a_run_s_edge_follows_his_fall_to_a_lower_platform_and_his_slide_off_it():
+    # Off a ledge at speed, a short platform below and beyond a gap: taken
+    # for floor he would slide onto, he flew past it, or landed on it at
+    # speed and slid off its end. Checked against Block SMB released at each
+    # speed and place: every release that kills him is a pit to the run.
+    from retroagi.domains.smb.sim.world import SimSource, SimWorld
+
+    def released(x, speed, lower):
+        world = SimWorld({"world_width": 800, "scroll_x": 115, "mario": [float(x), 68.0], "frame_budget": 3000,
+                          "platforms": [[0, 80, 120, 16], [136, 192, lower, 16], [400, 208, 400, 32]],
+                          "platform_kinds": ["ground", "ground", "ground"], "enemies": [],
+                          "task": {"family": "game_level"}})
+        world.reset()
+        world.env.motion.x_speed, world.env.motion.moving, world.env.motion.facing = speed, 1, 1
+        verdict = pit_ahead(SimSource().read(world), 1)
+        for _ in range(200):
+            step = world.step(0)
+            if step.over:
+                return verdict, step.died
+        return verdict, False
+
+    safe = 0
+    for lower in (32, 96):
+        for speed in (16, 32, 40):
+            for x in (76, 92, 104):
+                pit, died = released(x, speed, lower)
+                assert pit or not died, (lower, speed, x)
+                safe += not pit
+    assert safe  # (a wide one below still holds him)

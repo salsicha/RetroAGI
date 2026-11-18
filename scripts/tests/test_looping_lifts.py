@@ -83,3 +83,28 @@ def test_the_generator_puts_them_in_bottomless_pits_and_mario_gets_across():
             (2, block.LIFT_SHORT, ("down", "up"))} <= shapes
     assert any(isinstance(p, dict) and p.get("lift") in ("up", "down")
                for seed in range(80) for p in random_level(seed)["platforms"])
+
+
+def test_the_planner_foresees_it_at_whole_pixels_as_block_smb_places_it():
+    # (Mario's collisions take a lift at whole pixels; foreseen a fraction
+    # of a pixel off, a head bump on one going down was missed. Where in
+    # its pixel it is the state does not show: within one, mostly exact.)
+    exact = total = 0
+    for way in ("up", "down"):
+        for top in range(60, 200, 20):
+            world = SimWorld(scene(way, top))
+            world.reset()
+            world.step(0)
+            state = SimSource().read(world)
+            k = next(i for i, s in enumerate(state.solids) if s.kind == "moving")
+            paths = _solid_paths(state.solids, 40)
+            lift = lift_of(world)
+            for frame in range(1, 41):
+                world.step(0)
+                off = abs(paths[frame, k, 1] - lift["rect"].y)
+                if off > 100:
+                    continue  # (come round)
+                assert off <= 1 and off == int(off)
+                exact += off == 0
+                total += 1
+    assert exact >= 0.7 * total

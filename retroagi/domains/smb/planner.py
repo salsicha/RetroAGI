@@ -624,11 +624,15 @@ def _solid_paths(solids: Sequence[Solid], frames: int) -> np.ndarray:
     frame of its squash a springboard is at now (Solid.spring; NO_SPRING:
     none), and 1 for a lift (0 for the rest) [frames + 1, solids, 6]: a lift
     at its velocity, the rest where they are (a springboard moves only
-    pressed down by Mario: _rollout)."""
+    pressed down by Mario: _rollout), at whole pixels each frame as Block
+    SMB places them (a head bump on a lift going down, foreseen with it a
+    fifth of a pixel lower, was missed)."""
     now = _solid_array(solids)
     speed = np.array([(0, 0, 0, 0) if s.spring is not None else (s.vx, s.vy, s.vx, s.vy) for s in solids],
                      np.float64).reshape(-1, 4)
     boxes = now[None] + np.arange(frames + 1, dtype=np.float64)[:, None, None] * speed[None]
+    moving = np.any(speed != 0, axis=1)
+    boxes[:, moving] = np.round(boxes[:, moving])
     springs = np.array([NO_SPRING if s.spring is None else s.spring for s in solids], np.float64)
     lifts = np.array([float(s.kind == "moving") for s in solids], np.float64)
     columns = np.stack([springs, lifts], axis=1)
