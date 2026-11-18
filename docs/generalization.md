@@ -1167,6 +1167,18 @@ just stomped out of its wings harmless while he still touches it (the
 planner already took a stomped enemy for harmless). The 800 plays: 587
 finished against 584, 16 deaths by Koopas against 21.
 
+**A choice refused, answered in the same frame.** Mario landed on a
+springboard, and the network, wrong about what could be done from it (it
+called landing back on the springboard possible and the lands beyond the
+wall it serves impossible, the reverse of the planner), picked one landing
+after another that the controller could not plan. Each refusal left its
+frame idle, the springboard's squash ran out with nothing pressed, and it
+threw him up drifting back into the pit behind. The agent now answers a
+choice refused as it starts with the chooser's next in the same frame, up to
+eight (framework/agent.py; it did so before 2026-11-11, and was put back
+then only because it had come from tracing a death in the real game). The
+800 plays: 607 finished against 587, 45 deaths in pits against 55.
+
 Tried and not kept: a run that asks whether Mario could still stop short of
 a pit after this frame's press, not as if released now (a run chosen again
 each frame pressed on a frame and braked the next, and slid off a ledge):

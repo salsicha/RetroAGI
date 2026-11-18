@@ -50,13 +50,20 @@ def agent_refusing(first_feasible):
     return agent
 
 
-def test_a_refused_choice_leaves_the_frame_idle_and_the_next_frame_decides_again():
+def test_a_refused_choice_is_answered_with_the_chooser_s_next_in_the_same_frame():
     agent = agent_refusing(2)
-    assert agent.step(State()) == 0 and agent.step(State()) == 0  # choices 0 and 1 refused: idle frames
-    assert agent.step(State()) == 102  # the third is carried out
+    assert agent.step(State()) == 102  # choices 0 and 1 refused as they start: the third, at once
     assert agent.chooser.told == [(None, None), ("infeasible", 0), ("infeasible", 1)]
     assert agent.step(State()) == 102 and len(agent.chooser.told) == 3  # it goes on: nothing is decided
-    assert agent.controller.seen == 4  # the controller is shown every state
+    assert agent.controller.seen == 2  # the controller is shown every state
+
+
+def test_a_frame_whose_choices_are_all_refused_is_idle_and_the_next_decides_again():
+    from retroagi.framework.agent import TRIES
+
+    agent = agent_refusing(TRIES + 1)
+    assert agent.step(State()) == 0 and len(agent.chooser.told) == TRIES
+    assert agent.step(State()) == 100 + TRIES + 1
 
 
 def test_nothing_is_decided_while_the_state_is_not_decidable_or_missing():
