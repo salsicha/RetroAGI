@@ -62,22 +62,22 @@ not of the present one.
 
 Three numbers, on the held-out levels (`scripts/dev/scorecard.py FOLDER`):
 
-| | First contact | After the second round | Learned in Block SMB alone (2026-11-17) | A working agent |
+| | First contact | After the second round | Learned in Block SMB alone (2026-11-18) | A working agent |
 |---|---|---|---|---|
-| Whole levels finished from the screen alone | 0 of 32 plays | 0 of 32 | 4 of 32 | most |
-| Tries at an obstacle that fail, from the screen alone | 47% | 41% | 30% | about 2% |
-| The same with exact positions in place of seeing | 35% | 24% | 18% | about 2% |
+| Whole levels finished from the screen alone | 0 of 32 plays | 0 of 32 | 2 of 32 | most |
+| Tries at an obstacle that fail, from the screen alone | 47% | 41% | 17% | about 2% |
+| The same with exact positions in place of seeing | 35% | 24% | 20% | about 2% |
 
 (The first two columns are of policies changed by hand while watching real
 levels, which the rule below forbids and which were put back. The third is
 of the present policy: its deciding network learned in Block SMB alone,
-`outcome_corrected_20261116`.)
+`outcome_sided_20261117`.)
 
 A level has about 35 obstacles, so half its plays finish only when about 2%
 of tries at an obstacle fail (0.98 to the 35th is a half), and 9 in 10 at
-about 0.3%. The agent now passes 3.4 obstacles between failures from the
-screen and 5.6 with exact positions; it needs about 50. World 1-1, one of
-the two levels it was built on, it finishes from the screen in 7 of its 8
+about 0.3%. The agent now passes 5.9 obstacles between failures from the
+screen and 5.0 with exact positions; it needs about 50. World 1-1, one of
+the two levels it was built on, it finishes from the screen in 6 of its 8
 plays.
 
 "With exact positions" (elsewhere here: "from game memory") is a measuring
@@ -1211,6 +1211,82 @@ the last pixels of the next step, and Mario slid into a pit. With walking
 off still allowed and every pressing from 0 to 32 frames in fours, 596 of
 the 800 finished against 610 (602 with the first alone, 606 with the
 second): no better, so neither is kept.
+
+## Learned again with the day's corrections (2026-11-18)
+
+The deciding network learned from nothing once more (`scripts/learn_in_block_smb.sh
+sided_20261117`, three rounds, 22 hours with Block SMB tracing at its side)
+in Block SMB with the lifts and ledges met from beside, the controller
+letting go once down, the gap before a step up, and the springboard
+springing back. Its rounds 2 and 3 sampled with the code merged during the
+run too (a Hammer Bro's hammers and its path foreseen, the Paratroopa just
+stomped, a refused choice answered in the same frame): what it learned from
+is two versions' play. The exam after each round (100 fresh random levels,
+both modes, and 4,200 skill scenes):
+
+| Round | Fresh levels finished (of 200) | Skill scenes passed |
+|---|---|---|
+| 1 | 156 | 97.7% |
+| 2 | 161 | 98.1% |
+| 3 | 152 | 98.0% |
+
+The third round is kept, as `data/outcome/outcome_sided_20261117.pt`, by
+Block SMB alone: on 800 fresh plays (first seeds 100000 and 100200) with the
+present code it finishes 618 against the earlier network's 610 (the second
+round, measured with the re-plan change tried above, finished 599 where the
+third finished 617 and the earlier network 596). Both networks played with
+the present code, on Block SMB and then on the real game (score only):
+
+| | The earlier network | Learned again |
+|---|---|---|
+| Fresh Block SMB plays finished (of 800) | 610 | 618 |
+| ... died in a pit | 46 | 38 |
+| ... by Hammer Bros and their hammers | 34 | 41 |
+| ... by Spinies | 22 | 8 |
+| ... in lava or by fire bars | 32 | 30 |
+| Held-out real levels: tries at an obstacle that fail, exact positions | 13% | 20% |
+| ... from the screen | 31% | 17% |
+| Held-out real levels finished, exact positions (of 32) | 5 | 7 |
+| ... from the screen | 1 | 2 |
+| World 1-1 finished (of 8), exact positions / from the screen | 8 / 5 | 8 / 6 |
+| All eight scored levels finished (of 64), exact positions / from the screen | 16 / 8 | 20 / 10 |
+
+Per level (share of tries at an obstacle that fail, and whole plays
+finished of 8; E the earlier network, A the one learned again):
+
+| Level | Exact positions, E | A | From the screen, E | A | Whole, exact, E | A | Whole, screen, E | A |
+|---|---|---|---|---|---|---|---|---|
+| 1-1 | 0% | 2% | 5% | 6% | 8 | 8 | 5 | 6 |
+| 5-1 | 13% | 6% | 25% | 11% | 3 | 3 | 2 | 2 |
+| 2-1 | 8% | 2% | 34% | 30% | 0 | 2 | 0 | 0 |
+| 3-1 | 28% | 31% | 54% | 40% | 0 | 0 | 0 | 0 |
+| 4-1 | 3% | 0% | 32% | 7% | 4 | 5 | 0 | 1 |
+| 6-1 | 18% | 25% | 41% | 23% | 1 | 0 | 0 | 1 |
+| 7-1 | 25% | 36% | 35% | 17% | 0 | 2 | 1 | 0 |
+| 8-1 | 10% | 20% | 21% | 20% | 0 | 0 | 0 | 0 |
+
+The new network plays from the screen about as well as from exact
+positions: on the held-out levels it fails 17% of its tries from the
+screen against the earlier one's 31%, though 20% with exact positions
+against 13%. Each level's eight whole plays are still close to two
+samples, so the benches are the finer measure. In Block SMB it falls into
+fewer pits and is caught by fewer Spinies, and dies more often by hammers;
+in 102 of its 175 deaths it had given the fatal choice less than a 5% chance.
+
+What is left, by what the deaths show:
+
+- **Lava pits.** In 10 of 14 deaths by lava fireballs (the earlier network,
+  800 plays) the fireball had never been seen before the fatal choice: it
+  leapt from a pit no one could tell from a plain one, as nothing in the
+  state marks a pit as lava. Telling them apart (a lava surface, from Block
+  SMB's record and from vision) changes the network's inputs, and so needs
+  a retraining.
+- **Springboards.** The network is about 90% right on what can be done
+  from one, but Mario stands on one in 1% of the sampled states, and the
+  rest of its errors there are costly (a run chosen as the springboard
+  throws him, landings named that cannot be planned).
+- **Choices rated safe that are not**: caught between two Spinies, each
+  run toward one was given under 4%.
 
 ## Tried and not kept, 2026-11-11
 

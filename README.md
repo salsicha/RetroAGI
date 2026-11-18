@@ -144,38 +144,40 @@ Each thing was measured in the game's memory, in levels not scored on:
 Still missing: water levels.
 [How general is it?](docs/generalization.md) has every measurement.
 
-## Where it stands (2026-11-17)
+## Where it stands (2026-11-18)
 
 Learned from nothing in Block SMB in one run (`scripts/learn_in_block_smb.sh`,
-three rounds, 7.8 hours), then scored on the real game. Each round ends
-with the Block SMB exam on 100 random levels never trained on, each played
-for points and for speed:
+three rounds), then scored on the real game. Each round ends with the Block
+SMB exam on 100 random levels never trained on, each played for points and
+for speed:
 
 ```mermaid
 xychart-beta
     title "Fresh Block SMB levels finished, of 200 plays"
     x-axis ["Round 1", "Round 2", "Round 3"]
     y-axis "Finished" 0 --> 200
-    bar [114, 142, 142]
+    bar [156, 161, 152]
 ```
 
-The network kept (`data/outcome/outcome_corrected_20261116.pt`) against
-the one before it, both played with the present code:
+The network kept (`data/outcome/outcome_sided_20261117.pt`, the third
+round, chosen by Block SMB alone) against the one before it, both played
+with the present code:
 
-| | The network before (2026-11-14) | The network kept (2026-11-16) |
+| | The network before (2026-11-16) | The network kept (2026-11-18) |
 |---|---|---|
-| Fresh Block SMB levels finished | 284 of 400 | 291 of 400 |
-| World 1-1 finished, from the screen | 7 of 8 | 7 of 8 |
-| Held-out real levels (4-1, 6-1, 7-1, 8-1): tries at an obstacle that fail, from the screen | 27% | 30% |
-| The same with exact positions in place of seeing | 26% | 18% |
-| Held-out real levels finished, from the screen | 2 of 32 | 4 of 32 |
+| Fresh Block SMB plays finished | 610 of 800 | 618 of 800 |
+| World 1-1 finished, from the screen | 5 of 8 | 6 of 8 |
+| Held-out real levels (4-1, 6-1, 7-1, 8-1): tries at an obstacle that fail, from the screen | 31% | 17% |
+| The same with exact positions in place of seeing | 13% | 20% |
+| Held-out real levels finished, from the screen | 1 of 32 | 2 of 32 |
 
 A working agent needs about 2% of tries to fail: a level has about 35
 obstacles. The gap is what Block SMB still lacks of the game, which is
 closed by measuring more of it, and what vision's errors cost, which is
 seeing's own work. What still kills Mario in Block SMB is traced there:
-pits first, then Hammer Bros
-([How general is it?](docs/generalization.md#learned-again-in-the-corrected-block-smb-2026-11-17)).
+pits first, then Hammer Bros and their hammers, then lava fireballs that
+leap from pits nothing marks as lava
+([How general is it?](docs/generalization.md#learned-again-with-the-days-corrections-2026-11-18)).
 
 ## Usage
 
@@ -186,11 +188,11 @@ checkout to a trained and scored agent. The main commands:
 # learn the deciding network from nothing in Block SMB, round after round (hours)
 scripts/learn_in_block_smb.sh NAME
 # play fresh random Block SMB levels with a network choosing
-python -m retroagi.framework.practice --domain smb --levels 100 --first-seed 100000 --model data/outcome/outcome_corrected_20261116.pt
+python -m retroagi.framework.practice --domain smb --levels 100 --first-seed 100000 --model data/outcome/outcome_sided_20261117.pt
 # score it on each obstacle of a real level, from the screen
-python -m retroagi.framework.bench --domain smb --bench data/full_smb_obstacles/Level1-1 --source vision --model data/outcome/outcome_corrected_20261116.pt
+python -m retroagi.framework.bench --domain smb --bench data/full_smb_obstacles/Level1-1 --source vision --model data/outcome/outcome_sided_20261117.pt
 # play a whole real level from its start
-python -m retroagi.framework.play --domain smb --level Level1-1 --source vision --model data/outcome/outcome_corrected_20261116.pt
+python -m retroagi.framework.play --domain smb --level Level1-1 --source vision --model data/outcome/outcome_sided_20261117.pt
 # Pong: learn in Block Pong, then play the real game from the screen
 DOMAIN=pong scripts/learn_in_block_smb.sh NAME
 python -m retroagi.framework.play --domain pong --level Start --source vision --model data/outcome/outcome_pong1.pt
