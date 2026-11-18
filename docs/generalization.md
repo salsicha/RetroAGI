@@ -1201,7 +1201,16 @@ each frame pressed on a frame and braked the next, and slid off a ledge):
 fireball's box kept wider by how far off it may be (half a step of its
 bar's turn at its distance from the hub): 593 finished against 587 and the
 fire bar scenes 190 of 200 against 186, but as many deaths by fire bars (23
-against 21), so not what kills Mario at them.
+against 21), so not what kills Mario at them. Nor: a jump's re-plans (every
+4 frames of its run-up) kept able to carry on the plan they replace. A step
+down from a block, pressed 4 frames then let go, could not be re-planned:
+walking off was no longer allowed once the plan's takeoff (never, for a
+walk-off) was counted down, and letting go at once was not among the
+pressings tried (4 to 32 frames); the plan put in its place overshot onto
+the last pixels of the next step, and Mario slid into a pit. With walking
+off still allowed and every pressing from 0 to 32 frames in fours, 596 of
+the 800 finished against 610 (602 with the first alone, 606 with the
+second): no better, so neither is kept.
 
 ## Tried and not kept, 2026-11-11
 
