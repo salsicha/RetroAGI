@@ -36,7 +36,8 @@ and each level draws its own from those ranges (random_level):
   in some gaps (swinging across, going up and down, falling when stood on);
 - a Bullet Bill frenzy (5-3's) over a stretch of the pieces after it, and
   leaping Cheep Cheeps (2-3's) over some bridges;
-- springboards, the castles' fire bars and lava fireballs;
+- springboards, the castles' fire bars and lava fireballs (their pits hold
+  lava, which is seen: scenario "lava");
 - Bowser on his bridge over lava (the castles'), walking, jumping and
   breathing flames, a lift swinging over him, his free flames coming over
   the stretch before;
@@ -312,6 +313,7 @@ def random_level(seed: int, pieces: int = 12, only: Optional[str] = None, start_
     rng = random.Random(seed)
     x = start_flat * TILE
     pits, solids, enemies, frenzies = [], [], [], []  # pits (x0, x1); solids [x, y, w, h, kind]
+    lava_pits = []  # the pits with lava in them (x0, x1): those a lava fireball jumps from, and Bowser's
     contents = {}  # index in solids -> "coin" or "mushroom"
 
     def column(x0, tiles):
@@ -529,6 +531,7 @@ def random_level(seed: int, pieces: int = 12, only: Optional[str] = None, start_
                     x += rng.choice(LAVA_APART) * TILE
                 width = rng.choice(LAVA_PIT_TILES)
                 pit(x, width)
+                lava_pits.append((x, x + width * TILE))
                 enemies.append(lava(x + (width // 2) * TILE))
                 x += width * TILE
             ends_in_pit = True
@@ -596,6 +599,7 @@ def random_level(seed: int, pieces: int = 12, only: Optional[str] = None, start_
                              "until": float(x + BOWSER_BRIDGE * TILE), "turn": rng.randrange(2**31), "hard": hard,
                              "count": count})
             pit(x, BOWSER_BRIDGE)
+            lava_pits.append((x, x + BOWSER_BRIDGE * TILE))  # (the bridge is over lava, a fireball or not)
             solids.append([x, FLOOR, BOWSER_BRIDGE * TILE, TILE, "ground"])
             enemies.append({"kind": "bowser", "x": float(x + BOWSER_IN * TILE), "y": float(FLOOR - BOWSER_FEET),
                             "turn": rng.randrange(2**31), "clock": rng.randrange(256), "hard": hard, "count": count,
@@ -640,6 +644,7 @@ def random_level(seed: int, pieces: int = 12, only: Optional[str] = None, start_
             width, top = rng.randint(*BRIDGE_TILES), FLOOR - REACH * TILE
             pit(x, width)
             if rng.random() < LAVA_UNDER_BRIDGE:
+                lava_pits.append((x, x + width * TILE))
                 enemies.append(lava(x + (width // 2) * TILE))
             solids.append([x, top, width * TILE, TILE, "ground"])
             for k in range(rng.choice(ON_BRIDGE)):
@@ -695,6 +700,7 @@ def random_level(seed: int, pieces: int = 12, only: Optional[str] = None, start_
         "platform_kinds": [p[4] for p in platforms],
         "enemies": enemies,
         "frenzies": frenzies,
+        "lava": [list(span) for span in lava_pits],
         # (the flag's column at any height, above the screen too: a
         # springboard's strong throw can carry Mario over its top, and past
         # it the screen's edge keeps him from walking back)

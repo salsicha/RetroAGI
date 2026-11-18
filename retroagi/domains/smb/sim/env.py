@@ -73,6 +73,11 @@ ENEMY_GRAVITY, ENEMY_FALL = 0.2, 3.4
 # exact.
 PLATFORM_KINDS = ("ground", "brick", "question_block", "pipe", "cannon", "spring", "hidden")
 TILE = 16
+# Lava (the castles'): it fills a pit's two lowest rows of tiles, its top
+# LAVA_TOP from the screen's top, as the game draws it. Nothing stands on it;
+# scenario "lava" says which pits hold it ((x0, x1) each), so that it is
+# seen there.
+LAVA_TOP = 208
 SKY = (107, 140, 255)
 GROUND, GROUND_EDGE = (139, 69, 19), (84, 38, 8)
 BRICK, BRICK_MORTAR = (200, 76, 12), (64, 24, 0)
@@ -531,6 +536,7 @@ class MarioScenarioEnv:
         self.items = []  # mushrooms out of question blocks
         self.cannons = []  # Bullet Bill cannons: x, w, top, timer, shots
         self.frenzies = []  # stretches where things come on their own: kind, from, until, timer, count, turn
+        self.lava = []  # the pits holding lava (x0, x1)
         self.stomped = False
         self.enemies = []
         self.goal = None
@@ -656,6 +662,7 @@ class MarioScenarioEnv:
             {"x": p["rect"].x, "w": p["rect"].w, "top": p["rect"].y, "timer": CANNON_FRAMES[0], "shots": 0}
             for p, kind in zip(self.platforms, self.platform_kinds) if kind == "cannon"
         ]
+        self.lava = [(float(x0), float(x1)) for x0, x1 in scenario.get("lava", [])]
         self.frenzies = [{"kind": f["kind"], "from": float(f["from"]), "until": float(f["until"]), "timer": 1,
                           "count": int(f.get("count", 0)), "turn": int(f.get("turn", 1)), "hard": bool(f.get("hard"))}
                          for f in scenario.get("frenzies", [])]

@@ -49,7 +49,8 @@ MAX_SURFACES, MAX_ENEMIES, MAX_BUMPS = 8, 4, 4
 BUMP_REACH = 96
 # Token sizes: at most this many surfaces, enemies and items per state.
 SURFACE_SLOTS, ENEMY_SLOTS, ITEM_SLOTS = 24, 8, 2
-SURFACE_KINDS = ("ground", "pipe", "block", "question", "moving", "edge", "spring")
+SURFACE_KINDS = ("ground", "pipe", "block", "question", "moving", "edge", "spring", "lava")  # (new kinds last: a network
+# trained before one was added reads the numbers it knew)
 MARIO_WIDTH, SURFACE_WIDTH, ENEMY_WIDTH, ITEM_WIDTH = 7, 4 + len(SURFACE_KINDS), 7 + len(ENEMY_KINDS), 6
 # The network's inputs are scaled to about one: x by the screen's width, y
 # by its height, speeds by 4 pixels a frame.
@@ -88,7 +89,8 @@ def tokens(state: State) -> tuple:
     [ENEMY_SLOTS, ENEMY_WIDTH], items [ITEM_SLOTS, ITEM_WIDTH]], slot of each
     thing's ref): x relative to Mario's left side, y as on screen (his
     height says whether he is big); Mario's speeds (pixels a frame) and
-    whether he stands; each surface's kind; each enemy's velocity, whether
+    whether he stands; each surface's kind (lava in a pit among them:
+    State.lava); each enemy's velocity, whether
     it can be stomped and its kind (ENEMY_KINDS); each item's velocity. The nearest things
     take the slots; unused slots are zeros."""
     body = state.body
@@ -98,7 +100,7 @@ def tokens(state: State) -> tuple:
     surfaces = np.zeros((SURFACE_SLOTS, SURFACE_WIDTH), np.float32)
     enemies = np.zeros((ENEMY_SLOTS, ENEMY_WIDTH), np.float32)
     slots = {}
-    near = sorted(state.solids, key=lambda s: max(s.x0 - body[2], body[0] - s.x1, 0.0))
+    near = sorted(state.solids + state.lava, key=lambda s: max(s.x0 - body[2], body[0] - s.x1, 0.0))
     for k, s in enumerate(near[:SURFACE_SLOTS]):
         surfaces[k, :4] = (s.x0 - x, s.top, s.x1 - x, s.bottom)
         surfaces[k, 4 + SURFACE_KINDS.index(s.kind)] = 1.0

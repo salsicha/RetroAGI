@@ -1278,9 +1278,14 @@ What is left, by what the deaths show:
 - **Lava pits.** In 10 of 14 deaths by lava fireballs (the earlier network,
   800 plays) the fireball had never been seen before the fatal choice: it
   leapt from a pit no one could tell from a plain one, as nothing in the
-  state marks a pit as lava. Telling them apart (a lava surface, from Block
-  SMB's record and from vision) changes the network's inputs, and so needs
-  a retraining.
+  state marked a pit as lava. Now (2026-11-18) Block SMB's pits that hold
+  lava (those a lava fireball jumps from, and the one under Bowser's bridge)
+  are seen: the state gives each as a surface of kind "lava" across the
+  pit, its top where the game draws lava, which the network reads and the
+  planner never stands on (State.lava). A network trained before reads the
+  surfaces' numbers it knew and plays on. The network is learning again with
+  it (`lava_20261118`). Vision does not yet see lava in the real game (none
+  of the eight scored levels has any); teaching it is seeing's own work.
 - **Springboards.** The network is about 90% right on what can be done
   from one, but Mario stands on one in 1% of the sampled states, and the
   rest of its errors there are costly (a run chosen as the springboard

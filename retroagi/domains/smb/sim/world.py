@@ -18,7 +18,7 @@ from retroagi.domains.smb.controller import State
 from retroagi.domains.smb.planner import Enemy, Solid, screen_edge
 from retroagi.framework.interfaces import Step
 
-from .env import FIREBAR_STEPS, FLAME_BOX, SPINY_SPEED, MarioScenarioEnv, unseen
+from .env import FIREBAR_STEPS, FLAME_BOX, LAVA_TOP, SPINY_SPEED, MarioScenarioEnv, unseen
 from .env_state import restore_env_state, snapshot_env_state
 
 # The places of a thing kept as its track (frames).
@@ -200,4 +200,6 @@ class SimSource:
             solids=solids + [screen_edge(left)],
             enemies=enemies,
             items=items,
+            lava=[Solid(max(x0, left), LAVA_TOP, min(x1, right), env.height, "lava", ("lava", k))
+                  for k, (x0, x1) in enumerate(env.lava) if x1 > left and x0 < right],
         )

@@ -129,6 +129,9 @@ class State:
     # Things to collect (a mushroom out of a question block), as enemies'
     # boxes and velocities.
     items: list = field(default_factory=list)
+    # Lava seen in pits (Solids of kind "lava", which nothing stands on: only
+    # seen, never planned on; from Block SMB's record, not yet from vision).
+    lava: list = field(default_factory=list)
 
     @property
     def decidable(self) -> bool:

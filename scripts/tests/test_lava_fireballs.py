@@ -81,3 +81,43 @@ def test_the_generator_puts_lava_fireballs_in_pits():
                 assert not any(p[0] <= middle < p[0] + p[2] for p in floor)  # (over no floor: in a pit)
     assert any(len([e for e in s["enemies"] if e["kind"] == "lava"]) > 1 for s in scenes)
     assert any(e.get("kind") == "lava" for seed in range(60) for e in random_level(seed)["enemies"])
+
+
+def test_a_pit_with_lava_is_seen_as_lava_and_never_stood_on():
+    from retroagi.domains.smb.choices import SURFACE_KINDS, candidates, tokens
+
+    for seed in range(20):
+        s = skill_scene(seed, "lava")
+        spans = s["lava"]
+        for e in s["enemies"]:
+            if e["kind"] == "lava":  # (every fireball's pit holds lava)
+                assert any(x0 <= e["x"] + 8 < x1 for x0, x1 in spans)
+    world = SimWorld(skill_scene(0, "lava"))
+    world.reset()
+    for _ in range(60):
+        world.step(1)
+    state = SimSource().read(world)
+    (x0, x1), lava = world.env.lava[0], state.lava[0]
+    assert (lava.x0, lava.top, lava.x1, lava.bottom, lava.kind) == (x0, block.LAVA_TOP, x1, 240, "lava")
+    assert all(s.kind != "lava" for s in state.solids)  # (nothing the planner lands on)
+    surfaces = tokens(state)[0][1]
+    assert any(row[4 + SURFACE_KINDS.index("lava")] == 1.0 and row[1] == block.LAVA_TOP for row in surfaces)
+    assert not any(c.ref == lava.ref for c in candidates(state))
+    # Bowser's bridge is over lava, a fireball under it or not.
+    bowser = skill_scene(0, "bowser")
+    bridge = next(e for e in bowser["enemies"] if e["kind"] == "bowser")
+    assert any(x0 <= bridge["x"] < x1 for x0, x1 in bowser["lava"])
+
+
+def test_a_network_trained_before_lava_was_seen_still_plays():
+    from retroagi.domains.smb.domain import DOMAIN
+    from retroagi.framework.chooser import network_choosers
+
+    make = network_choosers(DOMAIN, "data/outcome/outcome_sided_20261117.pt", device="cpu")
+    chooser = make("speed_run")
+    world = SimWorld(skill_scene(0, "lava"))
+    world.reset()
+    for _ in range(60):
+        world.step(1)
+    state = SimSource().read(world)
+    assert state.lava and chooser.decide(state) is not None
