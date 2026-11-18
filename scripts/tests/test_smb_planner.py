@@ -200,6 +200,27 @@ def test_a_bounce_can_stomp_the_next_walker_too():
     assert plan.outcome.body[0] > second.at(plan.outcome.frame)[2]
 
 
+def test_a_stomp_s_bounce_is_foreseen_as_block_smb_moves_it():
+    # Block SMB's bounce (NESPlayerMotion.bounce, the game's) sets Mario's
+    # upward speed and keeps the fraction of speed he carried; the planner
+    # dropped that fraction and foresaw him bouncing a pixel a frame higher
+    # (a Paratroopa beside the one stomped was foreseen passed under).
+    goomba = Enemy((96.0, 192.0, 112.0, 208.0), 0.0, 0.0, ("slots", 0))
+    for force in (0, 60, 120, 200):
+        motion = NESPlayerMotion(y_speed=1, y_force=force, force=0x28, origin_y=150)
+        moved, y, heights = copy(motion), 150, []
+        for _ in range(30):
+            _, dy, _ = moved.advance(direction=0, jump=False, grounded=False, y=y)
+            y += dy
+            if y + 12 > goomba.box[1] and moved.y_speed > 0:
+                moved.bounce()
+            heights.append(y)
+        foreseen = [rollout(motion, (100.0, 150.0, 110.0, 162.0), 0, 0, 0, [FLOOR], [goomba], airborne=True,
+                            horizon=h) for h in range(1, 31)]
+        assert all(o.stomped is goomba for o in foreseen[-10:])
+        assert [o.body[1] for o in foreseen] == heights
+
+
 def test_a_run_ends_when_an_enemy_will_meet_mario_soon():
     running = NESPlayerMotion(x_speed=32, moving=1)  # two pixels a frame
     near = Enemy((172.0, 194.0, 188.0, 208.0), -0.5, 0.0, ("slots", 0))

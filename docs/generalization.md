@@ -1390,6 +1390,17 @@ within a few frames of landing, so a landing that would slide to an edge
 60 pixels on was refused for nothing: 515 of the 800 finished, 77 deaths
 in pits against 34.
 
+**A stomp's bounce.** Hopping Paratroopas killed Mario 9 times in the 800
+plays, Koopas of every other kind 9. In one, the planner foresaw the
+Paratroopas' hops exactly, a stomp on the first and the second passed
+under, and Block SMB's bounce off the first carried him into the second.
+Block SMB's bounce (as the game's) sets Mario's upward speed and keeps the
+fraction of speed he was carrying; the planner dropped that fraction and
+foresaw him bouncing up to a pixel a frame higher, 5 to 12 pixels higher
+at the top. It now keeps it, and foresees the bounce exactly
+(`scripts/tests/test_smb_planner.py`). The 800 plays: 632 finished against
+621, 16 deaths by Koopas against 18.
+
 ## Tried and not kept, 2026-11-11
 
 Measured with exact positions, against 0.97 on the tuned levels and 0.77

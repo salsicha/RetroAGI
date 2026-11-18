@@ -1188,8 +1188,7 @@ def _rollout(m0, x, y, x1, y1, pre_run, hold, direction, solid_paths, paths, sto
                 if stomped < 0:
                     stomped = e
                 down |= 1 << e
-                m[3] = STOMP_BOUNCE
-                m[4] = 0
+                m[3] = STOMP_BOUNCE  # (the fraction of speed he carries kept, as Block SMB's and the game's)
                 m[8] = m[7]
                 break
             hit = e
