@@ -1292,6 +1292,13 @@ What is left, by what the deaths show:
   throws him, landings named that cannot be planned).
 - **Choices rated safe that are not**: caught between two Spinies, each
   run toward one was given under 4%.
+- **Cannons.** Half of the deaths by Bullet Bills (6 of 12, the kept
+  network, 800 plays) are by one fired as the choice was made or just
+  after, from a cannon the state gives as ground (as the game's labels call
+  it). Told apart (a cannon surface kind, from Block SMB's record and from
+  vision), the network could learn what stands by one and the planner
+  could foresee its shots by their beat; as with lava, it changes the
+  network's inputs and so goes with a retraining.
 
 Hammers, traced with the kept network (2026-11-18). Of its deaths by
 hammers, a third were by one not yet thrown when the choice was made, and
