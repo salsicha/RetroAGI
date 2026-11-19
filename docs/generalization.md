@@ -1540,6 +1540,19 @@ him, a shell kicked after him). Runs then ended too often near things that
 would have passed: 667 of the 800 finished against 675, deaths by hammers
 17 against 14, by lava fireballs 19 against 14.
 
+**Where the planner stands against Block SMB.** Over 100 fresh levels
+played for points and for speed, 5,857 jump plans were carried out
+unchanged to their end; 97.4% ended where they foresaw, to the pixel. Of
+the 152 that did not, none killed Mario: 25 are landings 12 pixels taller
+than foreseen (a mushroom taken during the jump), and most of the rest
+landings on moving lifts 1 to 3 pixels off (Block SMB swings them; the
+planner moves them at their present speed, and where a lift is within its
+pixel and its swing the state does not show). What still kills Mario is
+the network's choices (a bold landing beside a Hammer Bro, a wait on a
+springboard) and what cannot be seen: a lava fireball still under the
+lava (all 7 lava deaths traced), a cannon's fresh shot, a Spiny just off
+the screen's edge.
+
 ## Tried and not kept, 2026-11-11
 
 Measured with exact positions, against 0.97 on the tuned levels and 0.77
