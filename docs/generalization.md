@@ -1508,6 +1508,22 @@ until he has footing to jump from, stops, or goes off that too
 
 The 800 plays: 665 finished against 661, 17 deaths in pits against 21.
 
+**A wait on a springboard.** Standing on a springboard, waiting is no wait:
+it presses Mario down and throws him up. Waits there, rated safe by the
+network (Mario stands on a springboard in 1% of the sampled states), threw
+him into a Bullet Bill, a pit and Lakitu. The controller now foresees the
+throw (braked until it comes, released after: what the wait presses) with
+the planner, enemies along their foreseen paths, and refuses the wait, as
+it refuses a jump it cannot plan, when the throw comes down onto an enemy
+or into a pit (`scripts/tests/test_springboards.py`, checked against Block
+SMB's throw). Where the jump that landed him on the springboard already
+decided the throw, every choice there is bad: foreseeing a springboard
+landing through its throw is left to do.
+
+The 800 plays: 665 finished, as before (the traced plays are not among
+them; no clear difference, kept as the controller foreseeing what Block
+SMB's throw does).
+
 ## Tried and not kept, 2026-11-11
 
 Measured with exact positions, against 0.97 on the tuned levels and 0.77

@@ -44,7 +44,11 @@ from .planner import (
     blocked,
     plan_flight,
     plan_jump,
+    rollout,
+    standing_spring,
 )
+from .planner import SPRING_HORIZON
+from .physics import SPRING_THROW
 
 # Frames of a planned jump after which the chooser decides again even if
 # Mario has not landed (a plan gone wrong).
@@ -202,6 +206,26 @@ def falls_on_run(state: State, direction: int, care: "Care", dynamics=RULES) -> 
     return False
 
 
+def _thrown_clear(state: State, care: "Care", dynamics=RULES) -> bool:
+    """Whether a wait is safe as far as a springboard goes: standing on
+    one, waiting is no wait (it presses him down and throws him up), and the
+    throw, braked until it comes (_brake) and released after, must come down
+    clear of every enemy (along its foreseen path, the care's berth) and of
+    every pit, as a jump's landing must. (Waits on springboards, rated safe,
+    threw Mario into a Bullet Bill, a pit and Lakitu.) True off one."""
+    spring = standing_spring(state.body, state.solids)
+    if spring is None:
+        return True
+    speed = state.motion.x_speed
+    brake = (-1 if speed > 0 else 1) if abs(speed) >= BRAKE_SPEED else 0
+    squash = spring.spring if spring.spring is not None and spring.spring >= 0 else -1
+    enemies = [copy(e) for e in state.enemies]
+    dynamics.paths(enemies, state.solids, SPRING_HORIZON + care.clear + 1)
+    outcome = rollout(state.motion, state.body, 0, 0, 0, state.solids, enemies, horizon=SPRING_HORIZON,
+                      steer=SPRING_THROW - squash, steer_direction=brake, berth=care.berth, safe_after=care.clear)
+    return outcome.end not in ("hit", "fell")
+
+
 def _brake(state: State) -> int:
     """Waiting Mario stops where he is: the button against his motion while
     it is BRAKE_SPEED or more (slower, the game turns him round instead),
@@ -338,6 +362,8 @@ class Controller:
         self.touched = False  # and seen on something since
         if choice.verb == "jump":
             self._plan(state)
+        elif choice.verb == "wait" and state.grounded and not _thrown_clear(state, CARE[choice.care], self.dynamics):
+            self.event = "infeasible"
 
     def _plan(self, state: State, latest_takeoff: int = HORIZON) -> None:
         goal = self.choice.goal

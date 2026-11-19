@@ -174,10 +174,13 @@ with the present code:
 A working agent needs about 2% of tries to fail: a level has about 35
 obstacles. The gap is what Block SMB still lacks of the game, which is
 closed by measuring more of it, and what vision's errors cost, which is
-seeing's own work. What still kills Mario in Block SMB is traced there:
-pits first, then Hammer Bros and their hammers, then lava fireballs that
-leap from pits nothing marks as lava
-([How general is it?](docs/generalization.md#learned-again-with-the-days-corrections-2026-11-18)).
+seeing's own work. What kills Mario in Block SMB is traced there, and
+the planner and controller corrected wherever they foresaw what Block SMB
+does not do ([How general is it?](docs/generalization.md#learned-again-with-the-days-corrections-2026-11-18)):
+with the day's corrections the kept network, unchanged, finishes 665 of
+the same 800 plays (deaths in pits 17 against 34, by Bullet Bills 12
+against 14, by hammers 13 against 21). Pits holding lava are now seen,
+and a network is learning again with them.
 
 ## Usage
 

@@ -172,3 +172,33 @@ def test_a_landing_on_a_springboard_is_watched_until_it_throws_him():
     # down, after the usual care's window, was taken for a safe landing)
     assert bill_at_landing(268) == ("hit", True)
     assert bill_at_landing(286) == ("landed", False)  # (thrown before it comes)
+
+
+def test_a_wait_on_a_springboard_whose_throw_meets_an_enemy_is_refused():
+    # Waiting on a springboard is no wait: it throws Mario up. Waits rated
+    # safe threw him into a Bullet Bill, a pit and Lakitu; the controller
+    # now foresees the throw and refuses the wait when it meets an enemy,
+    # as Block SMB's throw does; with the way clear the wait goes ahead.
+    from retroagi.domains.smb.controller import Choice, Controller
+    from retroagi.domains.smb.sim.env import BULLET_H, BULLET_W
+    for bill, refused in ((True, True), (False, False)):
+        world = SimWorld(scene(wall=False))
+        world.reset()
+        if bill:
+            world.env.enemies.append({
+                "kind": "bullet", "x": 200.0, "y": 100.0, "vx": 0.0, "vy": 0.0, "w": BULLET_W, "h": BULLET_H,
+                "speed": 0.0, "direction": -1, "patrol_min": -1e9, "patrol_max": 1e9, "edge_aware": False,
+                "on_ground": False, "dead": False, "stompable": True})
+        dropped_on(world)
+        source = SimSource()
+        state = source.read(world)
+        controller = Controller()
+        controller.start(Choice("wait", frames=24), state)
+        assert (controller.event == "infeasible") == refused
+        died = False
+        for _ in range(60):
+            step = world.step(0)
+            if step.over:
+                died = step.died
+                break
+        assert died == bill  # (Block SMB's throw: into the Bill, or clear)
