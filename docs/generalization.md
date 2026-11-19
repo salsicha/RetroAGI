@@ -1437,6 +1437,28 @@ its own takes some of them, and a run toward a lift moving across killed
 him on a path the change had only nudged (no clear difference, kept as the
 controller and the planner doing what Block SMB does).
 
+**A run chosen again at an edge, and a lift carrying him down.**
+
+- A run that ends at an edge presses back for a frame, and Mario,
+  turned to face back while still moving on, skids: his braking doubled,
+  the run's check found he would stop short of the edge. The next run
+  chosen pressed on, turning him round again; from there he could not
+  stop, and the check, asked once more after the press, ended that run a
+  frame later. Forward, back, forward, back: he kept his speed and went
+  over. A run now ends at the edge wherever this frame's press would take
+  him over (`scripts/tests/test_smb_planner.py`, checked against Block SMB
+  with Mario skidding at a ledge).
+- With lifts at whole pixels, a landing on a lift going down came out at
+  the screen's last row rather than a few rows past it, and was taken for
+  a landing; the lift carried him off the screen a frame later. The lift
+  he lands on is now followed through the landing's window, and a landing
+  it carries off the screen before he can choose again is a fall.
+
+The 800 plays with both: 648 finished against 637, 22 deaths in pits
+against 35. Before the springboard correction above the network, the
+same, finished 617 of the 800; it now finishes 648 (deaths in pits 22
+against 34, by Koopas 17 against 18, by Bullet Bills 8 against 14).
+
 ## Tried and not kept, 2026-11-11
 
 Measured with exact positions, against 0.97 on the tuned levels and 0.77

@@ -26,7 +26,7 @@ controller alone.
 """
 
 from copy import copy, deepcopy
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Optional
 
 from .physics import NESPlayerMotion
@@ -240,6 +240,14 @@ def pit_ahead(state: State, direction: int) -> bool:
         at = far
 
 
+def _pressed(state: State, direction: int) -> State:
+    """The state a frame on, Mario running ``direction`` on the ground."""
+    motion = copy(state.motion)
+    dx, _, _ = motion.advance(direction=direction, jump=False, grounded=True, y=state.body[1], run=True)
+    x0, top, x1, feet = state.body
+    return replace(state, body=(x0 + dx, top, x1 + dx, feet), motion=motion)
+
+
 def _carried(motion: NESPlayerMotion, direction: int, slide: float, drop: float) -> Optional[tuple]:
     """How far Mario, released now, has gone on when he has come down
     ``drop`` pixels after sliding ``slide`` pixels off an edge (pixels, from
@@ -429,9 +437,13 @@ class Controller:
         if any(meets_soon(state, e, CARE[choice.care].threat) for e in ahead):
             self.event = "threat"
             return BUTTON[direction, False] if choice.keep_speed else 0
-        if state.grounded and pit_ahead(state, direction):
+        if state.grounded and (pit_ahead(state, direction) or pit_ahead(_pressed(state, direction), direction)):
             # A run never takes Mario into a pit: it ends where he can still
-            # stop (in 5-1 a run back slid him into the pit behind).
+            # stop (in 5-1 a run back slid him into the pit behind), this
+            # frame's press counted: just turned back by the last run's end
+            # at an edge, Mario skids and would stop short, but the next run
+            # chosen pressed on, turning him round again, a frame each time,
+            # and he went over.
             self.event = "edge"
             return BUTTON[-direction, False]
         if not choice.keep_speed and left <= stopping_distance(state.motion, direction):

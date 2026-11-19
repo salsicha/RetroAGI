@@ -568,13 +568,14 @@ def test_a_slide_off_a_step_past_the_column_under_it_is_a_fall():
 
 def test_a_landing_on_a_lift_gone_below_the_screen_is_a_fall():
     # A lift going down met past the screen's bottom (a looping lift on its
-    # way round): Block SMB takes Mario off the screen for dead, whatever is
-    # under him; met higher up, it is a landing.
+    # way round), or carrying him past it before he can choose again: Block
+    # SMB takes Mario off the screen for dead, whatever is under him; met
+    # higher up, it is a landing.
     from retroagi.domains.smb.planner import SCREEN_BOTTOM
-    from retroagi.domains.smb.sim.env import MarioScenarioEnv
+    from retroagi.domains.smb.sim.env import LIFT_LOOP_SPEED, MarioScenarioEnv
     assert MarioScenarioEnv().height == SCREEN_BOTTOM
-    for top, end in ((150, "landed"), (198, "fell")):
-        lift = Solid(96, top, 144, top + 8, "moving", ("platforms", 1), 0.0, 1.0)
+    for top, end in ((150, "landed"), (200, "fell"), (196, "fell")):
+        lift = Solid(96, top, 144, top + 8, "moving", ("platforms", 1), 0.0, LIFT_LOOP_SPEED)
         outcome = rollout(NESPlayerMotion(), (110.0, 60.0, 120.0, 72.0), 0, 0, 0, [lift], [], airborne=True)
         assert outcome.end == end
 
@@ -608,3 +609,41 @@ def test_a_run_s_edge_follows_his_fall_to_a_lower_platform_and_his_slide_off_it(
                 assert pit or not died, (lower, speed, x)
                 safe += not pit
     assert safe  # (a wide one below still holds him)
+
+
+def test_a_run_s_edge_counts_this_frame_s_press():
+    # Just turned back by a run ended at an edge, Mario skids (facing back,
+    # moving on: his braking doubled) and would stop short; the next run
+    # chosen pressed on, turning him round again, and he went over. A run
+    # now ends at the edge wherever a press this frame would take him over,
+    # checked against Block SMB.
+    from retroagi.domains.smb.controller import BUTTON
+    from retroagi.domains.smb.sim.world import SimSource, SimWorld
+
+    def skidding(x, speed):
+        world = SimWorld({"world_width": 800, "scroll_x": 115, "mario": [float(x), 68.0], "frame_budget": 3000,
+                          "platforms": [[0, 80, 120, 16], [400, 208, 400, 32]], "platform_kinds": ["ground", "ground"],
+                          "enemies": [], "task": {"family": "game_level"}})
+        world.reset()
+        motion = world.env.motion
+        motion.x_speed, motion.moving, motion.facing, motion.running_speed = speed, 1, -1, speed
+        return world
+
+    def dies(world, first):
+        for k in range(150):
+            step = world.step(first if k == 0 else 0)
+            if step.over:
+                return step.died
+        return False
+
+    pressed_over = 0
+    for speed in (30, 38):
+        for x in range(60, 100, 4):
+            state = SimSource().read(skidding(x, speed))
+            controller = Controller()
+            controller.start(Choice("run", x=300, keep_speed=True), state)
+            button = controller.press(state)
+            if dies(skidding(x, speed), BUTTON[1, False]):
+                pressed_over += 1
+                assert controller.event == "edge" and button == BUTTON[-1, False], (speed, x)
+    assert pressed_over
