@@ -1006,13 +1006,10 @@ def _reached(x0, y0, x1, y1, m0, paths, stomped, frame, safe_after, solids, marg
                 m[0] = 0
             x0 += dx
             x1 += dx
-            supported, below = _footing(x0, x1 - x0, y1, solids, (m[0] > 0) - (m[0] < 0)), False
-            for i in range(solids.shape[0]):
-                if x0 < solids[i, 2] and solids[i, 0] < x1 and solids[i, 1] > y1 + STAND:
-                    below = True
-            if not supported:
-                if not below:
-                    return SLID_OFF
+            off = _slid(x0, x1, y1, m, solids)
+            if off == SLID_OFF:
+                return SLID_OFF
+            if off == 1:
                 falling = True  # off onto something lower
                 m[3] = 0
                 m[4] = 0
@@ -1023,22 +1020,73 @@ def _reached(x0, y0, x1, y1, m0, paths, stomped, frame, safe_after, solids, marg
             sink = SPRING_SQUASH[min(k, len(SPRING_SQUASH) - 1)] if pressed else 0
             if x0 < b[2] + margin and b[0] - margin < x1 and y0 + sink < b[3] + margin and b[1] - margin < y1 + sink:
                 return e
-    while falling:
-        # Still falling: down to what catches him, or off the screen (a
-        # column a step lower under the step's end caught him only if he was
-        # still over it when he got down to it; at speed he was past it and
-        # in the pit beyond).
-        if y0 > SCREEN_BOTTOM:
-            return SLID_OFF
-        dx, dy, _ = _advance(m, 0, False, False, y0, False)
-        if _blocked(x0 + dx, x0, x1 - x0, y0, y1, solids, dy, False):
-            dx = _flush(x0 + dx, x0, x1 - x0, y0, y1, solids, dy, False) - x0
-        for i in range(solids.shape[0]):
-            if x0 + dx < solids[i, 2] and solids[i, 0] < x1 + dx and y1 <= solids[i, 1] <= y1 + dy:
-                falling = False
-                break
-        x0, x1, y0, y1 = x0 + dx, x1 + dx, y0 + dy, y1 + dy
+    following = falling
+    for _ in range(240):
+        # Off what he landed on when the window ended: followed down to what
+        # catches him, or off the screen (a column a step lower under the
+        # step's end caught him only if he was still over it when he got
+        # down to it; at speed he was past it and in the pit beyond), and
+        # his slide there until he has footing to jump from, stops, or goes
+        # off it too (two steps down a staircase, down at speed on the
+        # floor's last pixels, he slid into the pit).
+        if not following:
+            break
+        if falling:
+            if y0 > SCREEN_BOTTOM:
+                return SLID_OFF
+            dx, dy, _ = _advance(m, 0, False, False, y0, False)
+            if _blocked(x0 + dx, x0, x1 - x0, y0, y1, solids, dy, False):
+                dx = _flush(x0 + dx, x0, x1 - x0, y0, y1, solids, dy, False) - x0
+            landed = False
+            for i in range(solids.shape[0]):
+                if x0 + dx < solids[i, 2] and solids[i, 0] < x1 + dx and y1 <= solids[i, 1] <= y1 + dy:
+                    falling, landed, dy = False, True, solids[i, 1] - y1
+                    m[3] = 0
+                    m[4] = 0
+                    break
+            x0, x1, y0, y1 = x0 + dx, x1 + dx, y0 + dy, y1 + dy
+            if landed and _footing(x0, x1 - x0, y1, solids, (m[0] > 0) - (m[0] < 0)):
+                return -1  # (footing to jump from: he can choose again there)
+        else:
+            dx, _, _ = _advance(m, 0, False, True, y0, False)
+            if _blocked(x0 + dx, x0, x1 - x0, y0, y1, solids):
+                dx = _flush(x0 + dx, x0, x1 - x0, y0, y1, solids) - x0
+                m[0] = 0
+            x0 += dx
+            x1 += dx
+            off = _slid(x0, x1, y1, m, solids)
+            if off == SLID_OFF:
+                return SLID_OFF
+            if off == 1:
+                falling = True
+            elif m[0] == 0 or _footing(x0, x1 - x0, y1, solids, (m[0] > 0) - (m[0] < 0)):
+                return -1
     return -1
+
+
+@njit(cache=True)
+def _slid(x0, x1, feet, m, solids):
+    """Mario sliding at ``x0``..``x1``, feet at ``feet``: 0 still on what he
+    slides on; 1 off it (his body past its end, as Block SMB drops him)
+    with something lower under him to fall to; SLID_OFF off it with
+    nothing under him, or still on it but so near its end, sliding, that
+    no jump could start (_footing) with nothing lower to catch him (on the
+    far end of 1-1's last staircase top every jump was refused and he slid
+    into the pit). (Taken off as soon as no jump could start, a slide down
+    a staircase was foreseen falling two frames early, onto a step Block
+    SMB's Mario flew past.)"""
+    on, below = False, False
+    for i in range(solids.shape[0]):
+        if x0 < solids[i, 2] and solids[i, 0] < x1:
+            if abs(solids[i, 1] - feet) <= STAND:
+                on = True
+            elif solids[i, 1] > feet + STAND:
+                below = True
+    if not on:
+        return 1 if below else SLID_OFF
+    if not below and not _footing(x0, x1 - x0, feet, solids, (m[0] > 0) - (m[0] < 0)):
+        return SLID_OFF
+    return 0
 
 
 @njit(cache=True)

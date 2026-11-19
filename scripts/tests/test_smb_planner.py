@@ -696,3 +696,32 @@ def test_a_jump_at_a_block_is_foreseen_frame_by_frame_as_block_smb_plays_it():
                     assert foreseen.body[:2] == (mario["x"], mario["y"]), (row_top, x, hold, frame)
                     if foreseen.end != "timeout":
                         break
+
+
+def test_a_landing_that_slides_down_a_staircase_into_the_pit_is_foreseen():
+    # Down at speed on the last pixels of a staircase's top step, Mario
+    # slides off and comes down the steps to the floor's end, over the pit.
+    # Taken off the step as soon as no jump could start (two frames early),
+    # he was foreseen landing on a lower step and safe; Block SMB has him
+    # fly past it and land on the floor's last pixel, into the pit. (Slower,
+    # both set him on that step, with room to jump from.)
+    import numpy as np
+    from retroagi.domains.smb.planner import SLID_OFF, _motion_array, _reached, _solid_paths
+    from retroagi.domains.smb.sim.world import SimWorld
+    steps = [(400, 208, 576, 240), (624, 208, 640, 240), (576, 160, 592, 240), (592, 176, 608, 240),
+             (608, 192, 624, 240), (900, 208, 1200, 240)]
+    solids = [Solid(*box, "ground", ("platforms", k)) for k, box in enumerate(steps)]
+    for speed in (40,):
+        motion = NESPlayerMotion(x_speed=speed, x_accumulator=152, x_fraction=112, moving=1, facing=1,
+                                 force_down=144, force=144)
+        after = _solid_paths(solids, 2)[1]
+        assert _reached(587.0, 148.0, 597.0, 160.0, _motion_array(motion), np.zeros((0, 60, 4)), 0, 26, 6,
+                        after, 0.0, False) == SLID_OFF, speed
+        world = SimWorld({"world_width": 1400, "scroll_x": 115, "mario": [587.0, 148.0], "frame_budget": 3000,
+                          "platforms": [[x0, top, x1 - x0, bottom - top] for x0, top, x1, bottom in steps],
+                          "platform_kinds": ["ground"] * len(steps), "enemies": [], "task": {"family": "game_level"}})
+        world.reset()
+        played = world.env.motion
+        played.x_speed, played.moving, played.facing, played.x_accumulator, played.x_fraction = speed, 1, 1, 152, 112
+        played.force_down = played.force = 144  # (down from a jump: its pull)
+        assert any(world.step(0).died for _ in range(60)), speed

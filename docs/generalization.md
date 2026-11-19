@@ -1493,6 +1493,21 @@ The 800 plays: 661 finished against 649 (deaths by hammers 13 against 19,
 in pits 21 against 22; by Hammer Bros 20 against 14, by Spinies 12
 against 8).
 
+**Down a staircase at speed.** Landed at speed on the last pixels of a
+staircase's top step, Mario slides off and comes down the steps. The
+planner took him off the step as soon as no jump could start there (a few
+pixels before his body is past its end, where Block SMB drops him): his
+fall began two frames early, he was foreseen landing on a lower step that
+Block SMB's Mario flies past, and safe; Block SMB set him down on the
+floor's last pixel, over the pit. He now falls when his body is past the
+end, the test for a jump still starting kept apart (off the end with
+nothing under him, or so near it that no jump could start, it is a slide
+into a pit), and after such a fall his slide where he lands is followed
+until he has footing to jump from, stops, or goes off that too
+(`scripts/tests/test_smb_planner.py`).
+
+The 800 plays: 665 finished against 661, 17 deaths in pits against 21.
+
 ## Tried and not kept, 2026-11-11
 
 Measured with exact positions, against 0.97 on the tuned levels and 0.77
