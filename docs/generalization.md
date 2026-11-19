@@ -1534,6 +1534,12 @@ where Block SMB went in 12; now in all 36 (`scripts/tests/test_smb_planner.py`).
 
 The 800 plays: 675 finished against 665, deaths by Spinies 10 against 14.
 
+Tried and not kept: the run's look along foreseen paths widened from
+things above Mario to everything near him (a fire bar sweeping in beside
+him, a shell kicked after him). Runs then ended too often near things that
+would have passed: 667 of the 800 finished against 675, deaths by hammers
+17 against 14, by lava fireballs 19 against 14.
+
 ## Tried and not kept, 2026-11-11
 
 Measured with exact positions, against 0.97 on the tuned levels and 0.77
