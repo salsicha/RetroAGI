@@ -51,7 +51,13 @@ BUMP_REACH = 96
 SURFACE_SLOTS, ENEMY_SLOTS, ITEM_SLOTS = 24, 8, 2
 SURFACE_KINDS = ("ground", "pipe", "block", "question", "moving", "edge", "spring", "lava")  # (new kinds last: a network
 # trained before one was added reads the numbers it knew)
-MARIO_WIDTH, SURFACE_WIDTH, ENEMY_WIDTH, ITEM_WIDTH = 7, 4 + len(SURFACE_KINDS), 7 + len(ENEMY_KINDS), 6
+# After the kinds, lava's two numbers (State.lava): frames since its pit's
+# fireball was last seen, at most LAVA_UNSEEN (beyond the longest wait
+# between its leaps, 315 frames, it tells nothing more), and whether one
+# has been seen at all. (Last, so a network trained before reads the
+# numbers it knew.)
+LAVA_UNSEEN = 320
+MARIO_WIDTH, SURFACE_WIDTH, ENEMY_WIDTH, ITEM_WIDTH = 7, 4 + len(SURFACE_KINDS) + 2, 7 + len(ENEMY_KINDS), 6
 # The network's inputs are scaled to about one: x by the screen's width, y
 # by its height, speeds by 4 pixels a frame.
 X, Y, SPEED = 256.0, 240.0, 4.0
@@ -62,7 +68,8 @@ X, Y, SPEED = 256.0, 240.0, 4.0
 SPEC = ChoiceSpec(
     groups=(
         TokenGroup("mario", 0, MARIO_WIDTH, len(GENERAL), (X, Y, X, Y, SPEED, SPEED, 1.0)),
-        TokenGroup("surfaces", SURFACE_SLOTS, SURFACE_WIDTH, 4 * CARES, (X, Y, X, Y) + (1.0,) * len(SURFACE_KINDS),
+        TokenGroup("surfaces", SURFACE_SLOTS, SURFACE_WIDTH, 4 * CARES,
+                   (X, Y, X, Y) + (1.0,) * len(SURFACE_KINDS) + (float(LAVA_UNSEEN), 1.0),
                    present=(4, SURFACE_WIDTH)),
         TokenGroup("enemies", ENEMY_SLOTS, ENEMY_WIDTH, 3 * CARES,
                    (X, Y, X, Y, SPEED, SPEED, 1.0) + (1.0,) * len(ENEMY_KINDS), present=(0, ENEMY_WIDTH)),
@@ -90,7 +97,8 @@ def tokens(state: State) -> tuple:
     thing's ref): x relative to Mario's left side, y as on screen (his
     height says whether he is big); Mario's speeds (pixels a frame) and
     whether he stands; each surface's kind (lava in a pit among them:
-    State.lava); each enemy's velocity, whether
+    State.lava) and, for lava, the frames since its fireball was last seen
+    and whether it has been (LAVA_UNSEEN); each enemy's velocity, whether
     it can be stomped and its kind (ENEMY_KINDS); each item's velocity. The nearest things
     take the slots; unused slots are zeros."""
     body = state.body
@@ -104,6 +112,9 @@ def tokens(state: State) -> tuple:
     for k, s in enumerate(near[:SURFACE_SLOTS]):
         surfaces[k, :4] = (s.x0 - x, s.top, s.x1 - x, s.bottom)
         surfaces[k, 4 + SURFACE_KINDS.index(s.kind)] = 1.0
+        if s.unseen is not None:
+            surfaces[k, 4 + len(SURFACE_KINDS)] = min(s.unseen, LAVA_UNSEEN)
+            surfaces[k, 5 + len(SURFACE_KINDS)] = 1.0
         slots[s.ref] = k
     near = sorted(state.enemies, key=lambda e: abs(e.box[0] - x))
     for k, e in enumerate(near[:ENEMY_SLOTS]):

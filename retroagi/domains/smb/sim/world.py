@@ -12,6 +12,7 @@ saved and put back with the world's state).
 """
 
 import math
+from typing import Optional
 from copy import copy
 
 from retroagi.domains.smb.controller import State
@@ -58,11 +59,19 @@ class SimWorld:
 
     def _track(self) -> None:
         """Each enemy's and item's places while it has been in sight, this
-        frame's added (out of sight, its track starts again)."""
+        frame's added (out of sight, its track starts again); for a lava
+        fireball once seen, the frames since it was last in sight
+        (``unseen``: 0 while it is)."""
         env = self.env
         for thing in (*env.enemies, *env.items):
-            seen = thing.get("track", ()) + ((thing["x"], thing["y"]),) if in_sight(env, thing) else ()
+            sighted = in_sight(env, thing)
+            seen = thing.get("track", ()) + ((thing["x"], thing["y"]),) if sighted else ()
             thing["track"] = seen[-TRACK_FRAMES:]
+            if thing.get("kind") == "lava":
+                if sighted:
+                    thing["unseen"] = 0
+                elif thing.get("unseen") is not None:
+                    thing["unseen"] += 1
 
     @property
     def progress(self) -> float:
@@ -138,6 +147,14 @@ def plant_velocity(plant: dict) -> float:
 QUESTION = "question"
 
 
+def _unseen(env, x0: float, x1: float) -> Optional[int]:
+    """Frames since a lava fireball of the pit ``x0``..``x1`` was last in
+    sight (the soonest of its fireballs); None if none has been seen."""
+    seen = [e["unseen"] for e in env.enemies
+            if e.get("kind") == "lava" and e.get("unseen") is not None and x0 <= e["x"] + e["w"] / 2 <= x1]
+    return min(seen) if seen else None
+
+
 class SimSource:
     """The controller's state from the simulator: what is on the screen,
     in world pixels."""
@@ -198,6 +215,7 @@ class SimSource:
             solids=solids + [screen_edge(left)],
             enemies=enemies,
             items=items,
-            lava=[Solid(max(x0, left), LAVA_TOP, min(x1, right), env.height, "lava", ("lava", k))
+            lava=[Solid(max(x0, left), LAVA_TOP, min(x1, right), env.height, "lava", ("lava", k),
+                        unseen=_unseen(env, x0, x1))
                   for k, (x0, x1) in enumerate(env.lava) if x1 > left and x0 < right],
         )

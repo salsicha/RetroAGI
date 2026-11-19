@@ -1617,7 +1617,17 @@ the kept network does), and about that is right: a lava fireball leaps
 again 126 to 315 frames after its last leap, at random, and while it is
 under the lava nothing seen tells when. A jump over its pit is a gamble of
 a few percent that only waiting for the fireball to show itself would
-avoid, and nothing in the state says how long ago it last went under.
+avoid, and nothing in the state said how long ago it last went under.
+
+So the state now says it (2026-11-19): each lava pit gives the frames
+since its fireball was last in sight (counted by the world as it follows
+what is seen, from the first sighting on; 0 while it is up), and whether
+it has been seen at all. The network reads both after the surface's kind
+(at most 320 frames: past the longest wait between leaps it tells
+nothing more), so a network trained before still reads the numbers it
+knew. It is what a player watching the screen knows, and vision could
+give it the same way once it sees lava. The network is learning again
+with it (`lavatime_20261119`).
 
 The kept network's real-game score with the present code, against the
 same network with the code of 2026-11-18 (above): whole plays finished 20

@@ -121,3 +121,34 @@ def test_a_network_trained_before_lava_was_seen_still_plays():
         world.step(1)
     state = SimSource().read(world)
     assert state.lava and chooser.decide(state) is not None
+
+
+def test_the_state_says_how_long_ago_its_fireball_was_seen():
+    # Under the lava a fireball's next leap is not seen coming (126 to 315
+    # frames after its last, at random): a jump over its pit is a gamble
+    # that only knowing when it last showed itself can time. The lava gives
+    # the frames since its fireball was last in sight, None until it has
+    # been, and the network reads both.
+    from retroagi.domains.smb.choices import LAVA_UNSEEN, SURFACE_KINDS, tokens
+    from retroagi.domains.smb.sim.world import in_sight
+
+    world = SimWorld({**scene(wait=40, mario=(250.0, FLOOR - 12)), "lava": [list(PIT)]})
+    world.reset()
+    source = SimSource()
+    assert source.read(world).lava[0].unseen is None
+    fireball, last, gone = lava_of(world), None, 0
+    for frame in range(400):
+        world.step(0)
+        state = source.read(world)
+        lava = state.lava[0]
+        if in_sight(world.env, fireball):
+            last = frame
+        if last is None:
+            assert lava.unseen is None
+        else:
+            assert lava.unseen == frame - last
+            gone = max(gone, lava.unseen)
+        row = next(r for r in tokens(state)[0][1] if r[4 + SURFACE_KINDS.index("lava")] == 1.0)
+        known = lava.unseen is not None
+        assert tuple(row[-2:]) == (min(lava.unseen, LAVA_UNSEEN) if known else 0.0, float(known))
+    assert gone > 20  # (seen, gone under, and counted while it was)

@@ -222,6 +222,9 @@ class Solid:
     vx: float = 0.0
     vy: float = 0.0
     spring: Optional[int] = None
+    # Lava in a pit: frames since its fireball was last seen (0 while it is
+    # in sight; None: never seen). Only seen, never planned on.
+    unseen: Optional[int] = None
 
 
 @dataclass
