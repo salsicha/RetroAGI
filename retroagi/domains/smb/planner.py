@@ -720,7 +720,11 @@ def _blocked(x, start, width, top, feet, solids, dy=0.0, rising=False):
     under or over it already passes), as it moves ``dy`` this frame:
     ``rising`` (its speed upward after the move) with its feet from
     LIFT_TOUCH above the lift's top down, or falling or level with them
-    deeper than LIFT_LAND (between, it is set on the lift)."""
+    deeper than LIFT_LAND (between, it is set on the lift). A block met
+    with the feet up to WALL_DEPTH into its top is a ledge he is set on only
+    falling or level: rising, it is a wall (Block SMB's, the game's; taken
+    for a ledge, a jump at a brick row was foreseen landing on it, and was
+    stopped against its side, down onto a Hammer Bro)."""
     for i in range(solids.shape[0]):
         if not (x < solids[i, 2] and solids[i, 0] < x + width):
             continue
@@ -732,9 +736,24 @@ def _blocked(x, start, width, top, feet, solids, dy=0.0, rising=False):
                     and (rising or depth > LIFT_LAND) and now > before):  # (feet crossing its top: a landing)
                 return True
             continue
-        if feet > solids[i, 1] + WALL_DEPTH and top < solids[i, 3] and now > before:
-            return True
+        if (feet > solids[i, 1] + WALL_DEPTH or (rising and feet > solids[i, 1])) and top < solids[i, 3] and now > before:
+            return True  # (set on a block met with his feet just into its top only falling or level, as Block SMB's)
     return False
+
+
+@njit(cache=True)
+def _flush(nx, x, width, top, feet, solids, dy=0.0, rising=False):
+    """Where a body moved from ``x`` toward ``nx`` and blocked (_blocked)
+    stops: flush against the wall it meets, as Block SMB sets Mario (his
+    side at its side), not back where it was (2 pixels short of a brick
+    row's side, a fall past its corner was foreseen landing beside it)."""
+    best = nx
+    for i in range(solids.shape[0]):
+        if not _blocked(nx, x, width, top, feet, solids[i:i + 1], dy, rising):
+            continue
+        at = solids[i, 0] - width if nx > x else solids[i, 2]
+        best = min(best, at) if nx > x else max(best, at)
+    return max(x, best) if nx > x else min(x, best)
 
 
 @njit(cache=True)
@@ -972,7 +991,7 @@ def _reached(x0, y0, x1, y1, m0, paths, stomped, frame, safe_after, solids, marg
             # of a fire bar beside it).
             dx, dy, _ = _advance(m, 0, False, False, y0, False)
             if _blocked(x0 + dx, x0, x1 - x0, y0, y1, solids, dy, False):
-                dx = 0.0
+                dx = _flush(x0 + dx, x0, x1 - x0, y0, y1, solids, dy, False) - x0
             for i in range(solids.shape[0]):
                 if x0 + dx < solids[i, 2] and solids[i, 0] < x1 + dx and y1 <= solids[i, 1] <= y1 + dy:
                     dy, falling = solids[i, 1] - y1, False
@@ -983,10 +1002,8 @@ def _reached(x0, y0, x1, y1, m0, paths, stomped, frame, safe_after, solids, marg
         else:
             dx, _, _ = _advance(m, 0, False, True, y0, False)
             if _blocked(x0 + dx, x0, x1 - x0, y0, y1, solids):
-                dx = 0.0  # stopped by a wall (the next step up)
+                dx = _flush(x0 + dx, x0, x1 - x0, y0, y1, solids) - x0  # stopped by a wall (the next step up)
                 m[0] = 0
-                m[1] = 0
-                m[2] = 0
             x0 += dx
             x1 += dx
             supported, below = _footing(x0, x1 - x0, y1, solids, (m[0] > 0) - (m[0] < 0)), False
@@ -1015,7 +1032,7 @@ def _reached(x0, y0, x1, y1, m0, paths, stomped, frame, safe_after, solids, marg
             return SLID_OFF
         dx, dy, _ = _advance(m, 0, False, False, y0, False)
         if _blocked(x0 + dx, x0, x1 - x0, y0, y1, solids, dy, False):
-            dx = 0.0
+            dx = _flush(x0 + dx, x0, x1 - x0, y0, y1, solids, dy, False) - x0
         for i in range(solids.shape[0]):
             if x0 + dx < solids[i, 2] and solids[i, 0] < x1 + dx and y1 <= solids[i, 1] <= y1 + dy:
                 falling = False
@@ -1112,11 +1129,10 @@ def _rollout(m0, x, y, x1, y1, pre_run, hold, direction, solid_paths, paths, sto
         airborne = airborne or jumped
         nx = x + dx
         feet = y + height
-        if _blocked(nx, x, width, y, feet, solids, dy if airborne else 0.0, airborne and m[3] + m[4] / 256 < 0):
-            nx = x  # a wall: no sideways motion, as the game stops it
-            m[0] = 0
-            m[1] = 0
-            m[2] = 0
+        rising = airborne and m[3] + m[4] / 256 < 0
+        if _blocked(nx, x, width, y, feet, solids, dy if airborne else 0.0, rising):
+            nx = _flush(nx, x, width, y, feet, solids, dy if airborne else 0.0, rising)  # a wall: flush against it
+            m[0] = 0  # (his speed stopped, its fractions kept: Block SMB's wall contact)
         got = _touch(nx, y, nx + width, y + height, items, frame, got)
         if not airborne:
             ny = y
@@ -1136,7 +1152,7 @@ def _rollout(m0, x, y, x1, y1, pre_run, hold, direction, solid_paths, paths, sto
                 airborne = True  # ran off a ledge
         else:
             ny = y + dy
-            if dy < 0:
+            if rising:  # (by his speed after the move, as Block SMB's: at the top of a rise, set on a block)
                 for i in range(solids.shape[0]):
                     if after[i, 5] > 0:  # a lift (where it is after its move this frame)
                         reach = after[i, 3] + LIFT_REACH

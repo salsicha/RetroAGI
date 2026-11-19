@@ -667,3 +667,32 @@ def test_a_run_ends_under_something_falling_onto_its_way():
     controller.start(Choice("run", x=20, keep_speed=True), state)
     controller.press(state)
     assert controller.event == "threat"
+
+
+def test_a_jump_at_a_block_is_foreseen_frame_by_frame_as_block_smb_plays_it():
+    # Against a block's side Block SMB sets Mario flush with it, stops his
+    # speed but keeps its fractions, takes the block for a wall while he
+    # rises (by his speed after the move) and sets him on it at the top of a
+    # rise; the planner left him where he was the frame before, zeroed the
+    # fractions, let him through a block met rising with his feet just into
+    # its top, and went by the pixel moved (a jump at a brick row foreseen
+    # landing on it was stopped against its side, down onto a Hammer Bro).
+    from retroagi.domains.smb.planner import buttons_of
+    from retroagi.domains.smb.sim.world import SimSource, SimWorld
+    for row_top in (126, 138, 150, 168):
+        for x in (70, 100, 135):
+            for hold in (4, 16, 24):
+                world = SimWorld({"world_width": 800, "scroll_x": 115, "mario": [float(x), 196.0],
+                                  "frame_budget": 3000, "platforms": [[0, 208, 800, 32], [160, row_top, 64, 16]],
+                                  "platform_kinds": ["ground", "brick"], "enemies": [],
+                                  "task": {"family": "game_level"}})
+                world.reset()
+                world.env.motion.x_speed, world.env.motion.moving, world.env.motion.facing = 40, 1, 1
+                state = SimSource().read(world)
+                for frame, button in enumerate(buttons_of(0, hold, 1, 40), 1):
+                    world.step(button)
+                    mario = world.env.mario
+                    foreseen = rollout(state.motion, state.body, 0, hold, 1, state.solids, [], horizon=frame)
+                    assert foreseen.body[:2] == (mario["x"], mario["y"]), (row_top, x, hold, frame)
+                    if foreseen.end != "timeout":
+                        break

@@ -1469,6 +1469,30 @@ him (`scripts/tests/test_smb_planner.py`). The 800 plays: 649 finished
 against 648, deaths by hammers 19 against 22, by Hammer Bros 14 against
 17; the controller's work each frame is not measurably more.
 
+**A jump at a block, frame by frame.** A careful jump at a brick row was
+foreseen landing on it; in Block SMB it was stopped against the row's side
+and came down onto a Hammer Bro below. Compared frame by frame with Block
+SMB over 720 jumps at a row of blocks (heights, distances, holds), the
+planner's Mario went where Block SMB's did in 521. Four rules differed:
+
+- at a block's side Block SMB sets Mario flush with it; the planner left
+  him where he was the frame before (up to 2 pixels short, a fall past a
+  corner foreseen beside it);
+- it stops his sideways speed but keeps its fractions; the planner zeroed
+  them, a pixel off once he was clear of the block;
+- it sets him on a block met with his feet up to 3 pixels into its top
+  only while he falls or is level; rising, the block is a wall (the case
+  above);
+- whether he lands or bumps his head goes by his speed after the move: at
+  the top of a rise, moved up a pixel, he is set on the block.
+
+The planner now has all four, and goes where Block SMB goes in all 720
+(`scripts/tests/test_smb_planner.py`).
+
+The 800 plays: 661 finished against 649 (deaths by hammers 13 against 19,
+in pits 21 against 22; by Hammer Bros 20 against 14, by Spinies 12
+against 8).
+
 ## Tried and not kept, 2026-11-11
 
 Measured with exact positions, against 0.97 on the tuned levels and 0.77
