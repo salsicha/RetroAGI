@@ -725,3 +725,30 @@ def test_a_landing_that_slides_down_a_staircase_into_the_pit_is_foreseen():
         played.x_speed, played.moving, played.facing, played.x_accumulator, played.x_fraction = speed, 1, 1, 152, 112
         played.force_down = played.force = 144  # (down from a jump: its pull)
         assert any(world.step(0).died for _ in range(60)), speed
+
+
+def test_a_jump_to_the_left_is_foreseen_at_a_walk_as_the_game_is_played():
+    # The run button is held going right only (Block SMB's, and the real
+    # game's buttons: nes/game.RUN_ACTIONS); the planner took every press
+    # for a run, and foresaw a jump to the left landing 20 pixels further
+    # than Block SMB's, on the Spiny it meant to pass.
+    from retroagi.domains.smb.planner import buttons_of
+    from retroagi.domains.smb.sim.world import SimSource, SimWorld
+    for speed in (0, -16, -24):
+        for pre_run, hold in ((0, 12), (12, 24)):
+            world = SimWorld({"world_width": 800, "scroll_x": 115, "mario": [400.0, 196.0], "frame_budget": 3000,
+                              "platforms": [[0, 208, 800, 32]], "platform_kinds": ["ground"], "enemies": [],
+                              "task": {"family": "game_level"}})
+            world.reset()
+            motion = world.env.motion
+            motion.x_speed = speed
+            if speed:
+                motion.moving = motion.facing = -1
+            state = SimSource().read(world)
+            for frame, button in enumerate(buttons_of(pre_run, hold, -1, 50), 1):
+                world.step(button)
+                mario = world.env.mario
+                foreseen = rollout(state.motion, state.body, pre_run, hold, -1, state.solids, [], horizon=frame)
+                assert foreseen.body[:2] == (mario["x"], mario["y"]), (speed, pre_run, hold, frame)
+                if foreseen.end != "timeout":
+                    break

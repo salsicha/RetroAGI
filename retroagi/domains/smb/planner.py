@@ -1171,7 +1171,7 @@ def _rollout(m0, x, y, x1, y1, pre_run, hold, direction, solid_paths, paths, sto
         if pressed and frame == pre_run and not airborne and not _footing(x, width, y + height, solids, moving):
             return _FELL, frame, x, y, x + width, y + height, -1, -1, stomped, got, bumped  # off the end before it takes
         d = steer_direction if frame < steer else direction
-        dx, dy, jumped = _advance(m, d, pressed, not airborne and not on_spring, y, True)
+        dx, dy, jumped = _advance(m, d, pressed, not airborne and not on_spring, y, d > 0)  # (the run button held going right only, as the game is played)
         if on_spring:
             dx = 0  # (held where he is while it presses him down: his speed as in the air)
         airborne = airborne or jumped

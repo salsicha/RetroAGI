@@ -177,9 +177,9 @@ closed by measuring more of it, and what vision's errors cost, which is
 seeing's own work. What kills Mario in Block SMB is traced there, and
 the planner and controller corrected wherever they foresaw what Block SMB
 does not do ([How general is it?](docs/generalization.md#learned-again-with-the-days-corrections-2026-11-18)):
-with the day's corrections the kept network, unchanged, finishes 665 of
-the same 800 plays (deaths in pits 17 against 34, by Bullet Bills 12
-against 14, by hammers 13 against 21). Pits holding lava are now seen,
+with the day's corrections the kept network, unchanged, finishes 675 of
+the same 800 plays (deaths in pits 15 against 34, by Bullet Bills 10
+against 14, by hammers 14 against 21). Pits holding lava are now seen,
 and a network is learning again with them.
 
 ## Usage

@@ -1524,6 +1524,16 @@ The 800 plays: 665 finished, as before (the traced plays are not among
 them; no clear difference, kept as the controller foreseeing what Block
 SMB's throw does).
 
+**Left at a walk.** The run button is held going right only, in Block SMB
+as in the real game's buttons (right and right-jump add it); going left
+Mario walks, at most 1.5 pixels a frame. The planner, and the controller's
+checks of a run, took every press for a run: a jump to the left over a
+Spiny was foreseen landing 20 pixels further than Block SMB's, on the
+Spiny. Over 36 jumps to the left (speeds, run-ups, holds) the planner went
+where Block SMB went in 12; now in all 36 (`scripts/tests/test_smb_planner.py`).
+
+The 800 plays: 675 finished against 665, deaths by Spinies 10 against 14.
+
 ## Tried and not kept, 2026-11-11
 
 Measured with exact positions, against 0.97 on the tuned levels and 0.77

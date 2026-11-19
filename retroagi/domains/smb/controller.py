@@ -196,7 +196,7 @@ def falls_on_run(state: State, direction: int, care: "Care", dynamics=RULES) -> 
     dynamics.paths(above, state.solids, frames)
     motion, dx = copy(state.motion), 0.0
     for k in range(1, frames + 1):
-        step, _, _ = motion.advance(direction=direction, jump=False, grounded=True, y=top, run=True)
+        step, _, _ = motion.advance(direction=direction, jump=False, grounded=True, y=top, run=direction > 0)
         dx += step
         for e in above:
             b = e.at(k)
@@ -293,7 +293,7 @@ def pit_ahead(state: State, direction: int) -> bool:
 def _pressed(state: State, direction: int) -> State:
     """The state a frame on, Mario running ``direction`` on the ground."""
     motion = copy(state.motion)
-    dx, _, _ = motion.advance(direction=direction, jump=False, grounded=True, y=state.body[1], run=True)
+    dx, _, _ = motion.advance(direction=direction, jump=False, grounded=True, y=state.body[1], run=direction > 0)
     x0, top, x1, feet = state.body
     return replace(state, body=(x0 + dx, top, x1 + dx, feet), motion=motion)
 
