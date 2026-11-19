@@ -144,9 +144,9 @@ Each thing was measured in the game's memory, in levels not scored on:
 Still missing: water levels.
 [How general is it?](docs/generalization.md) has every measurement.
 
-## Where it stands (2026-11-18)
+## Where it stands (2026-11-19)
 
-Learned from nothing in Block SMB in one run (`scripts/learn_in_block_smb.sh`,
+The kept network learned from nothing in Block SMB in one run (`scripts/learn_in_block_smb.sh`,
 three rounds), then scored on the real game. Each round ends with the Block
 SMB exam on 100 random levels never trained on, each played for points and
 for speed:
@@ -160,27 +160,29 @@ xychart-beta
 ```
 
 The network kept (`data/outcome/outcome_sided_20261117.pt`, the third
-round, chosen by Block SMB alone) against the one before it, both played
-with the present code:
+round, chosen by Block SMB alone) against the one learned again since with
+pits holding lava seen (2026-11-19), both played with the present code:
 
-| | The network before (2026-11-16) | The network kept (2026-11-18) |
+| | The network kept (2026-11-18) | Learned again, lava seen (2026-11-19) |
 |---|---|---|
-| Fresh Block SMB plays finished | 610 of 800 | 618 of 800 |
-| World 1-1 finished, from the screen | 5 of 8 | 6 of 8 |
-| Held-out real levels (4-1, 6-1, 7-1, 8-1): tries at an obstacle that fail, from the screen | 31% | 17% |
-| The same with exact positions in place of seeing | 13% | 20% |
-| Held-out real levels finished, from the screen | 1 of 32 | 2 of 32 |
+| Fresh Block SMB plays finished | 675 of 800 | 657 of 800 |
+| World 1-1 finished, from the screen | 6 of 8 | 5 of 8 |
+| Held-out real levels (4-1, 6-1, 7-1, 8-1): tries at an obstacle that fail, from the screen | 26% | 27% |
+| The same with exact positions in place of seeing | 17% | 24% |
+| Held-out real levels finished, from the screen | 4 of 32 | 4 of 32 |
 
 A working agent needs about 2% of tries to fail: a level has about 35
 obstacles. The gap is what Block SMB still lacks of the game, which is
 closed by measuring more of it, and what vision's errors cost, which is
 seeing's own work. What kills Mario in Block SMB is traced there, and
 the planner and controller corrected wherever they foresaw what Block SMB
-does not do ([How general is it?](docs/generalization.md#learned-again-with-the-days-corrections-2026-11-18)):
-with the day's corrections the kept network, unchanged, finishes 675 of
-the same 800 plays (deaths in pits 15 against 34, by Bullet Bills 10
-against 14, by hammers 14 against 21). Pits holding lava are now seen,
-and a network is learning again with them.
+does not do ([How general is it?](docs/generalization.md#learned-again-with-lava-pits-seen-2026-11-19)):
+with those corrections the kept network, unchanged, finishes 675 of the
+same 800 plays, against 617 before them (deaths in pits 15 against 34, by
+Bullet Bills 10 against 14, by hammers 14 against 21). Seeing which pits
+hold lava did not help the network learned again with it: a lava
+fireball's next leap is not known while it is under the lava, and it dies
+there as often.
 
 ## Usage
 

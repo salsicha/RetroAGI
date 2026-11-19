@@ -1283,8 +1283,8 @@ What is left, by what the deaths show:
   are seen: the state gives each as a surface of kind "lava" across the
   pit, its top where the game draws lava, which the network reads and the
   planner never stands on (State.lava). A network trained before reads the
-  surfaces' numbers it knew and plays on. The network is learning again with
-  it (`lava_20261118`). Vision does not yet see lava in the real game (none
+  surfaces' numbers it knew and plays on. The network learned again with
+  it does not die there less ([below](#learned-again-with-lava-pits-seen-2026-11-19)). Vision does not yet see lava in the real game (none
   of the eight scored levels has any); teaching it is seeing's own work.
 - **Springboards.** The network is about 90% right on what can be done
   from one, but Mario stands on one in 1% of the sampled states, and the
@@ -1552,6 +1552,78 @@ the network's choices (a bold landing beside a Hammer Bro, a wait on a
 springboard) and what cannot be seen: a lava fireball still under the
 lava (all 7 lava deaths traced), a cannon's fresh shot, a Spiny just off
 the screen's edge.
+
+Tried and not kept: landings a wait can stop on preferred. In four of the
+six deaths in a pit during a wait, a bold jump had landed Mario at a run's
+speed on a 32-pixel block, a 24-pixel lift or the last pixels before a
+pit; its few frames of watching ended with him still sliding, and the wait
+chosen next braked him off the end. Foreseeing that braked slide agrees
+with Block SMB on every landing tried, and with it preferred (and, where
+no jump held toward the goal gave one, jumps braking in the air tried)
+three of the four finish. But over the 800 plays it made jumps slower
+where speed served the next one: 656 finished against 675 (655 with the
+preference at takeoff only, 659 in flight only), the deaths in pits
+unchanged at 15, and more by fire bars and Spinies.
+
+## Learned again with lava pits seen (2026-11-19)
+
+The deciding network learned from nothing once more
+(`scripts/learn_in_block_smb.sh lava_20261118`, three rounds, 27.5 hours)
+with Block SMB's pits that hold lava given in the state. As before, its
+later rounds sampled with the planner's corrections of 2026-11-18 merged
+during the run. The exam after each round (100 fresh random levels, both
+modes, and 4,200 skill scenes):
+
+| Round | Fresh levels finished (of 200) | Skill scenes passed |
+|---|---|---|
+| 1 | 147 | 98.7% |
+| 2 | 152 | 98.8% |
+| 3 | 170 | 98.6% |
+
+None is kept. On the 800 fresh plays with the present code the rounds
+finish 582, 626 and 657, against the kept network's 675; the third is
+better only on the exam's 100 levels (170 against 164). Both played with
+the present code, on Block SMB and then on the real game (score only):
+
+| | The kept network (2026-11-18) | Learned again, lava seen |
+|---|---|---|
+| Fresh Block SMB plays finished (of 800) | 675 | 657 |
+| ... died in a pit | 15 | 29 |
+| ... by lava fireballs | 14 | 15 |
+| ... by Hammer Bros and their hammers | 32 | 33 |
+| Held-out real levels: tries at an obstacle that fail, exact positions | 17% | 24% |
+| ... from the screen | 26% | 27% |
+| Held-out real levels finished, exact positions / from the screen (of 32) | 8 / 4 | 8 / 4 |
+| World 1-1 finished (of 8), exact positions / from the screen | 8 / 6 | 8 / 5 |
+| All eight scored levels finished (of 64), exact positions / from the screen | 20 / 13 | 19 / 10 |
+
+Per level (share of tries at an obstacle that fail, and whole plays
+finished of 8; K the kept network, L the one learned again):
+
+| Level | Exact positions, K | L | From the screen, K | L | Whole, exact, K | L | Whole, screen, K | L |
+|---|---|---|---|---|---|---|---|---|
+| 1-1 | 3% | 8% | 10% | 2% | 8 | 8 | 6 | 5 |
+| 5-1 | 5% | 25% | 11% | 11% | 4 | 0 | 3 | 1 |
+| 2-1 | 20% | 43% | 23% | 49% | 0 | 3 | 0 | 0 |
+| 3-1 | 24% | 18% | 41% | 32% | 0 | 0 | 0 | 0 |
+| 4-1 | 6% | 27% | 27% | 38% | 4 | 6 | 2 | 3 |
+| 6-1 | 16% | 27% | 28% | 35% | 0 | 0 | 1 | 1 |
+| 7-1 | 27% | 25% | 32% | 30% | 2 | 1 | 1 | 0 |
+| 8-1 | 19% | 21% | 19% | 10% | 2 | 1 | 0 | 0 |
+
+Seeing which pits hold lava did not teach the network to die there less.
+It still gives its fatal jumps over lava a 2% chance of death (median, as
+the kept network does), and about that is right: a lava fireball leaps
+again 126 to 315 frames after its last leap, at random, and while it is
+under the lava nothing seen tells when. A jump over its pit is a gamble of
+a few percent that only waiting for the fireball to show itself would
+avoid, and nothing in the state says how long ago it last went under.
+
+The kept network's real-game score with the present code, against the
+same network with the code of 2026-11-18 (above): whole plays finished 20
+of 64 with exact positions as before, 13 of 64 from the screen against 10;
+on the held-out levels 17% of tries at an obstacle fail with exact
+positions against 20%, 26% from the screen against 17%.
 
 ## Tried and not kept, 2026-11-11
 
