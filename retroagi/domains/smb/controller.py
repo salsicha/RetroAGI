@@ -176,6 +176,32 @@ def meets_soon(state: State, enemy: Enemy, frames: int = THREAT_FRAMES) -> bool:
     return closing > 0 and max(gap, 0.0) <= closing * frames
 
 
+def falls_on_run(state: State, direction: int, care: "Care", dynamics=RULES) -> bool:
+    """Whether something above Mario's level (a hammer coming down, a
+    Spiny's egg) meets him, running on ``direction``, within the care's
+    threat frames, each along its own foreseen path (``dynamics``) and kept
+    the care's berth wider. (Run back under a hammer falling just behind
+    him: on_the_way looks at his level only.)"""
+    frames = care.threat
+    x0, top, x1, feet = state.body
+    reach = (4.0 + 4.5) * frames  # (his top speed and a thrown thing's)
+    above = [copy(e) for e in state.enemies
+             if e.box[3] <= feet - LEVEL and abs((e.box[0] + e.box[2]) / 2 - (x0 + x1) / 2) <= reach]
+    if not above:
+        return False
+    dynamics.paths(above, state.solids, frames)
+    motion, dx = copy(state.motion), 0.0
+    for k in range(1, frames + 1):
+        step, _, _ = motion.advance(direction=direction, jump=False, grounded=True, y=top, run=True)
+        dx += step
+        for e in above:
+            b = e.at(k)
+            if (x0 + dx < b[2] + care.berth and b[0] - care.berth < x1 + dx
+                    and top < b[3] + care.berth and b[1] - care.berth < feet):
+                return True
+    return False
+
+
 def _brake(state: State) -> int:
     """Waiting Mario stops where he is: the button against his motion while
     it is BRAKE_SPEED or more (slower, the game turns him round instead),
@@ -434,7 +460,9 @@ class Controller:
             self.event = "blocked"
             return 0
         ahead = [e for e in state.enemies if ((e.box[0] + e.box[2]) / 2 - middle) * direction > 0]
-        if any(meets_soon(state, e, CARE[choice.care].threat) for e in ahead):
+        care = CARE[choice.care]
+        if (any(meets_soon(state, e, care.threat) for e in ahead)
+                or falls_on_run(state, direction, care, self.dynamics)):
             self.event = "threat"
             return BUTTON[direction, False] if choice.keep_speed else 0
         if state.grounded and (pit_ahead(state, direction) or pit_ahead(_pressed(state, direction), direction)):

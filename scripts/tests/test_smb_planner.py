@@ -233,7 +233,8 @@ def test_a_run_ends_when_an_enemy_will_meet_mario_soon():
     controller = Controller()
     controller.start(Choice("run", x=600, keep_speed=True), state)
     assert controller.press(state) == 1 and controller.event == "threat"  # still running on
-    clear = State(STANDING, running, True, [FLOOR], [far, behind, above])
+    ledge = Solid(120, 144, 240, 160, "block", ("blocks", 0))  # (what the one above walks on)
+    clear = State(STANDING, running, True, [FLOOR, ledge], [far, behind, above])
     controller.start(Choice("run", x=600, keep_speed=True), clear)
     controller.press(clear)
     assert controller.event is None
@@ -647,3 +648,22 @@ def test_a_run_s_edge_counts_this_frame_s_press():
                 pressed_over += 1
                 assert controller.event == "edge" and button == BUTTON[-1, False], (speed, x)
     assert pressed_over
+
+
+def test_a_run_ends_under_something_falling_onto_its_way():
+    # A hammer coming down just ahead: on_the_way looks at Mario's level
+    # only, and a run back took him under it. Along its own foreseen path,
+    # it meets his run within the care's threat frames; one falling well
+    # behind him does not.
+    from retroagi.domains.smb.controller import CARE, falls_on_run
+    running_left = NESPlayerMotion(x_speed=-16, moving=-1, facing=-1)
+    for x, meets in ((86.0, True), (140.0, False)):
+        hammer = Enemy((x, 150.0, x + 8, 158.0), -1.0, 2.0, ("slots", 0), kind="thrown")
+        state = State(STANDING, running_left, True, [FLOOR], [hammer])
+        assert falls_on_run(state, -1, CARE[1]) == meets, x
+    controller = Controller()
+    hammer = Enemy((86.0, 150.0, 94.0, 158.0), -1.0, 2.0, ("slots", 0), kind="thrown")
+    state = State(STANDING, running_left, True, [FLOOR], [hammer])
+    controller.start(Choice("run", x=20, keep_speed=True), state)
+    controller.press(state)
+    assert controller.event == "threat"

@@ -1459,6 +1459,16 @@ against 35. Before the springboard correction above the network, the
 same, finished 617 of the 800; it now finishes 648 (deaths in pits 22
 against 34, by Koopas 17 against 18, by Bullet Bills 8 against 14).
 
+**Something falling onto a run.** A run ends when an enemy at Mario's
+level will meet him soon; things above his level (a hammer coming down, a
+Spiny's egg) were not looked at, and a run back took him under a hammer
+falling just behind him. Things above him nearby are now followed along
+their own foreseen paths (the planner's) against his run over the care's
+threat frames, kept the care's berth wider, and the run ends if one meets
+him (`scripts/tests/test_smb_planner.py`). The 800 plays: 649 finished
+against 648, deaths by hammers 19 against 22, by Hammer Bros 14 against
+17; the controller's work each frame is not measurably more.
+
 ## Tried and not kept, 2026-11-11
 
 Measured with exact positions, against 0.97 on the tuned levels and 0.77
