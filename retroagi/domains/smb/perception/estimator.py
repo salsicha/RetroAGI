@@ -176,10 +176,16 @@ class MotionEstimator:
             self.motion_ready = False
             return
         direction = 1 if button in (1, 2) else -1 if button in (3, 4) else 0
+        # Rising, he is in the air whatever the screen shows: it shows the
+        # takeoff a frame late, and run on the ground that frame the model
+        # passed the walking top speed, which in the air unlocks the running
+        # one (it had him at 30 where the game kept 24, and a flight check
+        # let go of right over 1-1's pit between the last staircases).
+        rising = self.motion.y_speed < 0
         self.predicted_dx, self.predicted_dy, _ = self.motion.advance(
             direction=direction,
             jump=button in (2, 4, 5),
-            grounded=scene.mario.on_something and scene.mario.support != "air",
+            grounded=scene.mario.on_something and scene.mario.support != "air" and not rising,
             y=scene.mario.box[1],
             run=direction > 0,
         )

@@ -1647,6 +1647,43 @@ against 675, 118 die against 114, and about 60 plays changed each way.
 The network's small chances are not sharp enough for a stricter rule to
 choose by.
 
+### What seeing costs, traced again (2026-11-19)
+
+From the screen the kept network fails 26% of its tries at obstacles on
+the held-out levels against 17% with exact positions. Two of the bench's
+starts failed every try from the screen and none from memory: 1-1's pit
+between the last staircases (0 of 8) and 3-1's from x 832 (0 of 8).
+
+- **A takeoff seen a frame late let Mario speed up in the air.** Vision's
+  motion estimate runs the game's motion rules on the buttons pressed.
+  The screen shows a jump's takeoff a frame late, and the estimate ran
+  that frame as one on the ground, with the run button held: Mario went
+  from 24 (the walking top speed) to 25, and in the air 25 or more keeps
+  the running top speed, 40. At 1-1's pit the game kept him at 24; the
+  estimate had him at 30, the flight check let go of right for two
+  frames, and he met the far staircase's side 1 to 2 pixels below its
+  top. Rising, Mario is now in the air whatever the screen shows. 1-1's
+  pit is passed in 8 of 8 tries; the tries at obstacles that fail from
+  the screen are 22% on the held-out levels (26% before), 8% on 1-1 and
+  5-1 (11%); whole plays of the eight levels finished from the screen 11
+  of 64 against 13.
+- **A rising Piranha Plant is seen late.** At 3-1's start from x 832 a
+  plant rose under Mario's jump over its pipe. The game's memory shows
+  its head over the pipe's top from frame 51; vision's network first
+  finds it at frame 58, 4 pixels tall, and the state leaves out enemies
+  under 6 pixels (fragments in 1-1's second pit were read as Goombas),
+  so the plant comes into the state at frame 62. Not changed yet.
+- **Tried and not kept: no slowing in open running.** At 5-1's start the
+  estimate checks its last four frames' moves against the seen ones, and
+  2 pixels short sets the speed to the seen one (kept for a jump against
+  a step's side, a wall the motion rules do not know). Running on open
+  floor, Mario's changing sprite lags his body by as much: the speed went
+  from 22 to 16, he took off at 18 where the game had 25, the game took
+  him to 40 in the air and the estimate kept 24, and he jumped into the
+  first Goombas. Slowing only with a solid's side just ahead removed one
+  of the two early deaths there, but over the bench the tries failing
+  rose (held out 24% against 22%, 2-1 and 3-1 43% against 38%).
+
 ## Tried and not kept, 2026-11-11
 
 Measured with exact positions, against 0.97 on the tuned levels and 0.77

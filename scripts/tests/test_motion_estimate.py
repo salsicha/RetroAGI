@@ -44,6 +44,23 @@ def test_a_jump_seen_a_frame_late_is_kept():
     assert estimate.motion.y_speed == -4
 
 
+def test_a_jump_seen_a_frame_late_keeps_the_air_top_speed():
+    """Jumping at the walking top speed (24), Mario keeps it in the air
+    while right and run are held, as the game does (World 1-1, the jump
+    across the pit between the last staircases). The screen shows the
+    takeoff a frame late; taken for standing that frame, the model ran him
+    on the ground to 25, which unlocks the running top speed in the air, and
+    it had him at 30 where the game kept 24 (a flight check then let go of
+    right and he hit the far staircase's side)."""
+    estimate = MotionEstimator()
+    estimate.motion.x_speed, estimate.motion.moving, estimate.motion.facing = 24, 1, 1
+    estimate.executed(2, _scene(standing=True))  # jump and right pressed, standing
+    estimate.executed(2, _scene(standing=True, top=172))  # rising, still shown standing
+    for _ in range(10):
+        estimate.executed(2, _scene(standing=False, top=150))
+    assert estimate.motion.x_speed == 24
+
+
 def test_in_the_air_the_fall_goes_on():
     estimate = MotionEstimator()
     estimate.motion.y_speed, estimate.motion.y_force = 3, 40
