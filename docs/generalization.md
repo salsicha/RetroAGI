@@ -1672,7 +1672,11 @@ between the last staircases (0 of 8) and 3-1's from x 832 (0 of 8).
   its head over the pipe's top from frame 51; vision's network first
   finds it at frame 58, 4 pixels tall, and the state leaves out enemies
   under 6 pixels (fragments in 1-1's second pit were read as Goombas),
-  so the plant comes into the state at frame 62. Not changed yet.
+  so the plant comes into the state at frame 62. Tried and not kept: a
+  plant's head on a pipe's top kept however small. That start failed as
+  often (6 of 8 tries), the tries failing over the bench rose (held out
+  24% against 22%), and whole plays of the eight levels finished 14 of 64
+  against 11.
 - **Tried and not kept: no slowing in open running.** At 5-1's start the
   estimate checks its last four frames' moves against the seen ones, and
   2 pixels short sets the speed to the seen one (kept for a jump against
