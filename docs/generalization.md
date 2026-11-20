@@ -1707,7 +1707,11 @@ between the last staircases (0 of 8) and 3-1's from x 832 (0 of 8).
   him to 40 in the air and the estimate kept 24, and he jumped into the
   first Goombas. Slowing only with a solid's side just ahead removed one
   of the two early deaths there, but over the bench the tries failing
-  rose (held out 24% against 22%, 2-1 and 3-1 43% against 38%).
+  rose (held out 24% against 22%, 2-1 and 3-1 43% against 38%). Nor was
+  a longer look kept (8 frames against 3 pixels, which the box's lag
+  never reaches and a real speed error does): with the fixes below, held
+  out 21% of tries failing against 18%, whole plays 9 of 64 against 11.
+  The quick correction costs some plays and saves more.
 
 ## Tried and not kept, 2026-11-11
 
