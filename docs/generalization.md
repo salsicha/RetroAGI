@@ -1635,6 +1635,18 @@ of 64 with exact positions as before, 13 of 64 from the screen against 10;
 on the held-out levels 17% of tries at an obstacle fail with exact
 positions against 20%, 26% from the screen against 17%.
 
+Tried and not kept: a stricter "safe" for the chooser. Of the kept
+network's 114 deaths in the 800 plays, 32 come in a choice it gave a
+chance of death between 1% and 5%, and 27 in one it gave less; the
+chooser counts anything under 5% as safe and then takes the quickest. In
+one traced death by a fire bar the bold landing was given 0.24% and the
+careful ones of the same jump 0.02%: the network ranked them right, and
+in the sampling the bold one led to death and the careful ones did not,
+but both were under 5%. With 1% as safe, 669 of the 800 plays finish
+against 675, 118 die against 114, and about 60 plays changed each way.
+The network's small chances are not sharp enough for a stricter rule to
+choose by.
+
 ## Tried and not kept, 2026-11-11
 
 Measured with exact positions, against 0.97 on the tuned levels and 0.77
