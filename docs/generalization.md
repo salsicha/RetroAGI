@@ -1677,6 +1677,16 @@ between the last staircases (0 of 8) and 3-1's from x 832 (0 of 8).
   often (6 of 8 tries), the tries failing over the bench rose (held out
   24% against 22%), and whole plays of the eight levels finished 14 of 64
   against 11.
+- **A Paratroopa just bounced was taken to hang in the air.** Vision's
+  tracker averages a thing's moves and starts again at every reversal of
+  course, and a hopping Paratroopa reverses at every bounce: for the 7
+  frames until 8 samples were back, the state had it still. At 8-1 from
+  x 2640 those were the frames in which the flight check pulled Mario's
+  jump over it back, and it came down on him; the game's memory, read
+  from its places, had it rising at once. Its speed is now read from its
+  moves, bounces included, as the memory source reads its places: that
+  start is passed in 5 of 8 tries against 3, the rest as before (held
+  out 21% of tries failing against 22%), whole plays 12 of 64 against 11.
 - **Tried and not kept: no slowing in open running.** At 5-1's start the
   estimate checks its last four frames' moves against the seen ones, and
   2 pixels short sets the speed to the seen one (kept for a jump against

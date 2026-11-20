@@ -20,6 +20,7 @@ from retroagi.domains.smb.planner import (
 )
 
 from .scene_lists import packed_lists
+from .tracks import ESTIMATE_SAMPLES
 
 # Perceived enemies seen for fewer frames than this are taken to walk as
 # walkers do, WALK pixels a frame toward Mario (a track found again gave a
@@ -181,10 +182,17 @@ def perceived(feedback, scene, items: Optional[ItemTracker] = None) -> Optional[
             world = _plant_box(world)
         elif kind == "thrown":
             world = thrown_box(world)
-        if len(t.samples) >= MEASURED:
+        if kind == "hopper" and len(t.moves) >= MEASURED:
+            # From its moves, bounces included, as the memory source reads
+            # its places: every bounce reverses its course and starts the
+            # averaged samples again (read from them, a Paratroopa just
+            # bounced stood still for MEASURED frames, and a flight over it
+            # at 8-1 was pulled back short of it, under its fall).
+            recent = t.moves[-ESTIMATE_SAMPLES:]
+            vx = sum(dx for dx, _ in recent) / len(recent)
+            vy = hopper_speed([dy for _, dy in t.moves])
+        elif len(t.samples) >= MEASURED:
             vx, vy = t.velocity
-            if kind == "hopper":
-                vy = hopper_speed([dy for _, dy in t.samples])
         elif kind in ("walker", "hopper"):
             vx, vy = (-WALK if world[0] > body[0] else WALK), 0.0
         else:
