@@ -1698,6 +1698,17 @@ between the last staircases (0 of 8) and 3-1's from x 832 (0 of 8).
   the held-out levels against 21% (17% with exact positions), 23% on the
   six levels never used to tune anything against 26%; whole plays 11 of
   64 against 12.
+- **Tried and not kept: what is seen moved on one frame.** A picture
+  shows the sprites and the scroll as they were before the game's last
+  step (the pixel labels read them from the saved state taken before it),
+  so from the screen Mario's height trails the game's memory by a frame
+  as he rises, and a jump between 2-1's pair of Goombas came down on the
+  second. Moving Mario on by the motion model's move for the last button
+  and each enemy by its speed made things worse: 28% of tries at
+  obstacles failing on the held-out levels against 18%, 16% on 1-1 and
+  5-1 against 8%, whole plays 8 of 64 against 11. The rest of seeing
+  (the motion estimate's corrections, the controller's checks on what is
+  seen) has been set on the frame-old picture.
 - **Tried and not kept: no slowing in open running.** At 5-1's start the
   estimate checks its last four frames' moves against the seen ones, and
   2 pixels short sets the speed to the seen one (kept for a jump against
