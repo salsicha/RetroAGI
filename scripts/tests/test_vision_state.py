@@ -33,3 +33,26 @@ def test_a_hopper_just_bounced_is_seen_rising():
     assert hopper.kind == "hopper"
     assert hopper.vy < -0.5  # (-0.95: the game memory's reading 3 frames after a bounce)
     assert abs(hopper.vx + 0.5) < 0.01
+
+
+def _koopa_scene(box):
+    return SimpleNamespace(enemies=[SimpleNamespace(box=box, kind="walker", type=0)], moving_platforms=[])
+
+
+def test_a_falling_koopa_whose_drawn_top_jumps_keeps_its_track():
+    """A Koopa falling 3 pixels a frame whose drawn box's top drops 11 (its
+    sprite changing: 3-1) is the same thing: it keeps its identity, and its
+    fall is read from the edge that held. Taken for a new thing, it was
+    unmeasured for 8 frames, a walker on the air, and a jump planned over it
+    then met its fall."""
+    from retroagi.domains.smb.perception.tracks import VisualTracks
+
+    tracks = VisualTracks()
+    tracks.observe(_koopa_scene((130, 122, 146, 145)), 0)
+    tracks.observe(_koopa_scene((128, 125, 144, 148)), 0)
+    tracks.observe(_koopa_scene((126, 128, 142, 151)), 0)
+    (before,) = tracks.tracks
+    tracks.observe(_koopa_scene((125, 139, 139, 154)), 0)
+    (after,) = tracks.tracks
+    assert after.identity == before.identity
+    assert after.moves[-1][1] == 3

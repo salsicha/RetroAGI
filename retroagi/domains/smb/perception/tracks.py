@@ -16,6 +16,22 @@ def translated(box, dx=0, dy=0):
     return (box[0] + dx, box[1] + dy, box[2] + dx, box[3] + dy)
 
 
+def _shift(old, box, scroll=0.0):
+    """How far a thing seen at ``old`` last frame and at ``box`` now moved
+    in the world (the camera having moved ``scroll``): by its left side and
+    top, or, where one of those jumped more than 8 pixels and the opposite
+    side did not, by that side (its sprite changed shape: a falling 3-1
+    Koopa's drawn top dropped 11 pixels while its feet fell 3, it was taken
+    for a new thing, unmeasured, a walker on the air)."""
+    moves = []
+    for near, far in ((0, 2), (1, 3)):
+        a, b = box[near] - old[near], box[far] - old[far]
+        if near == 0:
+            a, b = a + scroll, b + scroll
+        moves.append(b if abs(a) > 8 and abs(b) <= 8 else a)
+    return moves[0], moves[1]
+
+
 # The executor's first-order state estimate of each tracked sprite (user,
 # 2026-10-16: vision reports boxes only; the executor estimates position and
 # velocity, assuming constant velocity, and the world model and the collision
@@ -102,7 +118,7 @@ class VisualTracks:
                 for i, old in enumerate(self.tracks):
                     if i in used or old.kind != kind:
                         continue
-                    dx, dy = box[0] - old.box[0] + scroll, box[1] - old.box[1]
+                    dx, dy = _shift(old.box, box, scroll)
                     if abs(dx) <= 8 and abs(dy) <= 8:
                         matches.append((abs(dx) + abs(dy), i, dx, dy))
             matches.sort()
@@ -113,13 +129,8 @@ class VisualTracks:
                 old = self.tracks[i]
                 # Do not let observation order transfer a target identity to
                 # a neighbour when two visible objects both match this track.
-                competitors = sorted(
-                    abs(other[0] - old.box[0] + scroll) + abs(other[1] - old.box[1])
-                    for other, other_kind, _ in objects
-                    if other_kind == kind
-                    and abs(other[0] - old.box[0] + scroll) <= 8
-                    and abs(other[1] - old.box[1]) <= 8
-                )
+                shifts = [_shift(old.box, other, scroll) for other, other_kind, _ in objects if other_kind == kind]
+                competitors = sorted(abs(a) + abs(b) for a, b in shifts if abs(a) <= 8 and abs(b) <= 8)
                 if len(competitors) > 1 and competitors[1] - competitors[0] <= 1:
                     track.type = seen_type
                     updated.append(track)
@@ -165,20 +176,16 @@ class VisualTracks:
         predicted box is within 8 pixels, unambiguously), with its identity
         and velocity, the movement over the gap added as one sample; or
         None."""
-        near = sorted(
-            (abs(box[0] - old.box[0]) + abs(box[1] - old.box[1]), j)
-            for j, old in enumerate(lost)
-            if old.kind == kind
-            and old.identity not in found
-            and abs(box[0] - old.box[0]) <= 8
-            and abs(box[1] - old.box[1]) <= 8
-        )
+        shifts = [(_shift(old.box, box), j) for j, old in enumerate(lost)
+                  if old.kind == kind and old.identity not in found]
+        near = sorted((abs(a) + abs(b), j) for (a, b), j in shifts if abs(a) <= 8 and abs(b) <= 8)
         if not near or (len(near) > 1 and near[1][0] - near[0][0] <= 1):
             return None
         old = lost[near[0][1]]
         vx, vy = old.velocity or (0.0, 0.0)
         gap = old.missed + 1
-        sample = (vx + (box[0] - old.box[0]) / gap, vy + (box[1] - old.box[1]) / gap)
+        sx, sy = _shift(old.box, box)
+        sample = (vx + sx / gap, vy + sy / gap)
         old.samples = (old.samples + [sample])[-ESTIMATE_SAMPLES:]
         old.moves = (old.moves + [sample] * gap)[-TRACK_FRAMES:]
         old.box, old.missed = box, 0

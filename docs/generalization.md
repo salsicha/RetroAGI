@@ -1687,6 +1687,17 @@ between the last staircases (0 of 8) and 3-1's from x 832 (0 of 8).
   moves, bounces included, as the memory source reads its places: that
   start is passed in 5 of 8 tries against 3, the rest as before (held
   out 21% of tries failing against 22%), whole plays 12 of 64 against 11.
+- **A thing whose sprite changed shape was taken for a new thing.** The
+  tracker follows a thing by its box's left side and top, within 8 pixels
+  a frame. At 3-1 from x 2256 a falling Koopa's drawn top dropped 11
+  pixels while its feet fell 3: a new track, unmeasured for 8 frames and
+  so a walker on the air, and the jump planned over it then met its
+  fall. Where one side jumps and the opposite one holds, the thing is now
+  followed by the side that held. That start fails as often (something
+  else there too), but over the bench 18% of tries at obstacles fail on
+  the held-out levels against 21% (17% with exact positions), 23% on the
+  six levels never used to tune anything against 26%; whole plays 11 of
+  64 against 12.
 - **Tried and not kept: no slowing in open running.** At 5-1's start the
   estimate checks its last four frames' moves against the seen ones, and
   2 pixels short sets the speed to the seen one (kept for a jump against
