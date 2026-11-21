@@ -1626,8 +1626,26 @@ it has been seen at all. The network reads both after the surface's kind
 (at most 320 frames: past the longest wait between leaps it tells
 nothing more), so a network trained before still reads the numbers it
 knew. It is what a player watching the screen knows, and vision could
-give it the same way once it sees lava. The network is learning again
-with it (`lavatime_20261119`).
+give it the same way once it sees lava. The network learned again with
+it (`scripts/learn_in_block_smb.sh lavatime_20261119`, three rounds, 32.3
+hours). None of its rounds is kept:
+
+| Round | Exam: fresh levels finished (of 200) | Skill scenes passed | Fresh Block SMB plays finished (of 800) | ... died in a pit | ... by lava fireballs | ... by Hammer Bros and their hammers |
+|---|---|---|---|---|---|---|
+| The kept network (2026-11-18) | 164 | | 675 | 15 | 14 | 32 |
+| 1 | 154 | 98.1% | 617 | 41 | 15 | 41 |
+| 2 | 169 | 98.5% | 646 | 29 | 10 | 41 |
+| 3 | 161 | 98.8% | 656 | 32 | 19 | 29 |
+
+Knowing how long a fireball has been under the lava did not teach the
+network to wait for it either. All three rounds' deaths by lava come in
+jumps, none in a wait, and the third gives its fatal jumps the same
+chance of death as the kept network does (2.3% median against 2.2%).
+Even a network that knew the risk exactly would jump: the chooser counts
+any choice under 5% as safe and takes the quickest, and a jump over lava
+is a risk of a few percent. The input stays in the state (a network that
+does not use it loses nothing), for vision to give and for a chooser that
+weighs small risks against time.
 
 The kept network's real-game score with the present code, against the
 same network with the code of 2026-11-18 (above): whole plays finished 20

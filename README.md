@@ -180,9 +180,10 @@ does not do ([How general is it?](docs/generalization.md#learned-again-with-lava
 with those corrections the kept network, unchanged, finishes 675 of the
 same 800 plays, against 617 before them (deaths in pits 15 against 34, by
 Bullet Bills 10 against 14, by hammers 14 against 21). Seeing which pits
-hold lava did not help the network learned again with it: a lava
-fireball's next leap is not known while it is under the lava, and it dies
-there as often.
+hold lava did not help the network learned again with it, nor did
+telling it how long each pit's fireball has been under the lava: it still
+jumps over lava pits at a small risk instead of waiting, and dies there as
+often.
 
 ## Usage
 
