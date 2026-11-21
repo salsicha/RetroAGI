@@ -1723,6 +1723,41 @@ between the last staircases (0 of 8) and 3-1's from x 832 (0 of 8).
   never reaches and a real speed error does): with the fixes below, held
   out 21% of tries failing against 18%, whole plays 9 of 64 against 11.
   The quick correction costs some plays and saves more.
+- **Tried and not kept: the run-up a frame ahead (2026-11-20).** What
+  failed at 3-1's start from x 832 was not only the late plant (above):
+  the motion estimate ran a frame ahead of the game through the run-up.
+  The game keeps the direction Mario last moved in while he stands, and
+  pushes his first step twice as hard only while his facing and that
+  direction differ; the estimate set the direction to none whenever it
+  saw him stand, and at that start (Mario facing left) it read 25, the
+  speed that lets a jump reach the running top speed in the air, where
+  the game had 24. The jump came a frame early and slow, and fell short
+  onto the plant's pipe. Kept to the game's rule (the direction taken
+  from his facing on first sight, none at a level's start; kept, not
+  zeroed, when he is seen to stand), the run from the screen followed the
+  game's memory frame for frame and that start failed 1 try in 8 against
+  6. But over the bench it lost more than it won: 69 deaths in the tries
+  from distinct starts against 64, held out 21% of tries failing against
+  18%, whole plays 8 of 64 against 11 (on 1-1 and 5-1, 4% against 7%).
+  (Taking the direction for his facing at a level's start too, as the
+  game mostly has it mid-level, put the estimate a frame behind at every
+  start and was worse still: held out 23%.)
+- **Tried and not kept: the tracker's turns, cut boxes and resized boxes
+  (2026-11-20).** At 3-1 from x 2256 a falling Goomba's drawn box twitched
+  a pixel back as its sprite changed, which the tracker takes for a
+  reversal of course: its measured fall was dropped and it seemed to hang
+  in the air. A Goomba walking in at the screen's right edge, its box cut
+  there and growing upward as more of its round head came into view,
+  seemed to rise for 16 frames. A falling Goomba drawn over by something
+  had its box's top go up as it came out, read as a turn. Tried together,
+  on the run-up change: a turn only once the moves against the course add
+  up to 2 pixels; no samples taken while a box is cut by the screen's
+  edge; a box that changed size measured by the side whose move is nearer
+  the thing's speed. The traced tries lived longer, but over the bench
+  79 deaths against 64, held out 24% of tries failing against 18%, 1-1
+  and 5-1 13% against 7%; whole plays 12 of 64 against 11. Vision also
+  split that Koopa into a fragment and its body, which tie as matches
+  when the camera moves and both start new tracks; that was not changed.
 
 ## Tried and not kept, 2026-11-11
 
