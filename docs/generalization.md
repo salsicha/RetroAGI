@@ -1662,8 +1662,30 @@ careful ones of the same jump 0.02%: the network ranked them right, and
 in the sampling the bold one led to death and the careful ones did not,
 but both were under 5%. With 1% as safe, 669 of the 800 plays finish
 against 675, 118 die against 114, and about 60 plays changed each way.
-The network's small chances are not sharp enough for a stricter rule to
-choose by.
+A stricter line throws out quick choices whatever they gain.
+
+Tried and not kept: a chance of death weighed against speed (2026-11-22).
+The small chances can be chosen by: on 1.2 million choices of the fresh
+sample sets, each played out, the kept network's guesses rank them (of
+those it gives under 5%, a fatal one is ranked above a safe one 89% of the
+time) and the true rate rises with every band of the guess, though it is
+about twice the guess below 5% (given 1 to 2%, 2.8% died). So, among the
+choices under 5%, each was charged its chance of death times a weight in
+progress a frame. On 400 plays of other fresh levels (seeds from 120000)
+the weights 0, 25, 50, 100, 200 and 400 finished 328, 335, 324, 332, 324
+and 318; on the 800 plays the best, 25, finished 673 against 675. A heavy
+weight made Mario wait more, and waiting is not safe in itself: at 400,
+deaths in a pit while waiting went from 3 to 9 and by lava fireballs from
+5 to 12.
+
+Nor would waiting have saved Mario at lava. At 125 lava pits of 200 fresh
+lava scenes, he stood before the pit and waited 0 to 240 frames, and every
+jump to beyond it was guessed and played: jumping at once with the
+network's safest pick died at 2 of 123 pits, waiting until the fireball
+had leapt and gone under again at 5 or 6 of them. The danger is before the
+fireball has first been seen (the best jump then dies 8% of the time,
+guessed at 2%); standing there walks into its first leap. The kept
+network's deaths by lava all come in the air, partway through a jump.
 
 ### What seeing costs, traced again (2026-11-19)
 

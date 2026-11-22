@@ -146,7 +146,24 @@ What this rules out:
   any choices. The parameters the controller is passed are then picked per
   situation by what was learned in Block SMB, not set by hand.
 
-## 7. How the work is done
+## 7. Deciding may look a few choices ahead
+
+> "yes, move on to two-step guessing. actually, how many steps could be
+> accomplished on a single screen of the game? ... I'm guess that if mario
+> is just running and jumping forward he would move off of the originally
+> visible area in about 5 steps. is that a reasonable amount of steps to
+> jointly predict? or should we just start with 2?" (2026-11-22)
+
+- A choice may be judged with the choice after it: what the first leads
+  to, then, from where it leaves Mario, what the best next one leads to.
+  This stays within what is on the screen (Mario leaves what was visible
+  ahead of him in about 4 choices, median, and moves a whole screen in
+  about 6, measured in Block SMB on 2026-11-22). It is not a value over
+  long-term consequences, and remembers no level.
+- Two choices first, the number a setting; more only while each added one
+  pays on the Block SMB measure.
+
+## 8. How the work is done
 
 - No training run is started unless asked for; a failed check is fixed in
   what failed, never bypassed.
