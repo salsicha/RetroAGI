@@ -13,7 +13,12 @@ in how many frames, the points it gained, whether it finished the task, and
 whether it left the agent stuck: no probe choice from where it ended (the
 domain's probes, the agent's speed kept) feasible, safe and getting it on
 (one choice at a time, the chooser walked Mario into a valley between
-staircases and waited there).
+staircases and waited there), and the frames it took to settle after it
+ended. Where a choice leaves the agent alive, settled and not done, that
+state is kept too, with the candidates open from it: what the network's
+guess of how the task ends is learned from (training.py bootstraps a
+choice's end from the network's own guess there; docs/requirements.md,
+section 7).
 
 The states come from play by the domain's behaviour chooser, which takes
 the domain's own exploration when it offers one (in Super Mario Bros: a
@@ -22,7 +27,15 @@ of choice at random, then one of that kind) EXPLORE of the time, so that
 the states include what a careful player would not get into. Every decision
 point is kept: the state as the choice space's tokens, each candidate as
 (kind, the slot of its thing, modifier), each outcome as numbers
-(OUTCOME_FIELDS).
+(OUTCOME_FIELDS), and for each choice the index of the state it left the
+agent in (-1: none kept, dead, done or not carried out), those states'
+tokens and their candidates. The kept states are many (a few for every
+decision point's choices) and are stored small: each token group's tokens
+as half-precision numbers, only those not all zero (next_<group>, with each
+one's slot next_<group>_slot and each state's count of them
+next_<group>_count; a group of one token per state: all of them), and each
+state's candidates as the network outputs they are read from, one bit each
+(next_cells, outcome_network.cells_of).
 
     python -m retroagi.framework.sampling --domain smb --levels 2000 --output FOLDER
 """
@@ -34,6 +47,7 @@ import numpy as np
 
 from . import registry
 from .agent import Agent
+from .outcome_network import cell_count, cells_of
 
 # Frames after a choice ends, the agent settled, in which a death still
 # counts against it (a landing an enemy walks into at once was no good
@@ -55,7 +69,11 @@ STUCK_PROGRESS = 16
 # nothing new (a play of a level where the hand-written chooser stalls took
 # over four minutes to sample).
 STALLED = 900
-OUTCOME_FIELDS = ("died", "died_after", "frames", "progress", "points", "finished", "stuck", "end")
+OUTCOME_FIELDS = ("died", "died_after", "frames", "progress", "points", "finished", "stuck", "end", "falling")
+END = OUTCOME_FIELDS.index("end")
+# A choice whose shard was sampled before the states choices leave the
+# agent in were kept (its "choice_next"; -1 is none kept).
+UNRECORDED = -2
 
 
 def outcome(world, source, domain, choice, probe: bool = True, controller=None) -> tuple:
@@ -63,7 +81,8 @@ def outcome(world, source, domain, choice, probe: bool = True, controller=None) 
     given: one that has learned nothing) from the practice world's present
     state, then WINDOW frames settled: the OUTCOME_FIELDS (stuck only when
     ``probe``; a death counts as stuck). The world is left where the play
-    ended."""
+    ended: with ``probe``, and the agent alive and not done, settled where
+    the choice left it (the next decision's state)."""
     ends = domain.ends
     state = source.read(world)
     start, points = world.progress, world.score
@@ -131,7 +150,7 @@ def outcome(world, source, domain, choice, probe: bool = True, controller=None) 
         for option in domain.probes(state) + (domain.escapes(state) if died_after else []):
             r = outcome(world, source, domain, option, probe=False, controller=controller.another())
             world.restore(ended)
-            safe = r[2] > 0 and ends[int(r[-1])] != "infeasible" and not (r[0] or r[1])
+            safe = r[2] > 0 and ends[int(r[END])] != "infeasible" and not (r[0] or r[1])
             saved = saved or safe
             if safe and r[3] >= STUCK_PROGRESS:
                 stuck = False
@@ -140,7 +159,7 @@ def outcome(world, source, domain, choice, probe: bool = True, controller=None) 
         if died_after and saved:
             died_after = False
     return (float(died), float(died_after), float(frames), float(progress), float(world.score - points),
-            float(finished), float(stuck), float(ends.index(end)))
+            float(finished), float(stuck), float(ends.index(end)), float(falling))
 
 
 class Sampler:
@@ -157,6 +176,10 @@ class Sampler:
         self.behaviour = (driver or domain.behaviour)(mode)
         self.tokens = [[] for _ in domain.space.spec.groups]
         self.rows, self.outcomes = [], []
+        self.next_tokens = [[] for _ in domain.space.spec.groups]
+        self.next_slots = [[] for _ in domain.space.spec.groups]
+        self.next_counts = [[] for _ in domain.space.spec.groups]
+        self.next_cells, self.choice_next = [], []
 
     def decide(self, state, last_event, last_choice):
         domain, space, world = self.domain, self.domain.space, self.world
@@ -167,9 +190,11 @@ class Sampler:
         for kept, token in zip(self.tokens, tokens):
             kept.append(token)
         for c in options:
-            self.outcomes.append(outcome(world, self.source, domain, c.choice,
-                                         controller=self.agent.controller.another()))
+            r = outcome(world, self.source, domain, c.choice, controller=self.agent.controller.another())
+            self.outcomes.append(r)
             self.rows.append((index, c.kind, slots.get(c.ref, -1) if c.ref is not None else -1, c.modifier))
+            self.choice_next.append(self._left_in() if not (r[0] or r[1] or r[5] or r[2] == 0
+                                                           or domain.ends[int(r[END])] == "infeasible") else -1)
             world.restore(saved)
         explored = domain.explore(state, options, self.rng)
         if explored is not None:
@@ -181,6 +206,30 @@ class Sampler:
             kind = self.rng.choice(sorted({c.kind for c in options}))
             return self.rng.choice([c for c in options if c.kind == kind]).choice
         return self.behaviour.decide(state, last_event, last_choice)
+
+    def _left_in(self) -> int:
+        """The state a choice just played left the agent in (the world is
+        there) kept, with its candidates: its index."""
+        space = self.domain.space
+        spec = space.spec
+        state = self.source.read(self.world)
+        tokens, slots = space.tokens(state)
+        index = len(self.next_cells)
+        for g, (group, token) in enumerate(zip(spec.groups, tokens)):
+            token = np.asarray(token, np.float16)
+            if not group.slots:
+                self.next_tokens[g].append(token)
+                continue
+            used = np.flatnonzero(np.abs(token).sum(-1) > 0)
+            self.next_tokens[g].extend(token[used])
+            self.next_slots[g].extend(used)
+            self.next_counts[g].append(len(used))
+        rows = [(c.kind, slots.get(c.ref, -1) if c.ref is not None else -1, c.modifier) for c in space.candidates(state)]
+        cells = np.zeros(cell_count(spec), bool)
+        if rows:
+            cells[cells_of(spec, *np.array(rows).T)] = True
+        self.next_cells.append(np.packbits(cells))
+        return index
 
 
 def sample(domain, seed: int, mode: str, *, kind: str = "level", driver: Optional[Callable] = None,
@@ -216,6 +265,13 @@ def sample(domain, seed: int, mode: str, *, kind: str = "level", driver: Optiona
     }
     shard["choices"] = np.array(sampler.rows, np.int32).reshape(-1, 4)  # state, kind, slot, modifier
     shard["outcomes"] = np.array(sampler.outcomes, np.float32).reshape(-1, len(OUTCOME_FIELDS))
+    for g, kept, at, count in zip(groups, sampler.next_tokens, sampler.next_slots, sampler.next_counts):
+        shard[f"next_{g.name}"] = np.array(kept, np.float16).reshape(-1, g.width)
+        if g.slots:
+            shard[f"next_{g.name}_slot"] = np.array(at, np.uint8)
+            shard[f"next_{g.name}_count"] = np.array(count, np.uint8)
+    shard["next_cells"] = np.array(sampler.next_cells, np.uint8).reshape(-1, (cell_count(domain.space.spec) + 7) // 8)
+    shard["choice_next"] = np.array(sampler.choice_next, np.int32)
     shard["seed"] = np.full(states, seed, np.int32)
     shard["mode"] = np.full(states, domain.modes.index(mode), np.int8)
     shard["kinds"] = np.array([kinds_of(domain.space.spec)])
@@ -282,20 +338,34 @@ def _joined(shards: list) -> dict:
     the shards were sampled with (kinds_of; "" for a shard from before they
     were recorded)."""
     spaces = sorted({str(s.pop("kinds", [""])[0]) for s in shards})
+    kept = {k: v for s in shards for k, v in s.items() if k.startswith("next_")}
+    for s in shards:
+        # (a shard sampled before the states choices leave the agent in were
+        # kept: none, and every choice UNRECORDED)
+        if "choice_next" not in s:
+            s["choice_next"] = np.full(len(s["choices"]), UNRECORDED, np.int32)
+            for k, v in kept.items():
+                s[k] = np.zeros((0,) + v.shape[1:], v.dtype)
     for key in shards[0]:
         widest = max(s[key].shape[-1] for s in shards)
         for s in shards:
             if s[key].ndim >= 2 and s[key].shape[-1] < widest:
                 pad = [(0, 0)] * (s[key].ndim - 1) + [(0, widest - s[key].shape[-1])]
                 s[key] = np.pad(s[key], pad)
-    offset, choices = 0, []
+    offset, choices, ahead, left = 0, [], 0, []
     for shard in shards:
         c = shard["choices"].copy()
         c[:, 0] += offset
         choices.append(c)
         offset += len(shard["seed"])
-    out = {k: np.concatenate([s[k] for s in shards]) for k in shards[0] if k != "choices"}
+        n = shard["choice_next"].copy()
+        n[n >= 0] += ahead
+        left.append(n)
+        ahead += len(shard.get("next_cells", ()))
+    special = ("choices", "choice_next")
+    out = {k: np.concatenate([s[k] for s in shards]) for k in shards[0] if k not in special}
     out["choices"] = np.concatenate(choices)
+    out["choice_next"] = np.concatenate(left)
     out["kinds"] = spaces
     return out
 

@@ -26,8 +26,8 @@ world ──source──▶ state ──choice space──▶ candidate choices
 | World | an action | the next moment; whether the agent died or finished | the domain: a simulator, or the real thing |
 | State source | the world | the state the other parts read | the domain: from the world's truth, or from perception |
 | Choice space | the state | the choices open now, and the state as numbers for a learned predictor | the domain |
-| Outcome predictor | the state and the candidates | for each: chance of death, of being infeasible, of finishing, of getting stuck; progress, frames, points | the framework's outcome network, or anything with the same answer |
-| Chooser | the predictions | one choice, by fixed priorities: don't die, make progress, gather points | the framework; a domain may add a hand-written one |
+| Outcome predictor | the state and the candidates | for each: chance of death, of being infeasible, of finishing, of getting stuck; progress, frames, points; and, given it, how the task ends: the chance it is finished and the frames until then | the framework's outcome network, or anything with the same answer |
+| Chooser | the predictions | one choice: the best chance of finishing the task, then the fewest frames to it (points worth frames when they count); for a predictor that does not give the task's end, fixed priorities: don't die, make progress, gather points | the framework; a domain may add a hand-written one |
 | Controller | a choice and the state each frame | an action each frame, and how the choice ended | the domain, planning with its dynamics model |
 | Dynamics model | the things and solids in each state | where each thing will be for the frames ahead | the domain's rules, or the framework's model fitted to what is seen |
 
@@ -69,12 +69,12 @@ by frames ahead. [How general is it?](generalization.md) has the results.
 | File | What it does |
 |---|---|
 | `agent.py` | The one loop: read the state, let the controller press on, and when a choice has ended ask the chooser for the next. |
-| `chooser.py` | The fixed priorities over predicted outcomes, with a short memory of what was tried where. |
+| `chooser.py` | Picks by the predicted end of the task (or, for an older network, fixed priorities over predicted outcomes), with a short memory of what was tried where. |
 | `observed_dynamics.py` | A dynamics model identified from what is seen, for worlds of boxes moving among solid boxes: any domain of that shape can use it. |
 | `registry.py` | Domains by name, and their parts' alternatives (`--use`). |
 | `outcome_network.py` | A transformer over the state's tokens with a head per thing: every candidate's outcome in one pass. Its shape comes from the domain's `ChoiceSpec`; a saved network carries that spec and is checked against the domain when loaded. |
-| `sampling.py` | Training data, measured: in practice worlds every candidate is played from a saved state by the domain's controller. |
-| `training.py` | Trains the outcome network on sampled outcomes and measures it on fresh ones. |
+| `sampling.py` | Training data, measured: in practice worlds every candidate is played from a saved state by the domain's controller, and the state it leaves the agent in kept, small: only the things present in it, and its candidates as one bit for each of the network's outputs (a few such states for every decision point; about 85 bytes for each choice sampled). |
+| `training.py` | Trains the outcome network on sampled outcomes, the task's end bootstrapped from those kept states, and measures it on fresh ones. |
 | `practice.py` | Plays a domain's practice worlds and counts how they end. |
 | `bench.py` | Scores an agent on each obstacle of a real level from saved states. |
 | `play.py` | Plays a real level from its start. |

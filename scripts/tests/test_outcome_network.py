@@ -120,3 +120,61 @@ def test_the_trainer_makes_a_network_of_the_size_asked_for(tmp_path):
                    "--output", str(tmp_path / "out")])
     model = load_model(str(tmp_path / "out" / "outcome.pt"))
     assert (model.config.width, model.config.layers, model.config.heads) == (32, 1, 2)
+
+
+def test_a_network_saved_before_the_ends_were_added_gives_none(tmp_path):
+    from retroagi.framework.outcome_network import FIRST_PREDICTIONS
+
+    model = OutcomeNetwork(SPEC, OutcomeConfig(width=32, layers=1, heads=2, outputs=FIRST_PREDICTIONS))
+    save(model, str(tmp_path / "old.pt"))
+    saved = torch.load(tmp_path / "old.pt")
+    del saved["config"]["outputs"]  # (as saved then)
+    torch.save(saved, tmp_path / "old.pt")
+    loaded = load_model(str(tmp_path / "old.pt"))
+    p = predict(loaded, tokens(), [(0, 0, 0)], "cpu")
+    assert loaded.n == FIRST_PREDICTIONS and p.shape == (1, len(PREDICTIONS))
+    assert np.isnan(p[0, FIRST_PREDICTIONS:]).all() and np.isfinite(p[0, :FIRST_PREDICTIONS]).all()
+
+
+def test_ends_are_bootstrapped_from_where_each_choice_left_mario(tmp_path):
+    from retroagi.framework.outcome_network import SCALES
+    from retroagi.framework.sampling import sample
+    from retroagi.framework.training import REACH, TO_GO, Data
+
+    np.savez(tmp_path / "a.npz", **sample(DOMAIN, 5, "speed_run", kind="pit", explore=0.0))
+    data = Data(str(tmp_path), SPEC, DOMAIN.ends, "cpu")
+    model = OutcomeNetwork(SPEC, SMALL).eval()
+    rows = torch.arange(len(data))
+    _, plain = data.outputs(model, rows)
+    _, aimed = data.outputs(model, rows, ahead=model)
+    left = data.left_in >= 0
+    died = plain[:, 0] > 0
+    # Settled by the choice itself: a death never finishes it, and those
+    # targets are not bootstrapped; the rest are, from the kept states.
+    assert (plain[died, REACH] == 0).all() and not left[died].any()
+    assert torch.isnan(plain[left, REACH]).all() and torch.isfinite(aimed[left, REACH]).all()
+    assert ((0 <= aimed[left, REACH]) & (aimed[left, REACH] <= 1)).all()
+    ok = left & torch.isfinite(aimed[:, TO_GO])
+    assert (aimed[ok, TO_GO] * SCALES[3] >= data.settled[ok] - 1e-3).all()
+    same = ~left
+    assert torch.equal(torch.nan_to_num(aimed[same], -9), torch.nan_to_num(plain[same], -9))
+    # (the kept states' tokens back whole, each thing in its slot)
+    kept = torch.arange(len(data.next_cells))
+    surfaces = data.end_tokens(kept)[1]
+    assert torch.equal((surfaces.abs().sum(-1) > 0).sum(1), data.next_count[1])
+
+
+def test_a_choice_s_cell_is_where_pick_reads_it():
+    from retroagi.framework.outcome_network import all_cells, cells_of
+
+    model = OutcomeNetwork(SPEC, SMALL).eval()
+    t = [torch.as_tensor(x)[None].float() for x in tokens()]
+    rng = np.random.default_rng(0)
+    kind = rng.integers(0, len(SPEC.kinds), 200)
+    slot = rng.integers(-1, 24, 200)
+    modifier = rng.integers(0, 12, 200)
+    with torch.no_grad():
+        out = model(*t)
+        picked = pick(SPEC, out, *(torch.as_tensor(a) for a in (kind, slot, modifier)), owner=torch.zeros(200, dtype=torch.long))
+        cells = all_cells(out)[0, cells_of(SPEC, kind, slot, modifier)]
+    assert torch.equal(picked, cells)

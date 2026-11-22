@@ -7,7 +7,7 @@ from retroagi.domains.smb.controller import Choice
 from retroagi.domains.smb.domain import DOMAIN
 from retroagi.domains.smb.sim.levels import FLOOR, SCROLL_X
 from retroagi.domains.smb.sim.world import SimSource, SimWorld
-from retroagi.framework.sampling import OUTCOME_FIELDS, outcome, sample
+from retroagi.framework.sampling import END, OUTCOME_FIELDS, outcome, sample
 
 ENDS = DOMAIN.ends
 
@@ -40,7 +40,7 @@ def test_a_run_stops_at_a_pit_and_a_goomba_reaching_a_wait_is_jumped():
     # A pit from 120 to 200: a long run toward it stops at its edge.
     pit = scene([[0, FLOOR, 120, 32], [200, FLOOR, 824, 32]])
     result = outcome(pit, SimSource(), DOMAIN, Choice("run", x=140, keep_speed=True))
-    assert not (result[DIED] or result[DIED_AFTER]) and ENDS[int(result[-1])] == "edge"
+    assert not (result[DIED] or result[DIED_AFTER]) and ENDS[int(result[END])] == "edge"
     # A Goomba walking at a waiting Mario reaches him in the window after
     # the wait, but a jump from there over it saves him: no death.
     walker = scene([[0, FLOOR, 1024, 32]], enemies=[54])
@@ -50,7 +50,7 @@ def test_a_run_stops_at_a_pit_and_a_goomba_reaching_a_wait_is_jumped():
     safe = scene([[0, FLOOR, 1024, 32]])
     result = outcome(safe, SimSource(), DOMAIN, Choice("wait", frames=8))
     assert not (result[DIED] or result[DIED_AFTER]) and result[FRAMES] == 8
-    assert ENDS[int(result[-1])] == "waited"
+    assert ENDS[int(result[END])] == "waited"
 
 
 def test_candidates_cover_every_kind_and_tokens_have_their_slots():
@@ -68,10 +68,11 @@ def test_candidates_cover_every_kind_and_tokens_have_their_slots():
 
 
 def test_a_world_gives_states_choices_and_outcomes_that_line_up():
-    # (a scene of two pieces: a whole random level takes minutes to sample)
-    shard = sample(DOMAIN, 7, "speed_run", kind="pair", explore=0.3)
+    # (one piece: a whole random level takes minutes to sample, a scene of
+    # two pieces over a minute)
+    shard = sample(DOMAIN, 7, "speed_run", kind="pipe", explore=0.3)
     states = len(shard["mario"])
-    assert states > 10 and len(shard["choices"]) == len(shard["outcomes"])
+    assert states > 5 and len(shard["choices"]) == len(shard["outcomes"])
     assert shard["choices"][:, 0].max() == states - 1
 
 
@@ -112,3 +113,83 @@ def test_outcomes_sampled_before_a_kind_was_added_are_filled_out_with_zeros(tmp_
     joined = load(tmp_path)
     assert joined["enemies"].shape[-1] == shard["enemies"].shape[-1]
     assert len(joined["mario"]) == 2 * len(shard["mario"]) and not joined["enemies"][len(shard["mario"]):, :, -1].any()
+
+
+def test_each_choice_leaving_mario_alive_keeps_the_state_it_left_him_in():
+    import numpy as np
+
+    from retroagi.framework.sampling import END
+
+    shard = sample(DOMAIN, 5, "speed_run", kind="pit", explore=0.0)
+    o, left = shard["outcomes"], shard["choice_next"]
+    done = (o[:, DIED] > 0) | (o[:, DIED_AFTER] > 0) | (o[:, OUTCOME_FIELDS.index("finished")] > 0) \
+        | (o[:, FRAMES] == 0) | (o[:, END] == ENDS.index("infeasible"))
+    assert ((left >= 0) == ~done).all() and (left[~done] == np.arange((~done).sum())).all()
+    kept = len(shard["next_cells"])
+    assert kept == (~done).sum() == len(shard["next_mario"]) == len(shard["next_surfaces_count"])
+    assert len(shard["next_surfaces"]) == shard["next_surfaces_count"].sum() == len(shard["next_surfaces_slot"])
+    # every kept state has candidates
+    assert np.unpackbits(shard["next_cells"], axis=1).any(axis=1).all()
+
+
+def test_a_kept_state_is_kept_whole_its_tokens_and_its_candidates():
+    import random
+
+    import numpy as np
+
+    from retroagi.framework.outcome_network import cell_count, cells_of
+    from retroagi.framework.sampling import Sampler
+
+    world = scene([[0, FLOOR, 300, 32], [360, FLOOR, 664, 32]], enemies=[200, 420])
+    world.step(DOMAIN.idle)  # (the Goomba is seen from the first frame)
+    source = SimSource()
+    sampler = Sampler(DOMAIN, world, source, "speed_run", random.Random(0))
+    assert sampler._left_in() == 0
+    state = source.read(world)
+    tokens, slots = SPACE.tokens(state)
+    used = {}
+    for g, (group, token) in enumerate(zip(SPACE.spec.groups, tokens)):
+        if not group.slots:
+            assert np.array_equal(sampler.next_tokens[g][0], np.float16(token))
+            continue
+        dense = np.zeros((group.slots, group.width), np.float16)
+        dense[np.array(sampler.next_slots[g], int)] = np.array(sampler.next_tokens[g]).reshape(-1, group.width)
+        assert sampler.next_counts[g] == [len(sampler.next_slots[g])]
+        assert np.array_equal(dense, np.float16(token))
+        used[group.name] = sampler.next_counts[g][0]
+    assert used["surfaces"] == 2 and used["enemies"] >= 1
+    candidates = SPACE.candidates(state)
+    rows = np.array([(c.kind, slots.get(c.ref, -1) if c.ref is not None else -1, c.modifier) for c in candidates]).T
+    cells = np.unpackbits(sampler.next_cells[0])[:cell_count(SPACE.spec)]
+    assert set(np.flatnonzero(cells)) == set(cells_of(SPACE.spec, *rows))
+
+
+def test_a_kept_state_is_where_the_choice_left_mario():
+    world = scene([[0, FLOOR, 1024, 32]])
+    source, saved = SimSource(), world.snapshot()
+    outcome(world, source, DOMAIN, Choice("run", x=150, keep_speed=True))
+    after = SPACE.tokens(source.read(world))[0]
+    world.restore(saved)
+    r = outcome(world, source, DOMAIN, Choice("run", x=150, keep_speed=True))
+    assert r[DIED] == 0 and SPACE.tokens(source.read(world))[0][0].tolist() == after[0].tolist()
+    # (Mario has moved on and stands: the next decision's state)
+    assert world.settled and world.progress > 100
+
+
+def test_kept_states_join_across_shards_and_older_shards_have_none(tmp_path):
+    import numpy as np
+
+    from retroagi.framework.sampling import UNRECORDED, load
+
+    shard = sample(DOMAIN, 5, "speed_run", kind="pit", explore=0.0)
+    older = {k: v for k, v in shard.items() if not k.startswith("next_") and k != "choice_next"}
+    np.savez(tmp_path / "a.npz", **shard)
+    np.savez(tmp_path / "b.npz", **shard)
+    np.savez(tmp_path / "c.npz", **older)
+    joined = load(tmp_path)
+    n, kept = len(shard["choices"]), len(shard["next_cells"])
+    left = joined["choice_next"]
+    assert (left[:n] == shard["choice_next"]).all()
+    assert (left[n:2 * n][shard["choice_next"] >= 0] == shard["choice_next"][shard["choice_next"] >= 0] + kept).all()
+    assert (left[2 * n:] == UNRECORDED).all() and len(joined["next_cells"]) == 2 * kept
+    assert len(joined["next_surfaces"]) == 2 * len(shard["next_surfaces"]) == joined["next_surfaces_count"].sum()

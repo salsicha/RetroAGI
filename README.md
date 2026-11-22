@@ -75,8 +75,8 @@ flowchart LR
 |---|---|---|
 | **State source** | the world | where Mario, the solids, the enemies and the items are. In Block SMB a lookup in the simulator; in the real game from the vision network (`domains/smb/perception/`) |
 | **Choice space** (`domains/smb/choices.py`) | the state | what can be done now: jump onto a thing, stomp or pass an enemy, run to a place, wait, bump a block, collect an item. Each comes in three ways of being carried out (bold, usual, careful: how wide a berth enemies get, how long a landing must stay clear of them, how soon a coming enemy ends a run) |
-| **Outcome network** (`framework/outcome_network.py`) | the state and every candidate | in one pass, for every candidate: the chance of dying, of being infeasible, of getting stuck, of reaching the flag; the progress, frames and points |
-| **Chooser** (`framework/chooser.py`) | the predictions | one choice, by the game's fixed priorities: don't die, progress to the right, get coins and power-ups |
+| **Outcome network** (`framework/outcome_network.py`) | the state and every candidate | in one pass, for every candidate: the chance of dying, of being infeasible, of getting stuck, of reaching the flag with it; the progress, frames and points; and, given the candidate, how the level ends: the chance the flag is reached and the frames until then |
+| **Chooser** (`framework/chooser.py`) | the predictions | one choice: the best chance of reaching the flag (within 2% of it), then the fewest frames to it, a point worth some frames when points count. For a network trained before it gave the level's end, fixed priorities: don't die, progress to the right, get coins and power-ups |
 | **Controller** (`domains/smb/controller.py`, `planner.py`) | the choice, and the state every frame | the buttons each frame. It plans the jump (run-up, how long the button is held) with Mario's motion as the game computes it, plans again before takeoff, corrects in the air, and says how the choice ended |
 
 The deep model is consulted seldom; the controller runs every frame
@@ -114,10 +114,22 @@ It learns from outcomes measured, not from a teacher. At states the agent
 reaches in Block SMB, every candidate choice is played out from a saved
 copy of the world by the controller, and what happened is recorded.
 
+How the level ends after a choice cannot be played out for every
+candidate: that would mean playing each to the flag. It is learned by
+bootstrapping. Where a candidate leaves Mario alive, the state it left him
+in is kept, with the candidates open there; in training, a copy of the
+network guesses how the level ends from each of those, the chooser's rule
+picks the one it would take, and the candidate's end is that one's (its
+chance of the flag, and the frames to it with the candidate's own added).
+A candidate that killed never reaches the flag; one that reached it did so
+in its own frames. Each refresh of the copy carries the guess one choice
+further ahead. The levels are random, so what is learned is how a level
+goes on from such a place, never a real level's layout.
+
 ```mermaid
 flowchart TD
     A["Fresh random levels and skill scenes<br/>(drawn from the game's pieces)"] --> B[Play them with the present agent]
-    B --> C["At each decision: save the world,<br/>play every candidate from the save,<br/>record how each ended"]
+    B --> C["At each decision: save the world,<br/>play every candidate from the save,<br/>record how each ended<br/>and where it left Mario"]
     C --> D[Train the outcome network on all the outcomes so far]
     D --> E["The Block SMB exam:<br/>worlds never trained on"]
     E -- next round --> B

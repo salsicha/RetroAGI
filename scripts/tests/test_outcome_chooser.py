@@ -1,5 +1,7 @@
 """The chooser's three rules (framework/chooser.py) on given
-predictions."""
+predictions, from a network that does not give how the task ends (its
+"reach" and "to_go" NaN), and its choosing by the task's end from one that
+does."""
 
 import numpy as np
 
@@ -8,7 +10,18 @@ from retroagi.domains.smb.controller import USUAL, State
 from retroagi.domains.smb.domain import DOMAIN
 from retroagi.domains.smb.physics import NESPlayerMotion
 from retroagi.domains.smb.planner import Enemy, Solid
-from retroagi.framework.chooser import DEATH, FINISHED, FRAMES, INFEASIBLE, POINTS, PROGRESS, STUCK
+from retroagi.framework.chooser import (
+    DEATH,
+    FINISHED,
+    FRAMES,
+    INFEASIBLE,
+    POINTS,
+    PROGRESS,
+    REACH,
+    REACH_SLACK,
+    STUCK,
+    TO_GO,
+)
 from retroagi.framework.outcome_network import PREDICTIONS
 
 # (kind, modifier) of the choices used, each carried out the usual way (controller.CARE).
@@ -30,6 +43,7 @@ class Given:
     def predict(self, state, candidates):
         p = np.zeros((len(candidates), len(PREDICTIONS)), np.float32)
         p[:, INFEASIBLE] = 1.0
+        p[:, [REACH, TO_GO]] = np.nan if all(np.isnan(r[REACH]) for r in self.rows.values()) else 0.0
         for k, c in enumerate(candidates):
             if (c.kind, c.modifier) in self.rows:
                 p[k] = self.rows[(c.kind, c.modifier)]
@@ -48,9 +62,10 @@ def choose(mode, rows):
     return options[best].kind, options[best].modifier
 
 
-def row(death=0.0, progress=0.0, frames=16.0, points=0.0, finished=0.0, stuck=0.0):
+def row(death=0.0, progress=0.0, frames=16.0, points=0.0, finished=0.0, stuck=0.0, reach=np.nan, to_go=np.nan):
     p = np.zeros(len(PREDICTIONS), np.float32)
     p[DEATH], p[PROGRESS], p[FRAMES], p[POINTS], p[FINISHED], p[STUCK] = death, progress, frames, points, finished, stuck
+    p[REACH], p[TO_GO] = reach, to_go
     return p
 
 
@@ -125,3 +140,22 @@ def test_waiting_is_tried_after_max_waits_at_a_spot():
     chooser = chooser_for("speed_run", rows)
     picks = [chooser.decide(STATE).verb for _ in range(MAX_WAITS + 1)]
     assert picks == ["wait"] * MAX_WAITS + ["run"]
+
+
+def test_by_the_end_the_best_chance_of_finishing_comes_first():
+    # The long run is quick and safe now, but leaves Mario where the level
+    # is less often finished: the wait is taken.
+    rows = {LONG: row(progress=96, frames=40, reach=0.60, to_go=900), WAIT: row(frames=8, reach=0.70, to_go=1000)}
+    assert choose("speed_run", rows) == WAIT
+
+
+def test_by_the_end_among_near_equal_chances_the_fewest_frames():
+    near = 0.70 * (1 - REACH_SLACK / 2)
+    rows = {LONG: row(progress=96, frames=40, reach=near, to_go=900), WAIT: row(frames=8, reach=0.70, to_go=1000)}
+    assert choose("speed_run", rows) == LONG
+
+
+def test_by_the_end_points_are_worth_frames_in_max_points():
+    rows = {STOMP: row(points=5, reach=0.7, to_go=960), LONG: row(reach=0.7, to_go=900)}
+    assert choose("speed_run", rows) == LONG
+    assert choose("max_points", rows) == STOMP

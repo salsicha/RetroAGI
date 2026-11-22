@@ -20,6 +20,16 @@ At a decision the predictor gives every candidate choice's outcome
 Waiting and retreating come out of the rules: when every way on risks
 death, a wait or a step back that does not is the one kept.
 
+A network that also gives how the task ends after each choice (its chance
+of being finished, "reach", and the frames until then, "to_go":
+docs/requirements.md, section 7) is chosen by that instead of rules 1 and
+2: of the choices the controller can carry out, those whose chance of
+finishing the task is within REACH_SLACK (a share of it) of the best; of
+those, the one with the fewest frames to the end, a point worth
+``point_value`` times TIME_UNIT frames (best_ends; training uses the same
+rule for the choice after each one). Rules 1 and 2 stay for a network
+trained before it gave the end.
+
 What was tried is remembered for a short while: a choice taken from a spot
 (the choice space's place) is not taken from it again until the agent
 reaches new ground (the space's new_ground beyond its furthest so far; then
@@ -50,9 +60,50 @@ SAFE = 0.05
 MAX_WAITS = 4
 SLACK = 0.02
 MIN_FRAMES = 8
-DEATH, INFEASIBLE, FINISHED, STUCK, PROGRESS, FRAMES, POINTS = range(len(PREDICTIONS))
+# Choosing by the task's end: the choices kept, within this share of the
+# best chance of finishing; and the frames a point's worth is counted in
+# (point_value is progress a frame for rules 1 and 2).
+REACH_SLACK = 0.02
+TIME_UNIT = 64.0
+DEATH, INFEASIBLE, FINISHED, STUCK, PROGRESS, FRAMES, POINTS, REACH, TO_GO = range(len(PREDICTIONS))
 # The controller's events that say a choice could not be carried out.
 REFUSED = ("infeasible", "blocked")
+
+
+def best_ends(reach, to_go, allowed, owner, groups: int, points=None, point_value: float = 0.0):
+    """For choices in ``groups`` sets (``owner`` [N]: each choice's set),
+    the one picked by the task's end (module notes) among those
+    ``allowed``: [groups] indices into the N choices, -1 where a set has
+    none allowed. Works on numpy arrays or torch tensors alike."""
+    torch_like = not isinstance(reach, np.ndarray)
+    if torch_like:
+        import torch
+
+        lib, inf = torch, torch.tensor(float("inf"), device=reach.device)
+        neg = lambda x: torch.where(allowed, x, -inf)  # noqa: E731
+        best = torch.full((groups,), -float("inf"), dtype=reach.dtype, device=reach.device).scatter_reduce(
+            0, owner, neg(reach), "amax")
+    else:
+        lib, inf = np, np.inf
+        neg = lambda x: np.where(allowed, x, -inf)  # noqa: E731
+        best = np.full(groups, -inf)
+        np.maximum.at(best, owner, neg(reach))
+    kept = allowed & (reach >= best[owner] * (1 - REACH_SLACK))
+    score = -to_go / TIME_UNIT + (point_value * points if points is not None else 0.0)
+    score = lib.where(kept, score, -inf)
+    if torch_like:
+        top = torch.full((groups,), -float("inf"), dtype=reach.dtype, device=reach.device).scatter_reduce(0, owner, score, "amax")
+        index = torch.arange(len(score), device=reach.device)
+        hit = kept & (score >= top[owner])
+        picked = torch.full((groups,), -1, dtype=torch.long, device=reach.device).scatter_reduce(
+            0, owner[hit], index[hit], "amax", include_self=True)
+    else:
+        top = np.full(groups, -inf)
+        np.maximum.at(top, owner, score)
+        picked = np.full(groups, -1)
+        hit = np.flatnonzero(kept & (score >= top[owner]))
+        np.maximum.at(picked, owner[hit], hit)
+    return picked
 
 
 class OutcomeChooser:
@@ -86,13 +137,17 @@ class OutcomeChooser:
             feasible &= fresh
         if not feasible.any():
             feasible = np.ones(len(p), bool)
-        risk = np.where(feasible, p[:, DEATH], np.inf)
-        allowed = risk <= max(SAFE, risk.min() + SLACK)
-        if (allowed & (p[:, STUCK] < 0.5)).any():
-            allowed &= p[:, STUCK] < 0.5
-        value = (p[:, PROGRESS] / np.maximum(p[:, FRAMES], MIN_FRAMES)
-                 + self.point_value * p[:, POINTS] + (p[:, FINISHED] >= 0.5) * 100.0)
-        best = int(np.argmax(np.where(allowed, value, -np.inf)))
+        if not np.isnan(p[:, REACH]).any():
+            best = int(best_ends(p[:, REACH], p[:, TO_GO], feasible, np.zeros(len(p), int), 1,
+                                 p[:, POINTS], self.point_value)[0])
+        else:
+            risk = np.where(feasible, p[:, DEATH], np.inf)
+            allowed = risk <= max(SAFE, risk.min() + SLACK)
+            if (allowed & (p[:, STUCK] < 0.5)).any():
+                allowed &= p[:, STUCK] < 0.5
+            value = (p[:, PROGRESS] / np.maximum(p[:, FRAMES], MIN_FRAMES)
+                     + self.point_value * p[:, POINTS] + (p[:, FINISHED] >= 0.5) * 100.0)
+            best = int(np.argmax(np.where(allowed, value, -np.inf)))
         self.last = (options, p, best)
         self.picked = (spot, signatures[best], options[best])
         waiting = space.waits(options[best])

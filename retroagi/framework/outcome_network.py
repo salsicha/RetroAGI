@@ -10,7 +10,12 @@ thing, and a head on the agent's token those about no thing. Each choice's
 outcome is PREDICTIONS: the chance the agent dies during it or soon after,
 the chance the controller finds it infeasible, the chance it finishes the
 task, the chance it leaves the agent stuck (no choice from there gets it
-on), and the progress, frames and points it brings.
+on), and the progress, frames and points it brings; then, given the choice,
+how the task ends: the chance it is finished (in Super Mario Bros: the flag
+reached) and the frames until it is (docs/requirements.md, section 7). The
+last two are learned by bootstrapping (training.py): a choice's end is its
+own outcome joined with the network's own guess from where it leaves the
+agent.
 
 A saved network carries its ChoiceSpec (save, load_model), so it can be
 loaded and checked against a domain without that domain's code.
@@ -23,11 +28,14 @@ import numpy as np
 import torch
 from torch import nn
 
-PREDICTIONS = ("death", "infeasible", "finished", "stuck", "progress", "frames", "points")
+PREDICTIONS = ("death", "infeasible", "finished", "stuck", "progress", "frames", "points", "reach", "to_go")
 # The logits (chances) and the amounts, and the scale the amounts are
-# learned at (progress, frames, points).
-CHANCES, AMOUNTS = (0, 1, 2, 3), (4, 5, 6)
-SCALES = (64.0, 64.0, 5.0)
+# learned at (progress, frames, points, frames to the task's end).
+CHANCES, AMOUNTS = (0, 1, 2, 3, 7), (4, 5, 6, 8)
+SCALES = (64.0, 64.0, 5.0, 512.0)
+# How many PREDICTIONS a network gave before "reach" and "to_go" were added
+# (a saved network that does not say gives these).
+FIRST_PREDICTIONS = 7
 
 
 @dataclass(frozen=True)
@@ -86,13 +94,17 @@ class OutcomeConfig:
     # empty: all of them). A network trained before a group gained numbers
     # reads fewer.
     reads: tuple = field(default_factory=tuple)
+    # How many of PREDICTIONS it gives (the first ones; 0: all of them). A
+    # network trained before predictions were added gives fewer.
+    outputs: int = 0
 
 
 class OutcomeNetwork(nn.Module):
     def __init__(self, spec: ChoiceSpec, config: OutcomeConfig = OutcomeConfig()):
         super().__init__()
         self.spec, self.config = spec, config
-        w, n = config.width, len(PREDICTIONS)
+        w = config.width
+        self.n = n = config.outputs or len(PREDICTIONS)
         self.reads = tuple(config.reads) or tuple(g.width for g in spec.groups)
         self.inputs = nn.ModuleList(nn.Linear(read, w) for read in self.reads)
         self.kind = nn.Embedding(len(spec.groups), w)
@@ -106,7 +118,8 @@ class OutcomeNetwork(nn.Module):
     def forward(self, *tokens):
         """One tensor per token group ([B, width] for the agent's, [B, slots,
         width] for the others) -> one per group, [B, slots or 1, heads, P],
-        P = PREDICTIONS (chances as logits, amounts at SCALES)."""
+        P = the first ``n`` PREDICTIONS (chances as logits, amounts at
+        SCALES)."""
         b = tokens[0].shape[0]
         embedded, absent = [], []
         for k, (group, t) in enumerate(zip(self.spec.groups, tokens)):
@@ -120,7 +133,7 @@ class OutcomeNetwork(nn.Module):
                 first, last = group.present
                 absent.append(t[..., first:last].abs().sum(-1) == 0)
         h = self.encoder(torch.cat(embedded, dim=1), src_key_padding_mask=torch.cat(absent, dim=1))
-        out, start, n = [], 0, len(PREDICTIONS)
+        out, start, n = [], 0, self.n
         for k, group in enumerate(self.spec.groups):
             count = group.slots or 1
             tokens_of = h[:, start:start + count] if group.slots else h[:, start]
@@ -129,15 +142,16 @@ class OutcomeNetwork(nn.Module):
         return tuple(out)
 
 
-def pick(spec: ChoiceSpec, outputs, kind, slot, modifier):
-    """The predictions [N, P] of the choices (kind, slot, modifier) [N], one
-    per row of ``outputs`` (forward's, for those rows' states)."""
+def pick(spec: ChoiceSpec, outputs, kind, slot, modifier, owner=None):
+    """The predictions [N, P] of the choices (kind, slot, modifier) [N], each
+    from row ``owner`` [N] of ``outputs`` (forward's; None: one row per
+    choice, in order)."""
     device = kind.device
     group = torch.tensor([k.group for k in spec.kinds], device=device)[kind]
     first = torch.tensor([k.first for k in spec.kinds], device=device)[kind]
     last = torch.tensor([k.modifiers - 1 for k in spec.kinds], device=device)[kind]
     head = first + torch.minimum(modifier.clamp(min=0), last)
-    rows = torch.arange(kind.shape[0], device=device)
+    rows = torch.arange(kind.shape[0], device=device) if owner is None else owner
     picked = None
     for g, out in enumerate(outputs):
         value = out[rows, slot.clamp(min=0, max=out.shape[1] - 1), head.clamp(max=out.shape[2] - 1)]
@@ -145,19 +159,49 @@ def pick(spec: ChoiceSpec, outputs, kind, slot, modifier):
     return picked
 
 
+def cells_of(spec: ChoiceSpec, kind, slot, modifier) -> np.ndarray:
+    """The output each choice (kind, slot, modifier) [N] is read from, as
+    one number: the cells of forward's outputs counted group after group,
+    slot after slot, head after head (``all_cells``). Two choices read from
+    the same cell (a modifier beyond its kind's last) are predicted alike."""
+    kind, slot, modifier = (np.asarray(a, np.int64) for a in (kind, slot, modifier))
+    heads = np.array([g.heads for g in spec.groups])
+    slots = np.array([g.slots or 1 for g in spec.groups])
+    offset = np.concatenate([[0], np.cumsum(heads * slots)[:-1]])
+    group = np.array([k.group for k in spec.kinds])[kind]
+    first = np.array([k.first for k in spec.kinds])[kind]
+    last = np.array([k.modifiers - 1 for k in spec.kinds])[kind]
+    head = np.minimum(first + np.minimum(np.maximum(modifier, 0), last), heads[group] - 1)
+    return offset[group] + np.clip(slot, 0, slots[group] - 1) * heads[group] + head
+
+
+def cell_count(spec: ChoiceSpec) -> int:
+    return int(sum(g.heads * (g.slots or 1) for g in spec.groups))
+
+
+def all_cells(outputs) -> torch.Tensor:
+    """forward's outputs as one [B, cell_count, P] tensor (cells_of's order)."""
+    return torch.cat([out.reshape(out.shape[0], -1, out.shape[-1]) for out in outputs], dim=1)
+
+
 def predict(model: OutcomeNetwork, tokens: Sequence, choices, device) -> np.ndarray:
     """For one state's tokens (one array per group) and its choices [(kind,
     slot, modifier)]: each choice's PREDICTIONS as chances and amounts in
-    their own units."""
+    their own units (NaN for those a network trained before them does not
+    give)."""
     tensors = [torch.as_tensor(t, device=device)[None] for t in tokens]
     with torch.no_grad():
         outputs = model(*tensors)
         c = torch.as_tensor(np.array(choices, np.int64).reshape(-1, 3), device=device)
         outputs = tuple(o.expand(len(c), *o.shape[1:]) for o in outputs)
         p = pick(model.spec, outputs, c[:, 0], c[:, 1], c[:, 2])
-        out = p.clone()
-        out[:, list(CHANCES)] = torch.sigmoid(p[:, list(CHANCES)])
-        out[:, list(AMOUNTS)] = p[:, list(AMOUNTS)] * torch.tensor(SCALES, device=device)
+        out = torch.full((len(c), len(PREDICTIONS)), float("nan"), device=device)
+        out[:, : model.n] = p
+        chances = [k for k in CHANCES if k < model.n]
+        amounts = [(k, scale) for k, scale in zip(AMOUNTS, SCALES) if k < model.n]
+        out[:, chances] = torch.sigmoid(p[:, chances])
+        out[:, [k for k, _ in amounts]] = p[:, [k for k, _ in amounts]] * torch.tensor(
+            [scale for _, scale in amounts], device=device)
     return out.cpu().numpy()
 
 
@@ -175,13 +219,14 @@ class NetworkPredictor:
 
 
 def save(model: OutcomeNetwork, path: str, log: Sequence = ()) -> None:
-    config = {**asdict(model.config), "reads": list(model.reads)}
+    config = {**asdict(model.config), "reads": list(model.reads), "outputs": model.n}
     torch.save({"config": config, "spec": asdict(model.spec), "model": model.state_dict(), "log": list(log)}, path)
 
 
 def load_model(path: str, device="cpu") -> OutcomeNetwork:
     saved = torch.load(path, map_location=device)
-    config = OutcomeConfig(**{**saved["config"], "reads": tuple(saved["config"]["reads"])})
+    config = OutcomeConfig(**{"outputs": FIRST_PREDICTIONS, **saved["config"],
+                              "reads": tuple(saved["config"]["reads"])})
     model = OutcomeNetwork(ChoiceSpec.from_plain(saved["spec"]), config).to(device)
     model.load_state_dict(saved["model"])
     return model.eval()
