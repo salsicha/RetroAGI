@@ -89,7 +89,8 @@ What this rules out:
   Block SMB is corrected (a piece added, a range widened, a rule measured
   again), the policy learns again there, and it is debugged on fresh Block
   SMB worlds.
-- No value over long-term consequences, no memory of a level.
+- No memory of a level. (A value over long-term consequences was ruled
+  out too until 2026-11-22; it is now asked for: section 7.)
 - Nothing learns while playing the real game ("dont train on full smb for
   now, just run it and evaluate", 2026-10-28).
 
@@ -146,22 +147,26 @@ What this rules out:
   any choices. The parameters the controller is passed are then picked per
   situation by what was learned in Block SMB, not set by hand.
 
-## 7. Deciding may look a few choices ahead
+## 7. Each choice's outcome, and the level's end
 
-> "yes, move on to two-step guessing. actually, how many steps could be
-> accomplished on a single screen of the game? ... I'm guess that if mario
-> is just running and jumping forward he would move off of the originally
-> visible area in about 5 steps. is that a reasonable amount of steps to
-> jointly predict? or should we just start with 2?" (2026-11-22)
+> "I don't think we want two-step, I think we just want to jointly predict
+> the outcome of the next next step, and given that step the final outcome
+> of everything" (2026-11-22, then choosing, of the readings offered, a
+> move's outcome and then the level's end over a move followed by the best
+> next one, or every pair of moves)
 
-- A choice may be judged with the choice after it: what the first leads
-  to, then, from where it leaves Mario, what the best next one leads to.
-  This stays within what is on the screen (Mario leaves what was visible
-  ahead of him in about 4 choices, median, and moves a whole screen in
-  about 6, measured in Block SMB on 2026-11-22). It is not a value over
-  long-term consequences, and remembers no level.
-- Two choices first, the number a setting; more only while each added one
-  pays on the Block SMB measure.
+- From one look at the present screen, with no imagined screen between,
+  the outcome network predicts for each move Mario could make now its own
+  outcome, as before, and, given that move, how the level ends: whether
+  it is finished and how long that takes.
+- This is a value over long-term consequences, which section 3 had ruled
+  out (2026-11-07); this replaces that. No memory of a level still holds:
+  it is learned on random Block SMB levels only, so it is how a level
+  drawn at random goes on from such a place, never a real level's layout.
+- Asked for after a look at looking ahead (2026-11-22): Mario leaves what
+  was visible ahead of him in about 4 choices (median) and moves a whole
+  screen in about 6, measured in Block SMB; two-step guessing, from an
+  imagined screen, is not wanted.
 
 ## 8. How the work is done
 
