@@ -1,6 +1,6 @@
 """The chooser's three rules (framework/chooser.py) on given
 predictions, from a network that does not give how the task ends (its
-"reach" and "to_go" NaN), and its choosing by the task's end from one that
+"reach" and "lost" NaN), and its choosing by the task's end from one that
 does."""
 
 import numpy as np
@@ -20,7 +20,7 @@ from retroagi.framework.chooser import (
     REACH,
     REACH_SLACK,
     STUCK,
-    TO_GO,
+    LOST,
 )
 from retroagi.framework.outcome_network import PREDICTIONS
 
@@ -43,7 +43,7 @@ class Given:
     def predict(self, state, candidates):
         p = np.zeros((len(candidates), len(PREDICTIONS)), np.float32)
         p[:, INFEASIBLE] = 1.0
-        p[:, [REACH, TO_GO]] = np.nan if all(np.isnan(r[REACH]) for r in self.rows.values()) else 0.0
+        p[:, [REACH, LOST]] = np.nan if all(np.isnan(r[REACH]) for r in self.rows.values()) else 0.0
         for k, c in enumerate(candidates):
             if (c.kind, c.modifier) in self.rows:
                 p[k] = self.rows[(c.kind, c.modifier)]
@@ -62,10 +62,10 @@ def choose(mode, rows):
     return options[best].kind, options[best].modifier
 
 
-def row(death=0.0, progress=0.0, frames=16.0, points=0.0, finished=0.0, stuck=0.0, reach=np.nan, to_go=np.nan):
+def row(death=0.0, progress=0.0, frames=16.0, points=0.0, finished=0.0, stuck=0.0, reach=np.nan, lost=np.nan):
     p = np.zeros(len(PREDICTIONS), np.float32)
     p[DEATH], p[PROGRESS], p[FRAMES], p[POINTS], p[FINISHED], p[STUCK] = death, progress, frames, points, finished, stuck
-    p[REACH], p[TO_GO] = reach, to_go
+    p[REACH], p[LOST] = reach, lost
     return p
 
 
@@ -145,17 +145,17 @@ def test_waiting_is_tried_after_max_waits_at_a_spot():
 def test_by_the_end_the_best_chance_of_finishing_comes_first():
     # The long run is quick and safe now, but leaves Mario where the level
     # is less often finished: the wait is taken.
-    rows = {LONG: row(progress=96, frames=40, reach=0.60, to_go=900), WAIT: row(frames=8, reach=0.70, to_go=1000)}
+    rows = {LONG: row(progress=96, frames=40, reach=0.60, lost=900), WAIT: row(frames=8, reach=0.70, lost=1000)}
     assert choose("speed_run", rows) == WAIT
 
 
 def test_by_the_end_among_near_equal_chances_the_fewest_frames():
     near = 0.70 * (1 - REACH_SLACK / 2)
-    rows = {LONG: row(progress=96, frames=40, reach=near, to_go=900), WAIT: row(frames=8, reach=0.70, to_go=1000)}
+    rows = {LONG: row(progress=96, frames=40, reach=near, lost=900), WAIT: row(frames=8, reach=0.70, lost=1000)}
     assert choose("speed_run", rows) == LONG
 
 
 def test_by_the_end_points_are_worth_frames_in_max_points():
-    rows = {STOMP: row(points=5, reach=0.7, to_go=960), LONG: row(reach=0.7, to_go=900)}
+    rows = {STOMP: row(points=5, reach=0.7, lost=960), LONG: row(reach=0.7, lost=900)}
     assert choose("speed_run", rows) == LONG
     assert choose("max_points", rows) == STOMP

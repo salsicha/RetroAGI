@@ -21,13 +21,20 @@ Waiting and retreating come out of the rules: when every way on risks
 death, a wait or a step back that does not is the one kept.
 
 A network that also gives how the task ends after each choice (its chance
-of being finished, "reach", and the frames until then, "to_go":
-docs/requirements.md, section 7) is chosen by that instead of rules 1 and
-2: of the choices the controller can carry out, those whose chance of
-finishing the task is within REACH_SLACK (a share of it) of the best; of
-those, the one with the fewest frames to the end, a point worth
+of being finished, "reach", and how long it takes: docs/requirements.md,
+section 7) is chosen by that instead of rules 1 and 2: of the choices the
+controller can carry out, those whose chance of finishing the task is
+within REACH_SLACK (a share of it) of the best; of those, the one that
+loses the fewest frames on the way to the end, a point worth
 ``point_value`` times TIME_UNIT frames (best_ends; training uses the same
-rule for the choice after each one). Rules 1 and 2 stay for a network
+rule for the choice after each one). The time to the end is given as
+frames lost, "lost": the frames to the end less the progress still to make
+at the domain's pace. What is still to make is the same whatever is chosen
+now, so the fewest frames lost is the fewest frames to the end; but how far
+the end is cannot be seen (a random level's length is not on the screen),
+and the frames lost on the way can: a network asked for the frames to the
+end guessed about the same for every choice, and the shortest, a wait, was
+taken again and again (2026-11-23). Rules 1 and 2 stay for a network
 trained before it gave the end.
 
 What was tried is remembered for a short while: a choice taken from a spot
@@ -65,12 +72,12 @@ MIN_FRAMES = 8
 # (point_value is progress a frame for rules 1 and 2).
 REACH_SLACK = 0.02
 TIME_UNIT = 64.0
-DEATH, INFEASIBLE, FINISHED, STUCK, PROGRESS, FRAMES, POINTS, REACH, TO_GO = range(len(PREDICTIONS))
+DEATH, INFEASIBLE, FINISHED, STUCK, PROGRESS, FRAMES, POINTS, REACH, LOST = range(len(PREDICTIONS))
 # The controller's events that say a choice could not be carried out.
 REFUSED = ("infeasible", "blocked")
 
 
-def best_ends(reach, to_go, allowed, owner, groups: int, points=None, point_value: float = 0.0):
+def best_ends(reach, lost, allowed, owner, groups: int, points=None, point_value: float = 0.0):
     """For choices in ``groups`` sets (``owner`` [N]: each choice's set),
     the one picked by the task's end (module notes) among those
     ``allowed``: [groups] indices into the N choices, -1 where a set has
@@ -89,7 +96,7 @@ def best_ends(reach, to_go, allowed, owner, groups: int, points=None, point_valu
         best = np.full(groups, -inf)
         np.maximum.at(best, owner, neg(reach))
     kept = allowed & (reach >= best[owner] * (1 - REACH_SLACK))
-    score = -to_go / TIME_UNIT + (point_value * points if points is not None else 0.0)
+    score = -lost / TIME_UNIT + (point_value * points if points is not None else 0.0)
     score = lib.where(kept, score, -inf)
     if torch_like:
         top = torch.full((groups,), -float("inf"), dtype=reach.dtype, device=reach.device).scatter_reduce(0, owner, score, "amax")
@@ -138,7 +145,7 @@ class OutcomeChooser:
         if not feasible.any():
             feasible = np.ones(len(p), bool)
         if not np.isnan(p[:, REACH]).any():
-            best = int(best_ends(p[:, REACH], p[:, TO_GO], feasible, np.zeros(len(p), int), 1,
+            best = int(best_ends(p[:, REACH], p[:, LOST], feasible, np.zeros(len(p), int), 1,
                                  p[:, POINTS], self.point_value)[0])
         else:
             risk = np.where(feasible, p[:, DEATH], np.inf)

@@ -170,6 +170,7 @@ class Domain(Protocol):
     idle: int  # the action that does nothing
     ends: tuple  # how a sampled choice can end: the controller's events, then "timeout", "died", "finished"
     longest: int  # the most frames a choice may last (a sampled one longer ends "timeout")
+    pace: float  # progress a frame in good play: the time to the task's end is counted against it
     space: ChoiceSpace
     parts: dict  # the parts with alternatives: part -> {alternative's name: a function making it}
     chosen: dict  # part -> the name of the alternative in use

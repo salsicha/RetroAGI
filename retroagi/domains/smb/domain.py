@@ -46,6 +46,9 @@ class SuperMarioBros:
     ends = ("landed", "stomped", "arrived", "waited", "threat", "blocked", "infeasible", "timeout", "died",
             "finished", "edge")
     longest = 240
+    # Pixels a frame: the networks' finished exam levels, both modes,
+    # 2026-11-17 to 2026-11-21, went about 1.6.
+    pace = 1.6
     space = SPACE
     sources = ("memory", "vision")
     # The parts with alternatives (--use PART=NAME). The controller's model

@@ -28,12 +28,12 @@ import numpy as np
 import torch
 from torch import nn
 
-PREDICTIONS = ("death", "infeasible", "finished", "stuck", "progress", "frames", "points", "reach", "to_go")
+PREDICTIONS = ("death", "infeasible", "finished", "stuck", "progress", "frames", "points", "reach", "lost")
 # The logits (chances) and the amounts, and the scale the amounts are
-# learned at (progress, frames, points, frames to the task's end).
+# learned at (progress, frames, points, frames lost to the task's end).
 CHANCES, AMOUNTS = (0, 1, 2, 3, 7), (4, 5, 6, 8)
 SCALES = (64.0, 64.0, 5.0, 512.0)
-# How many PREDICTIONS a network gave before "reach" and "to_go" were added
+# How many PREDICTIONS a network gave before "reach" and "lost" were added
 # (a saved network that does not say gives these).
 FIRST_PREDICTIONS = 7
 

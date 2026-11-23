@@ -26,8 +26,8 @@ world ──source──▶ state ──choice space──▶ candidate choices
 | World | an action | the next moment; whether the agent died or finished | the domain: a simulator, or the real thing |
 | State source | the world | the state the other parts read | the domain: from the world's truth, or from perception |
 | Choice space | the state | the choices open now, and the state as numbers for a learned predictor | the domain |
-| Outcome predictor | the state and the candidates | for each: chance of death, of being infeasible, of finishing, of getting stuck; progress, frames, points; and, given it, how the task ends: the chance it is finished and the frames until then | the framework's outcome network, or anything with the same answer |
-| Chooser | the predictions | one choice: the best chance of finishing the task, then the fewest frames to it (points worth frames when they count); for a predictor that does not give the task's end, fixed priorities: don't die, make progress, gather points | the framework; a domain may add a hand-written one |
+| Outcome predictor | the state and the candidates | for each: chance of death, of being infeasible, of finishing, of getting stuck; progress, frames, points; and, given it, how the task ends: the chance it is finished and the frames lost on the way (against the domain's pace) | the framework's outcome network, or anything with the same answer |
+| Chooser | the predictions | one choice: the best chance of finishing the task, then the fewest frames lost on the way (points worth frames when they count); for a predictor that does not give the task's end, fixed priorities: don't die, make progress, gather points | the framework; a domain may add a hand-written one |
 | Controller | a choice and the state each frame | an action each frame, and how the choice ended | the domain, planning with its dynamics model |
 | Dynamics model | the things and solids in each state | where each thing will be for the frames ahead | the domain's rules, or the framework's model fitted to what is seen |
 

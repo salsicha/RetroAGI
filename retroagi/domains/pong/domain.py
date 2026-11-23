@@ -22,7 +22,7 @@ from .choices import SPACE
 from .controller import Controller
 from .game import STAY
 from .scripted_chooser import ScriptedChooser
-from .world import PRACTICES, BlockPongWorld, TruthSource, random_situation
+from .world import PRACTICES, RETURN, BlockPongWorld, TruthSource, random_situation
 
 
 class Pong:
@@ -33,6 +33,7 @@ class Pong:
     # A return lasts from the ball turning toward us until it comes back:
     # 240 frames across and back, and a serve's wait.
     longest = 400
+    pace = RETURN / 240  # a return in the time the ball takes across and back
     space = SPACE
     sources = ("memory", "vision")
     parts: dict = {}

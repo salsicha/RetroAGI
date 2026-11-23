@@ -9,16 +9,21 @@ the network's SCALES) by a Huber loss on choices the controller could carry
 out.
 
 How the task ends after each choice (the chance it is finished, "reach",
-and the frames until then, "to_go": docs/requirements.md, section 7) is
-learned by bootstrapping. A choice that killed ends it unfinished; one that
-finished it, finished, in its own frames. Any other left the agent in a
-state the sampling kept, with the candidates open there: from it a copy of
-the network (refreshed every TARGET_EVERY steps) guesses every candidate's
-end, the chooser's rule picks the one it would take (chooser.best_ends, in
-the speed run's way), and the choice's end is that one's: its chance, and
-the choice's frames (with its settling) added to its frames. Each refresh
-carries the guess one choice further ahead, until it reaches the task's end.
-Outcomes sampled before such states were kept teach no end.
+and the frames lost on the way, "lost": docs/requirements.md, section 7,
+and chooser's module notes) is learned by bootstrapping. A choice's own
+frames lost are its frames (with its settling) less its progress at the
+domain's pace. A choice that killed ends the task unfinished; one that
+finished it, finished, with its own frames lost. Any other left the agent
+in a state the sampling kept, with the candidates open there: from it the
+network being trained picks the candidate the chooser's rule would take
+(chooser.best_ends, in the speed run's way), a copy of the network
+(refreshed every TARGET_EVERY steps) says how that one ends, and the
+choice's end is that: its chance, and its frames lost added to the
+choice's own. Each refresh carries the guess one choice further ahead,
+until it reaches the task's end. (Picked and judged by the same network,
+the best of many guesses came out too hopeful: nearly every choice was
+given a 98 to 99% chance of finishing, 2026-11-23.) Outcomes sampled
+before such states were kept teach no end.
 
 The measures, per kind of choice: how well the death chance ranks deaths
 first (the area under the ROC curve), its mean error, how often
@@ -63,18 +68,18 @@ LEARNING_RATE = 3e-4
 # bootstrapped from.
 TARGET_EVERY = 500
 DEATH_, INFEASIBLE_, FINISHED_, STUCK_ = range(4)
-REACH, TO_GO = PREDICTIONS.index("reach"), PREDICTIONS.index("to_go")
+REACH, LOST = PREDICTIONS.index("reach"), PREDICTIONS.index("lost")
 
 
-def targets(outcomes: np.ndarray, ends: tuple) -> np.ndarray:
+def targets(outcomes: np.ndarray, ends: tuple, pace: float = 1.0) -> np.ndarray:
     """[N, PREDICTIONS] from the sampled OUTCOME_FIELDS: death (during or
     after), infeasible (the controller ended it before its first frame:
     found infeasible, or blocked at once; a blocked run counted as feasible
     was picked again and again against a wall), finished, stuck, then
     progress, frames and points at the network's SCALES; then the task's end
     where the choice itself settles it (reach: 0 if it killed, 1 if it
-    finished; to_go: its frames if it finished), NaN where it is
-    bootstrapped (Data.aim)."""
+    finished; lost: its frames less its progress at ``pace`` if it
+    finished), NaN where it is bootstrapped (Data.aim)."""
     f = {name: outcomes[:, k] for k, name in enumerate(OUTCOME_FIELDS)}
     nothing = (f["frames"] == 0) & (f["died"] == 0) & (f["finished"] == 0)
     died = np.maximum(f["died"], f["died_after"])
@@ -88,7 +93,7 @@ def targets(outcomes: np.ndarray, ends: tuple) -> np.ndarray:
         f["frames"] / SCALES[1],
         f["points"] / SCALES[2],
         np.where(died > 0, 0.0, np.where(done, 1.0, np.nan)),
-        np.where(done, f["frames"] / SCALES[3], np.nan),
+        np.where(done, (f["frames"] - f["progress"] / pace) / SCALES[3], np.nan),
     ], axis=1).astype(np.float32)
 
 
@@ -97,7 +102,7 @@ class Data:
     token group of ``spec``), the choices (state, kind, slot, modifier) and
     their targets."""
 
-    def __init__(self, folder: str, spec: ChoiceSpec, ends: tuple, device):
+    def __init__(self, folder: str, spec: ChoiceSpec, ends: tuple, device, pace: float = 1.0):
         d = load(folder)  # (one folder, or several: their shards together)
         if d["kinds"] != [kinds_of(spec)]:
             raise ValueError(f"outcomes in {folder} were sampled for other kinds of choice than the domain's "
@@ -108,13 +113,15 @@ class Data:
                                               + [(0, g.width - d[g.name].shape[-1])]), device=device)
                        for g in spec.groups]
         self.choices = torch.as_tensor(d["choices"].astype(np.int64), device=device)
-        self.targets = torch.as_tensor(targets(d["outcomes"], ends), device=device)
+        self.targets = torch.as_tensor(targets(d["outcomes"], ends, pace), device=device)
         # The states choices left the agent in, stored small (sampling's
         # module notes): each group's tokens not all zero, their slots, and
         # each state's count of them, from next_start; each state's
         # candidates as one bit for each network output.
         o = {name: k for k, name in enumerate(OUTCOME_FIELDS)}
-        self.settled = torch.as_tensor(d["outcomes"][:, o["frames"]] + d["outcomes"][:, o["falling"]], device=device)
+        # (each choice's own frames lost: with its settling, less its progress at the pace)
+        self.lost = torch.as_tensor(d["outcomes"][:, o["frames"]] + d["outcomes"][:, o["falling"]]
+                                    - d["outcomes"][:, o["progress"]] / pace, device=device)
         self.left_in = torch.as_tensor(d["choice_next"].astype(np.int64), device=device)
         self.next_cells = torch.as_tensor(d.get("next_cells", np.zeros((0, (cell_count(spec) + 7) // 8), np.uint8)),
                                           device=device)
@@ -141,27 +148,29 @@ class Data:
     def outputs(self, model, rows, ahead=None):
         """The predictions for the choices ``rows`` and their targets, the
         ends bootstrapped from the network ``ahead`` (none: those not
-        settled by the choice itself are NaN)."""
+        settled by the choice itself are NaN), the choice after each picked
+        by ``model``."""
         c = self.choices[rows]
         out = model(*(t[c[:, 0]] for t in self.tokens))
         target = self.targets[rows]
         if ahead is not None:
-            target = self.aim(ahead, rows, target)
+            target = self.aim(ahead, rows, target, model)
         return pick(self.spec, out, c[:, 1], c[:, 2], c[:, 3]), target
 
-    def aim(self, ahead, rows, target):
+    def aim(self, ahead, rows, target, chooser=None):
         """``target`` with the ends of the choices ``rows`` that left the
-        agent in a kept state bootstrapped from the network ``ahead``
-        (module notes)."""
+        agent in a kept state bootstrapped from the network ``ahead``, the
+        choice after picked by ``chooser`` (None: ``ahead``; module
+        notes)."""
         left = self.left_in[rows]
         has = left >= 0
         if not has.any():
             return target
-        reach, to_go = self.ends_from(ahead, left[has])
+        reach, lost = self.ends_from(ahead, left[has], chooser)
         target = target.clone()
         aimed = target[has]
         aimed[:, REACH] = reach
-        aimed[:, TO_GO] = (self.settled[rows][has] + to_go) / SCALES[3]
+        aimed[:, LOST] = (self.lost[rows][has] + lost) / SCALES[3]
         target[has] = aimed
         return target
 
@@ -183,24 +192,27 @@ class Data:
             tokens.append(dense)
         return tokens
 
-    def ends_from(self, ahead, states):
-        """From each kept state ``states`` [B]: the chance the network
-        ``ahead`` gives of finishing the task by the choice the chooser's
-        rule would take there, and its frames to the end (0 and NaN where
-        no candidate there can be carried out)."""
+    def ends_from(self, ahead, states, chooser=None):
+        """From each kept state ``states`` [B]: the choice the chooser's
+        rule takes there on the network ``chooser``'s predictions (None:
+        ``ahead``'s), and the chance the network ``ahead`` gives of
+        finishing the task by it and the frames it loses to the end (0 and
+        NaN where no candidate there can be carried out)."""
         with torch.no_grad():
-            p = all_cells(ahead(*self.end_tokens(states)))
+            tokens = self.end_tokens(states)
+            p = all_cells(ahead(*tokens))
             cells = p.shape[1]
             candidate = ((self.next_cells[states][:, :, None] & self.bits) > 0).reshape(len(states), -1)[:, :cells]
             p = p.reshape(-1, p.shape[-1])
+            q = p if chooser is None or chooser is ahead else all_cells(chooser(*tokens)).reshape(-1, p.shape[-1])
             owner = torch.arange(len(states), device=states.device).repeat_interleave(cells)
-            allowed = candidate.reshape(-1) & (torch.sigmoid(p[:, INFEASIBLE_]) < 0.5)
-            reach, to_go = torch.sigmoid(p[:, REACH]), p[:, TO_GO].clamp(min=0) * SCALES[3]
-            best = best_ends(reach, to_go, allowed, owner, len(states))
+            allowed = candidate.reshape(-1) & (torch.sigmoid(q[:, INFEASIBLE_]) < 0.5)
+            best = best_ends(torch.sigmoid(q[:, REACH]), q[:, LOST] * SCALES[3], allowed, owner, len(states))
             found = best >= 0
             at = best.clamp(min=0)
-            return (torch.where(found, reach[at], torch.zeros_like(reach[at])),
-                    torch.where(found, to_go[at], torch.full_like(to_go[at], float("nan"))))
+            reach, lost = torch.sigmoid(p[at, REACH]), p[at, LOST] * SCALES[3]
+            return (torch.where(found, reach, torch.zeros_like(reach)),
+                    torch.where(found, lost, torch.full_like(lost, float("nan"))))
 
 
 def loss_of(predicted, target):
@@ -213,7 +225,7 @@ def loss_of(predicted, target):
     if feasible.any():
         loss = loss + nn.functional.smooth_l1_loss(predicted[feasible][:, amounts_now],
                                                    target[feasible][:, amounts_now])
-    for k, chance in ((REACH, True), (TO_GO, False)):
+    for k, chance in ((REACH, True), (LOST, False)):
         known = feasible & torch.isfinite(target[:, k])
         if known.any():
             loss = loss + (nn.functional.binary_cross_entropy_with_logits if chance else nn.functional.smooth_l1_loss)(
@@ -263,9 +275,9 @@ def measure(model, data: Data, batch: int = 8192) -> dict:
         if known.any():
             out[name]["reach_error"] = float(np.abs(1 / (1 + np.exp(-p[known, REACH])) - t[known, REACH]).mean())
             out[name]["reach"] = float(t[known, REACH].mean())
-        known = feasible & np.isfinite(t[:, TO_GO])
+        known = feasible & np.isfinite(t[:, LOST])
         if known.any():
-            out[name]["to_go_error"] = float(np.abs(p[known, TO_GO] - t[known, TO_GO]).mean() * SCALES[3])
+            out[name]["lost_error"] = float(np.abs(p[known, LOST] - t[known, LOST]).mean() * SCALES[3])
     return out
 
 
@@ -274,7 +286,7 @@ def train(domain, data_folder: str, eval_folder: str, output: str, steps: int = 
     torch.manual_seed(seed)
     device = select_device("auto")
     spec = domain.space.spec
-    data, fresh = Data(data_folder, spec, domain.ends, device), Data(eval_folder, spec, domain.ends, device)
+    data, fresh = (Data(folder, spec, domain.ends, device, domain.pace) for folder in (data_folder, eval_folder))
     model = OutcomeNetwork(spec, config).to(device)
     ahead = copy.deepcopy(model).eval()
     optimizer = torch.optim.AdamW(model.parameters(), lr=LEARNING_RATE)
@@ -299,7 +311,7 @@ def train(domain, data_folder: str, eval_folder: str, output: str, steps: int = 
                   f"error {a['death_error']:.3f} infeasible right {a['infeasible_right']:.3f} "
                   f"stuck right {a['stuck_right']:.3f} "
                   f"progress {a['progress_error']:.1f} reach error {a.get('reach_error', float('nan')):.3f} "
-                  f"to go {a.get('to_go_error', float('nan')):.0f}", flush=True)
+                  f"lost {a.get('lost_error', float('nan')):.0f}", flush=True)
     save(model, f"{output}/outcome.pt", log)
     Path(f"{output}/measures.json").write_text(json.dumps(log[-1], indent=1))
     return log[-1]
