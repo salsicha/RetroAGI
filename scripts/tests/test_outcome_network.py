@@ -154,17 +154,17 @@ def test_ends_are_bootstrapped_from_where_each_choice_left_mario(tmp_path):
     assert (plain[died, REACH] == 0).all() and not left[died].any()
     assert torch.isnan(plain[left, REACH]).all() and torch.isfinite(aimed[left, REACH]).all()
     assert ((0 <= aimed[left, REACH]) & (aimed[left, REACH] <= 1)).all()
-    # the frames lost: the choice's own, and those after it
+    # the frames lost after it: the next choice's own, and those after that
     reach_next, lost_next = data.ends_from(model, data.left_in[left])
     assert torch.allclose(aimed[left, REACH], reach_next)
     ok = torch.isfinite(lost_next)
-    assert torch.allclose(aimed[left, LOST][ok] * SCALES[3], data.lost[left][ok] + lost_next[ok], atol=1e-3)
+    assert torch.allclose(aimed[left, LOST][ok] * SCALES[3], lost_next[ok], atol=1e-3)
     # The choice after is picked by the network trained, and judged by the copy.
     other = OutcomeNetwork(SPEC, SMALL).eval()
     states = data.left_in[left]
     by_self, by_other = data.ends_from(other, states), data.ends_from(other, states, chooser=model)
     assert torch.equal(data.ends_from(other, states, chooser=other)[0], by_self[0])
-    assert not torch.equal(by_other[0], by_self[0]) and (by_other[0] <= by_self[0].max() + 1e-6).all()
+    assert not torch.equal(by_other[0], by_self[0])
     same = ~left
     assert torch.equal(torch.nan_to_num(aimed[same], -9), torch.nan_to_num(plain[same], -9))
     # (the kept states' tokens back whole, each thing in its slot)
@@ -173,16 +173,44 @@ def test_ends_are_bootstrapped_from_where_each_choice_left_mario(tmp_path):
     assert torch.equal((surfaces.abs().sum(-1) > 0).sum(1), data.next_count[1])
 
 
-def test_a_finished_choice_loses_its_frames_less_its_progress_at_the_pace():
-    from retroagi.framework.outcome_network import SCALES
+def test_a_finished_choice_loses_nothing_after_it():
     from retroagi.framework.training import LOST
 
     o = np.zeros((2, len(OUTCOME_FIELDS)), np.float32)
     f = {name: k for k, name in enumerate(OUTCOME_FIELDS)}
     o[:, f["frames"]], o[:, f["progress"]], o[:, f["end"]] = 40, 96, DOMAIN.ends.index("landed")
     o[0, f["finished"]] = 1
-    t = targets(o, DOMAIN.ends, pace=1.6)
-    assert abs(t[0, LOST] * SCALES[3] - (40 - 96 / 1.6)) < 1e-4 and np.isnan(t[1, LOST])
+    t = targets(o, DOMAIN.ends)
+    assert t[0, LOST] == 0 and np.isnan(t[1, LOST])
+
+
+def test_a_choice_s_own_frames_lost_are_its_frames_less_its_progress_at_the_pace(tmp_path):
+    from retroagi.framework.chooser import frames_lost
+    from retroagi.framework.outcome_network import SCALES
+    from retroagi.framework.sampling import sample
+    from retroagi.framework.training import Data
+
+    assert frames_lost(40.0, 96.0, 100.0, 1.6) == 40 - 96 / 1.6 + 100
+    np.savez(tmp_path / "a.npz", **sample(DOMAIN, 5, "speed_run", kind="pit", explore=0.0))
+    data = Data(str(tmp_path), SPEC, DOMAIN.ends, "cpu", pace=1.6)
+    p = torch.zeros(1, len(PREDICTIONS))
+    p[0, 4], p[0, 5], p[0, -1] = 96 / SCALES[0], 40 / SCALES[1], 100 / SCALES[3]
+    assert abs(float(data.frames_lost(p)[0]) - (40 - 96 / 1.6 + 100)) < 1e-3
+
+
+def test_the_state_s_part_of_the_frames_lost_after_a_choice_is_the_same_for_every_choice():
+    from retroagi.framework.outcome_network import AFTER
+
+    model = OutcomeNetwork(SPEC, SMALL).eval()
+    t = [torch.as_tensor(x)[None].float() for x in tokens()]
+    with torch.no_grad():
+        out = model(*t)
+        before = [o.clone() for o in out]
+        model.shared.bias += 50.0
+        moved = model(*t)
+    for a, b in zip(before, moved):
+        assert torch.allclose(b[..., AFTER] - a[..., AFTER], torch.full_like(a[..., AFTER], 50.0), atol=1e-4)
+        assert torch.equal(a[..., :AFTER], b[..., :AFTER])
 
 
 def test_a_choice_s_cell_is_where_pick_reads_it():

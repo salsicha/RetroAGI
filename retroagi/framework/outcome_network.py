@@ -12,10 +12,21 @@ the chance the controller finds it infeasible, the chance it finishes the
 task, the chance it leaves the agent stuck (no choice from there gets it
 on), and the progress, frames and points it brings; then, given the choice,
 how the task ends: the chance it is finished (in Super Mario Bros: the flag
-reached) and the frames until it is (docs/requirements.md, section 7). The
-last two are learned by bootstrapping (training.py): a choice's end is its
-own outcome joined with the network's own guess from where it leaves the
-agent.
+reached) and the frames lost after the choice on the way to it (frames
+spent less progress made at the domain's steady pace; docs/requirements.md,
+section 7). The last two are learned by bootstrapping (training.py): a
+choice's end is its own outcome joined with the network's own guess from
+where it leaves the agent.
+
+The frames lost after a choice come in two parts added together: one for
+the state, from all its tokens together, the same for every choice there,
+and one for each choice, less the mean of those over the state's choices.
+A whole level's frames lost are hundreds, guessed some fifty frames wrong,
+and the choices differ by a few tens: guessed whole for each choice, the
+differences were lost in the error and Mario stepped back and forth until
+the time ran out (2026-11-23). Split so, an error in the state's part is
+the same for every choice and does not change which is taken; the choice's
+part has only the differences to learn.
 
 A saved network carries its ChoiceSpec (save, load_model), so it can be
 loaded and checked against a domain without that domain's code.
@@ -32,6 +43,7 @@ PREDICTIONS = ("death", "infeasible", "finished", "stuck", "progress", "frames",
 # The logits (chances) and the amounts, and the scale the amounts are
 # learned at (progress, frames, points, frames lost to the task's end).
 CHANCES, AMOUNTS = (0, 1, 2, 3, 7), (4, 5, 6, 8)
+AFTER = PREDICTIONS.index("lost")
 SCALES = (64.0, 64.0, 5.0, 512.0)
 # How many PREDICTIONS a network gave before "reach" and "lost" were added
 # (a saved network that does not say gives these).
@@ -111,6 +123,9 @@ class OutcomeNetwork(nn.Module):
         layer = nn.TransformerEncoderLayer(w, config.heads, 4 * w, dropout=0.0, batch_first=True)
         self.encoder = nn.TransformerEncoder(layer, config.layers)
         self.outputs = nn.ModuleList(nn.Linear(w, g.heads * n) for g in spec.groups)
+        if n > AFTER:
+            # the state's part of the frames lost after a choice (module notes)
+            self.shared = nn.Linear(w, 1)
         for k, g in enumerate(spec.groups):
             self.register_buffer(f"scale_{k}", torch.tensor(g.scale[: self.reads[k]], dtype=torch.float32),
                                  persistent=False)
@@ -139,7 +154,23 @@ class OutcomeNetwork(nn.Module):
             tokens_of = h[:, start:start + count] if group.slots else h[:, start]
             out.append(self.outputs[k](tokens_of).view(b, count, group.heads, n))
             start += count
+        if n > AFTER:
+            out = self._shared_after(h, out, absent)
         return tuple(out)
+
+    def _shared_after(self, h, out, absent):
+        """``out`` with each choice's frames lost after it given as the
+        state's part (from the mean of the present tokens) plus its own less
+        the mean of the choices' own over the present tokens (module
+        notes)."""
+        present = [(~a).float() for a in absent]
+        weight = torch.cat(present, dim=1)[..., None]
+        state = self.shared((h * weight).sum(1) / weight.sum(1).clamp(min=1))[:, 0]
+        total = sum((o[..., AFTER] * p[..., None]).sum((1, 2)) for o, p in zip(out, present))
+        cells = sum(p.sum(1) * o.shape[2] for o, p in zip(out, present))
+        mean = total / cells.clamp(min=1)
+        return [torch.cat([o[..., :AFTER], (state - mean)[:, None, None, None] + o[..., AFTER:AFTER + 1],
+                           o[..., AFTER + 1:]], dim=-1) for o in out]
 
 
 def pick(spec: ChoiceSpec, outputs, kind, slot, modifier, owner=None):

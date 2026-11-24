@@ -82,7 +82,7 @@ class SuperMarioBros:
         return Controller(self.dynamics())
 
     def chooser(self, predictor, mode: str) -> OutcomeChooser:
-        return OutcomeChooser(predictor, self.space, POINT_VALUE[mode])
+        return OutcomeChooser(predictor, self.space, POINT_VALUE[mode], self.pace)
 
     def behaviour(self, mode: str) -> ScriptedChooser:
         return ScriptedChooser(mode)

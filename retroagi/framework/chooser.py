@@ -28,14 +28,18 @@ within REACH_SLACK (a share of it) of the best; of those, the one that
 loses the fewest frames on the way to the end, a point worth
 ``point_value`` times TIME_UNIT frames (best_ends; training uses the same
 rule for the choice after each one). The time to the end is given as
-frames lost, "lost": the frames to the end less the progress still to make
-at the domain's pace. What is still to make is the same whatever is chosen
-now, so the fewest frames lost is the fewest frames to the end; but how far
-the end is cannot be seen (a random level's length is not on the screen),
-and the frames lost on the way can: a network asked for the frames to the
-end guessed about the same for every choice, and the shortest, a wait, was
-taken again and again (2026-11-23). Rules 1 and 2 stay for a network
-trained before it gave the end.
+frames lost: the frames to the end less the progress still to make at the
+domain's pace. What is still to make is the same whatever is chosen now,
+so the fewest frames lost is the fewest frames to the end; but how far the
+end is cannot be seen (a random level's length is not on the screen), and
+the frames lost on the way can: a network asked for the frames to the end
+guessed about the same for every choice, and the shortest, a wait, was
+taken again and again (2026-11-23). A choice's frames lost are its own,
+from its predicted frames and progress (frames_lost), and those the network
+gives for after it ("lost"): asked for the whole, it guessed alike for a
+run ahead and a run back, and Mario stepped back and forth until the time
+ran out (2026-11-23). Rules 1 and 2 stay for a network trained before it
+gave the end.
 
 What was tried is remembered for a short while: a choice taken from a spot
 (the choice space's place) is not taken from it again until the agent
@@ -77,6 +81,12 @@ DEATH, INFEASIBLE, FINISHED, STUCK, PROGRESS, FRAMES, POINTS, REACH, LOST = rang
 REFUSED = ("infeasible", "blocked")
 
 
+def frames_lost(frames, progress, after, pace: float):
+    """A choice's frames lost to the task's end: its own (``frames`` less
+    ``progress`` at ``pace``) and ``after`` it."""
+    return frames - progress / pace + after
+
+
 def best_ends(reach, lost, allowed, owner, groups: int, points=None, point_value: float = 0.0):
     """For choices in ``groups`` sets (``owner`` [N]: each choice's set),
     the one picked by the task's end (module notes) among those
@@ -114,8 +124,8 @@ def best_ends(reach, lost, allowed, owner, groups: int, points=None, point_value
 
 
 class OutcomeChooser:
-    def __init__(self, predictor, space, point_value: float = 0.0):
-        self.predictor, self.space, self.point_value = predictor, space, point_value
+    def __init__(self, predictor, space, point_value: float = 0.0, pace: float = 1.0):
+        self.predictor, self.space, self.point_value, self.pace = predictor, space, point_value, pace
         self.last = None  # (candidates, predictions, picked index): for inspection
         self.tried: dict = {}  # spot -> the choices taken from it
         self.refused: dict = {}  # spot -> the choices about still things found impossible there
@@ -145,7 +155,8 @@ class OutcomeChooser:
         if not feasible.any():
             feasible = np.ones(len(p), bool)
         if not np.isnan(p[:, REACH]).any():
-            best = int(best_ends(p[:, REACH], p[:, LOST], feasible, np.zeros(len(p), int), 1,
+            lost = frames_lost(p[:, FRAMES], p[:, PROGRESS], p[:, LOST], self.pace)
+            best = int(best_ends(p[:, REACH], lost, feasible, np.zeros(len(p), int), 1,
                                  p[:, POINTS], self.point_value)[0])
         else:
             risk = np.where(feasible, p[:, DEATH], np.inf)

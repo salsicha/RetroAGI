@@ -75,8 +75,8 @@ flowchart LR
 |---|---|---|
 | **State source** | the world | where Mario, the solids, the enemies and the items are. In Block SMB a lookup in the simulator; in the real game from the vision network (`domains/smb/perception/`) |
 | **Choice space** (`domains/smb/choices.py`) | the state | what can be done now: jump onto a thing, stomp or pass an enemy, run to a place, wait, bump a block, collect an item. Each comes in three ways of being carried out (bold, usual, careful: how wide a berth enemies get, how long a landing must stay clear of them, how soon a coming enemy ends a run) |
-| **Outcome network** (`framework/outcome_network.py`) | the state and every candidate | in one pass, for every candidate: the chance of dying, of being infeasible, of getting stuck, of reaching the flag with it; the progress, frames and points; and, given the candidate, how the level ends: the chance the flag is reached and the frames lost on the way (frames to the flag less the distance at a steady 1.6 pixels a frame) |
-| **Chooser** (`framework/chooser.py`) | the predictions | one choice: the best chance of reaching the flag (within 2% of it), then the fewest frames lost on the way to it (the fewest frames to it: the distance left is the same whatever is chosen), a point worth some frames when points count. For a network trained before it gave the level's end, fixed priorities: don't die, progress to the right, get coins and power-ups |
+| **Outcome network** (`framework/outcome_network.py`) | the state and every candidate | in one pass, for every candidate: the chance of dying, of being infeasible, of getting stuck, of reaching the flag with it; the progress, frames and points; and, given the candidate, how the level ends: the chance the flag is reached and the frames lost after it on the way (frames to the flag less the distance at a steady 1.6 pixels a frame), as a part for the screen and a part for the candidate |
+| **Chooser** (`framework/chooser.py`) | the predictions | one choice: the best chance of reaching the flag (within 2% of it), then the fewest frames lost on the way to it, the candidate's own (its frames less its progress at the pace) and after it (the fewest frames to it: the distance left is the same whatever is chosen), a point worth some frames when points count. For a network trained before it gave the level's end, fixed priorities: don't die, progress to the right, get coins and power-ups |
 | **Controller** (`domains/smb/controller.py`, `planner.py`) | the choice, and the state every frame | the buttons each frame. It plans the jump (run-up, how long the button is held) with Mario's motion as the game computes it, plans again before takeoff, corrects in the air, and says how the choice ended |
 
 The deep model is consulted seldom; the controller runs every frame
@@ -120,13 +120,19 @@ bootstrapping. Where a candidate leaves Mario alive, the state it left him
 in is kept, with the candidates open there; in training, the network
 picks from each of those the one the chooser's rule would take, a copy of
 the network says how the level ends after it, and the candidate's end is
-that (its chance of the flag, and the frames lost with the candidate's own
-added). A candidate that killed never reaches the flag; one that reached
-it did so with its own frames lost. Time is counted as frames lost against
-a steady pace because how far the flag is cannot be seen: asked for the
-frames to the flag, the network guessed about the same everywhere, and the
-shortest choice, a wait, won again and again. Each refresh of the copy carries the guess one choice
-further ahead. The levels are random, so what is learned is how a level
+that (its chance of the flag, and the frames lost after the candidate). A
+candidate that killed never reaches the flag; one that reached it loses
+nothing after it. Time is counted as frames lost against a steady pace
+because how far the flag is cannot be seen: asked for the frames to the
+flag, the network guessed about the same everywhere, and the shortest
+choice, a wait, won again and again. A candidate's own frames lost come
+from its own predicted frames and progress; the network gives only those
+after it, as one part for the screen, the same for every candidate, and a
+small part for each candidate. Asked for each candidate's whole frames
+lost, some 500 guessed some 50 wrong, it could not tell a run ahead from a
+run back, which differ by a few tens, and Mario stepped back and forth
+until the time ran out. Each refresh of the copy carries the guess one
+choice further ahead. The levels are random, so what is learned is how a level
 goes on from such a place, never a real level's layout.
 
 ```mermaid

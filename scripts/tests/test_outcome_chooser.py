@@ -159,3 +159,10 @@ def test_by_the_end_points_are_worth_frames_in_max_points():
     rows = {STOMP: row(points=5, reach=0.7, lost=960), LONG: row(reach=0.7, lost=900)}
     assert choose("speed_run", rows) == LONG
     assert choose("max_points", rows) == STOMP
+
+
+def test_by_the_end_a_step_back_pays_its_own_frames_lost():
+    # The same frames lost after each (as the network guessed, 2026-11-23):
+    # the run back's own frames and lost ground decide against it.
+    rows = {SHORT: row(progress=37, frames=24, reach=0.97, lost=-540), BACK: row(progress=-43, frames=18, reach=0.97, lost=-540)}
+    assert choose("speed_run", rows) == SHORT

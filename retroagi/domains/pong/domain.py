@@ -48,7 +48,7 @@ class Pong:
         return Controller()
 
     def chooser(self, predictor, mode: str) -> OutcomeChooser:
-        return OutcomeChooser(predictor, self.space, 0.0)
+        return OutcomeChooser(predictor, self.space, 0.0, self.pace)
 
     def behaviour(self, mode: str) -> ScriptedChooser:
         return ScriptedChooser(mode)
