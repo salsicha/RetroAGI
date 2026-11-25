@@ -1846,6 +1846,33 @@ only if not worse). It dies more in pits (28 against 15) and less by
 Hammer Bros (23 against 32), and its fatal choices were given a small
 chance of death (median 0.6%), as the kept network's were.
 
+### How close to the best chance of the flag a choice must be (2026-11-25)
+
+The third round's deaths in pits were traced choice by choice in Block
+SMB. A choice with a large chance of death is picked only once Mario is
+already lost; the fatal choice comes a step before, and the network gave
+it a chance of death of 1 to 4%, inside the 2% the chooser allows below
+the best chance of the flag. How wide that allowance should be was
+measured on 400 plays of other fresh levels (from seed 120000), the third
+round's network unchanged:
+
+| Allowance below the best chance of the flag | Finished (of 400) | Died | Out of time |
+|---|---|---|---|
+| none | 28 | 100 | 272 |
+| 0.5% | 124 | 89 | 187 |
+| 1% | 237 | 76 | 87 |
+| 2% | 326 | 60 | 14 |
+| 3% | 338 | 54 | 8 |
+| 5% | 343 | 52 | 5 |
+| 8% | 345 | 51 | 4 |
+| 12% | 320 | 76 | 4 |
+
+A narrower allowance is much worse: the predicted chances of the flag are
+too unsure to rank choices that close, and Mario turns from one to another
+until the time runs out. 3 to 8% did better there, but 5%, the middle,
+finishes 648 of the 800 plays against 667 at 2% (141 deaths against 118, 39
+in pits against 28). The allowance stays at 2%.
+
 ## Tried and not kept, 2026-11-11
 
 Measured with exact positions, against 0.97 on the tuned levels and 0.77
