@@ -204,7 +204,13 @@ Bullet Bills 10 against 14, by hammers 14 against 21). Seeing which pits
 hold lava did not help the network learned again with it, nor did
 telling it how long each pit's fireball has been under the lava: it still
 jumps over lava pits at a small risk instead of waiting, and dies there as
-often.
+often. Learned again to choose by the level's end
+([requirements](docs/requirements.md), section 7; [How general is
+it?](docs/generalization.md#learned-again-to-choose-by-the-levels-end-2026-11-22-to-2026-11-25)),
+the network's third round finishes 667 of the 800 plays, against 647 for
+the same network choosing by the fixed rules, and is not kept: 8 short of
+the kept network, with more deaths in pits (28 against 15) and fewer by
+Hammer Bros (23 against 32).
 
 ## Usage
 

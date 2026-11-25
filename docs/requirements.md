@@ -189,12 +189,12 @@ What this rules out:
 - The README explains with diagrams as well as text, and is kept up to
   date with the code.
 
-## Where the code stands against this (2026-11-21)
+## Where the code stands against this (2026-11-25)
 
 | Requirement | Where it stands |
 |---|---|
 | Trained before it meets the real game | The outcome network has learned in Block SMB only. The hand-written parts (the controller's rules and constants, the list of choices, the chooser's priorities, the tracking of things seen) were adjusted while watching Worlds 1-1 and 5-1 before the rule was said; they have not yet been learned or set again from Block SMB alone. |
-| Deciding by a deep model of outcomes | The outcome network predicts every candidate choice's outcome in one pass and fixed priorities pick among them. The list of candidate choices is still written by hand. |
+| Deciding by a deep model of outcomes | The outcome network predicts every candidate choice's outcome in one pass and fixed priorities pick among them. Since 2026-11-23 a network that also gives how the level ends after each choice (section 7) is chosen by that: the best chance of the flag, then the fewest frames lost on the way. Learned so from nothing (2026-11-25, `ends_20261122`), it finishes 667 of the 800 fresh Block SMB plays against 647 for the same network by the fixed priorities, but is not kept: the kept network, by the priorities, finishes 675 ([generalization.md](generalization.md#learned-again-to-choose-by-the-levels-end-2026-11-22-to-2026-11-25)). The list of candidate choices is still written by hand. |
 | The controller takes learned parameters | Its berth around enemies, how long a landing must stay clear and how soon a coming enemy ends a run are part of each choice since 2026-11-12 (section 6): bold, usual or careful, picked by the outcome network's predictions. The three sets, and the controller's other constants, are still set by hand. A network learned with them from nothing (2026-11-13) scores about as the baseline does: 38% of tries at obstacles failing on held-out levels from the screen against 36%, 1-1 finished in 7 of 8 plays from the screen against 4. |
 | The controller is much faster than the deep models | Yes, measured below. Nothing it imports is a deep-learning library (kept so by a test). |
 | Block SMB is fast and cheap | Yes, measured below. |

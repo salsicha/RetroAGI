@@ -1799,6 +1799,53 @@ between the last staircases (0 of 8) and 3-1's from x 832 (0 of 8).
   split that Koopa into a fragment and its body, which tie as matches
   when the camera moves and both start new tracks; that was not changed.
 
+## Learned again to choose by the level's end (2026-11-22 to 2026-11-25)
+
+The outcome network now also predicts, for each choice, how the level ends
+after it ([requirements.md](requirements.md), section 7): the chance the
+flag is reached and the frames lost on the way (frames spent less progress
+made at a steady 1.6 pixels a frame). It learns both by bootstrapping from
+the states choices left Mario in, and the chooser takes the best chance of
+the flag (within 2% of it), then the fewest frames lost. Learned from
+nothing in three rounds (`scripts/learn_in_block_smb.sh ends_20261122`).
+
+Two first versions failed in round 1 and were corrected before going on:
+
+- Asked for the frames to the flag, the network gave about the same for
+  every choice (how far the flag is cannot be seen on the screen), and
+  the shortest choice, a wait, won: no exam level finished. Time became
+  frames lost against the pace, and the choice after each one is picked
+  by the network being trained and judged by its copy (the same network
+  doing both had given nearly every choice a 98 to 99% chance of the
+  flag).
+- Asked for each choice's whole frames lost to the flag (some 500, guessed
+  some 50 wrong), it could not tell a run ahead from a run back (they
+  differ by a few tens), and Mario stepped back and forth until the time
+  ran out: 36 and 30 of the 100 exam levels finished, against 71 and 74
+  for the same network with the level's end blanked. Now a choice's own
+  frames lost come from its own predicted frames and progress, and the
+  network gives only those after it, as a part for the screen, the same
+  for every choice, and a small part for each choice.
+
+Round 1 was learned again on its own samples after each correction. None
+of the rounds is kept:
+
+| Round | Exam: fresh levels finished (of 200) | Skill scenes passed | Fresh Block SMB plays finished (of 800) | ... with the level's end blanked | Died | ... in a pit | ... by lava fireballs | ... by Hammer Bros and their hammers | Out of time |
+|---|---|---|---|---|---|---|---|---|---|
+| The kept network (2026-11-18) | 164 | | 675 | | 114 | 15 | 14 | 32 | 11 |
+| 1 | 159 | 98.0% | 622 | | 157 | 36 | 14 | 36 | 21 |
+| 2 | 155 | 98.4% | 632 | 633 | 139 | 39 | 14 | 24 | 29 |
+| 3 | 171 | 98.7% | 667 | 647 | 118 | 28 | 13 | 23 | 15 |
+
+Choosing by the level's end helps the third round: blanked, the same
+network chooses by the fixed rules and finishes 20 fewer of the 800 plays,
+with 146 deaths against 118. It made no difference in round 2. The third
+round is 8 plays short of the kept network, within what two measures of
+800 plays differ by chance (about 10), and kept from it by the rule (kept
+only if not worse). It dies more in pits (28 against 15) and less by
+Hammer Bros (23 against 32), and its fatal choices were given a small
+chance of death (median 0.6%), as the kept network's were.
+
 ## Tried and not kept, 2026-11-11
 
 Measured with exact positions, against 0.97 on the tuned levels and 0.77
