@@ -210,7 +210,8 @@ it?](docs/generalization.md#learned-again-to-choose-by-the-levels-end-2026-11-22
 the network's third round finishes 667 of the 800 plays, against 647 for
 the same network choosing by the fixed rules, and is not kept: 8 short of
 the kept network, with more deaths in pits (28 against 15) and fewer by
-Hammer Bros (23 against 32).
+Hammer Bros (23 against 32). A fourth round is worse: 632, against 650
+for it by the fixed rules.
 
 ## Usage
 

@@ -1807,7 +1807,8 @@ flag is reached and the frames lost on the way (frames spent less progress
 made at a steady 1.6 pixels a frame). It learns both by bootstrapping from
 the states choices left Mario in, and the chooser takes the best chance of
 the flag (within 2% of it), then the fewest frames lost. Learned from
-nothing in three rounds (`scripts/learn_in_block_smb.sh ends_20261122`).
+nothing in three rounds (`scripts/learn_in_block_smb.sh ends_20261122`),
+and a fourth (2026-11-26).
 
 Two first versions failed in round 1 and were corrected before going on:
 
@@ -1836,6 +1837,7 @@ of the rounds is kept:
 | 1 | 159 | 98.0% | 622 | | 157 | 36 | 14 | 36 | 21 |
 | 2 | 155 | 98.4% | 632 | 633 | 139 | 39 | 14 | 24 | 29 |
 | 3 | 171 | 98.7% | 667 | 647 | 118 | 28 | 13 | 23 | 15 |
+| 4 | 157 | 96.9% | 632 | 650 | 129 | 21 | 21 | 24 | 39 |
 
 Choosing by the level's end helps the third round: blanked, the same
 network chooses by the fixed rules and finishes 20 fewer of the 800 plays,
@@ -1845,6 +1847,12 @@ round is 8 plays short of the kept network, within what two measures of
 only if not worse). It dies more in pits (28 against 15) and less by
 Hammer Bros (23 against 32), and its fatal choices were given a small
 chance of death (median 0.6%), as the kept network's were.
+
+A fourth round (2026-11-26) is worse than the third on every measure but
+deaths in pits: 632 of the 800 plays finished, and choosing by the level's
+end now costs it 18 plays against the fixed rules (650), most of them run
+out of time (39 against 3 blanked): Mario turns between choices again. Its
+exam passes only 134 of the 200 springboard scenes (the third: 200).
 
 ### How close to the best chance of the flag a choice must be (2026-11-25)
 
