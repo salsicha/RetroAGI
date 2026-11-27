@@ -1881,6 +1881,40 @@ until the time runs out. 3 to 8% did better there, but 5%, the middle,
 finishes 648 of the 800 plays against 667 at 2% (141 deaths against 118, 39
 in pits against 28). The allowance stays at 2%.
 
+### How right the guesses of the level's end are (2026-11-27)
+
+Every sixth decision of the third and fourth rounds' plays of 48 fresh
+Block SMB levels (seeds from 130000, both ways of playing) was taken again
+with each choice the network calls feasible, the same chooser playing on
+from it to the level's end: 1,700 decisions and 56,772 choices played out
+for the third round, 2,023 and 70,569 for the fourth. What the network
+predicted for each choice, against what followed:
+
+| | Third round | Fourth round |
+|---|---|---|
+| Chance of the flag, predicted on average | 95% | 95% |
+| ... the flag reached | 81% | 76% |
+| How well the chance of the flag tells a decision's finishing choices from the others (0.5: not at all, 1: always) | 0.53 | 0.53 |
+| A choice's own frames lost: mean error | 5 | 5 |
+| ... its differences from the decision's other choices, correlation with the true ones | 0.97 | 0.97 |
+| Frames lost after the choice to the flag (choices that reached it): median | 445 | 614 |
+| ... predicted | -349 | -191 |
+| ... the differences from the decision's other choices, correlation with the true ones | 0.09 | 0.15 |
+| In speed runs, frames lost by the chooser's pick beyond the best choice (median) | 208 | 361 |
+
+A choice's own outcome is predicted well. How the level ends after it is
+not: the chance of the flag does not tell a decision's choices apart, and
+the frames lost after a choice are guessed some 800 frames too hopeful and
+hardly agree with which choice truly loses fewer. Those frames are not
+lost between choices (Mario waits for his next decision about 1% of a
+play's frames). The guess is too hopeful because it is learned from
+itself: the target is the best-looking next choice of some thirty, and the
+best-looking of thirty uncertain guesses is too good. Each refresh of the
+judging copy carries that error one choice further, over the 50 to 170
+choices of a level. Choosing by the level's end therefore chooses among
+choices of nearly equal true worth on guesses that mostly do not tell them
+apart, and the turning back and forth that runs plays out of time follows.
+
 ## Tried and not kept, 2026-11-11
 
 Measured with exact positions, against 0.97 on the tuned levels and 0.77
