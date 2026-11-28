@@ -1887,7 +1887,7 @@ Every sixth decision of the third and fourth rounds' plays of 48 fresh
 Block SMB levels (seeds from 130000, both ways of playing) was taken again
 with each choice the network calls feasible, the same chooser playing on
 from it to the level's end: 1,700 decisions and 56,772 choices played out
-for the third round, 2,023 and 70,569 for the fourth. What the network
+for the third round, 2,096 and 72,776 for the fourth. What the network
 predicted for each choice, against what followed:
 
 | | Third round | Fourth round |
@@ -1899,8 +1899,8 @@ predicted for each choice, against what followed:
 | ... its differences from the decision's other choices, correlation with the true ones | 0.97 | 0.97 |
 | Frames lost after the choice to the flag (choices that reached it): median | 445 | 614 |
 | ... predicted | -349 | -191 |
-| ... the differences from the decision's other choices, correlation with the true ones | 0.09 | 0.15 |
-| In speed runs, frames lost by the chooser's pick beyond the best choice (median) | 208 | 361 |
+| ... the differences from the decision's other choices, correlation with the true ones | 0.09 | 0.14 |
+| In speed runs, frames lost by the chooser's pick beyond the best choice (median) | 208 | 364 |
 
 A choice's own outcome is predicted well. How the level ends after it is
 not: the chance of the flag does not tell a decision's choices apart, and
